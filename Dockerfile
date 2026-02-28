@@ -22,7 +22,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN pnpm build
 
 # Compile seed script for production (no tsx in runner)
-RUN npx esbuild scripts/seed-test-data.ts \
+RUN pnpm exec esbuild scripts/seed-test-data.ts \
     --bundle --platform=node --format=esm \
     --outfile=seed.mjs \
     --external:postgres \
