@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Docker 容器管理脚本
-# 用法: ./manage.sh [start|stop|restart|remove|status|logs|build]
+# 用法: ./manage.sh [start|stop|restart|remove|status|logs|build|pull|health]
 
 set -euo pipefail
 
@@ -17,6 +17,7 @@ CONTAINER_NAME="t3-app"
 IMAGE_NAME="${IMAGE_NAME:-t3-app:local}"
 PORT="${PORT:-5000}"
 APP_PORT=3000
+GHCR_IMAGE="${GHCR_IMAGE:-}"
 
 # 日志函数
 log_info() { echo -e "${GREEN}[INFO]${NC} $*"; }
@@ -47,7 +48,22 @@ image_exists() {
     docker images --format '{{.Repository}}:{{.Tag}}' | grep -q "^${IMAGE_NAME}$"
 }
 
-# 加载镜像（从 tar 文件）
+# 从 GHCR 拉取镜像
+pull_image() {
+    if [ -z "$GHCR_IMAGE" ]; then
+        log_error "GHCR_IMAGE is not set. Usage: GHCR_IMAGE=ghcr.io/owner/repo:tag $0 pull"
+        exit 1
+    fi
+
+    log_info "Pulling image from GHCR: $GHCR_IMAGE"
+    docker pull "$GHCR_IMAGE"
+
+    log_info "Tagging image as $IMAGE_NAME"
+    docker tag "$GHCR_IMAGE" "$IMAGE_NAME"
+    log_info "Image pulled and tagged successfully"
+}
+
+# 加载镜像（从 tar 文件，作为离线 fallback）
 load_image() {
     local tar_file=$(find . -name "t3-app*.tar" -type f | head -1)
 
@@ -101,9 +117,11 @@ start_container() {
         if ! image_exists; then
             log_warn "Docker image '$IMAGE_NAME' not found"
 
-            # 尝试加载镜像
-            if load_image; then
-                log_info "Image loaded successfully"
+            # 优先从 GHCR 拉取
+            if [ -n "$GHCR_IMAGE" ]; then
+                pull_image
+            elif load_image; then
+                log_info "Image loaded from tar file"
             else
                 log_info "No tar file found. Building image from source..."
                 build_image
@@ -214,6 +232,29 @@ show_logs() {
     docker logs -f "$CONTAINER_NAME"
 }
 
+# 健康检查
+health_check() {
+    local url="http://localhost:${PORT}/api/health"
+    local max_retries="${1:-1}"
+
+    for i in $(seq 1 "$max_retries"); do
+        local status
+        status=$(curl -s -o /dev/null -w "%{http_code}" "$url" 2>/dev/null || true)
+        if [ "$status" = "200" ]; then
+            log_info "Health check passed (attempt ${i}/${max_retries})"
+            curl -s "$url" | python3 -m json.tool 2>/dev/null || curl -s "$url"
+            return 0
+        fi
+        if [ "$i" -lt "$max_retries" ]; then
+            log_warn "Health check attempt ${i}/${max_retries} failed (status=${status}), retrying in 5s..."
+            sleep 5
+        fi
+    done
+
+    log_error "Health check failed (status=${status:-unknown})"
+    return 1
+}
+
 # 显示帮助信息
 show_help() {
     cat <<EOF
@@ -229,21 +270,26 @@ ${GREEN}Commands:${NC}
   status      Show container status
   logs        Show and follow container logs
   build       Build Docker image from source
+  pull        Pull image from GHCR (requires GHCR_IMAGE env var)
+  health      Run health check against /api/health
   help        Show this help message
 
 ${GREEN}Environment Variables:${NC}
-  PORT              Host port to bind (default: 3000)
+  PORT              Host port to bind (default: 5000)
   DATABASE_URL      PostgreSQL connection string
   BETTER_AUTH_SECRET  Auth secret key
+  GHCR_IMAGE        GHCR image to pull (e.g. ghcr.io/owner/repo:tag)
 
 ${GREEN}Examples:${NC}
-  $0 start              # Start container on port 3000
-  PORT=8080 $0 start    # Start container on port 8080
-  $0 stop               # Stop container
-  $0 restart            # Restart container
-  $0 logs               # View logs
-  $0 remove             # Remove container
-  $0 build              # Build image from source
+  $0 start                                    # Start container on port 5000
+  PORT=8080 $0 start                          # Start container on port 8080
+  GHCR_IMAGE=ghcr.io/owner/repo:latest $0 pull  # Pull image from GHCR
+  $0 health                                   # Run health check
+  $0 stop                                     # Stop container
+  $0 restart                                  # Restart container
+  $0 logs                                     # View logs
+  $0 remove                                   # Remove container
+  $0 build                                    # Build image from source
 
 ${GREEN}Configuration:${NC}
   Container name: $CONTAINER_NAME
@@ -280,6 +326,12 @@ main() {
             ;;
         build)
             build_image
+            ;;
+        pull)
+            pull_image
+            ;;
+        health)
+            health_check "${2:-1}"
             ;;
         help|--help|-h)
             show_help
