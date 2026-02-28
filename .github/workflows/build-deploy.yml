@@ -61,7 +61,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
@@ -120,7 +120,7 @@ jobs:
 
     steps:
       - name: Checkout (for deploy scripts)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Normalize image name
         id: repo
