@@ -221,24 +221,25 @@ jobs:
             echo "容器已启动"
             docker ps --filter "name=${CONTAINER_NAME}" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 
+            # 健康检查（在服务器本地执行，无需公网暴露端口）
+            echo "等待服务启动..."
+            for i in $(seq 1 30); do
+              STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${HOST_PORT}/api/health" 2>/dev/null || true)
+              if [ "$STATUS" = "200" ]; then
+                echo "健康检查通过 (attempt ${i}/30)"
+                break
+              fi
+              echo "Waiting... (attempt ${i}/30, status=${STATUS})"
+              if [ $i -eq 30 ]; then
+                echo "健康检查超时（150s），服务可能未正常启动"
+                docker logs --tail 50 "${CONTAINER_NAME}" 2>/dev/null || true
+                exit 1
+              fi
+              sleep 5
+            done
+
             # 清理旧 Docker 镜像（保留最近 3 个）
             docker images "${{ env.REGISTRY }}/${{ steps.repo.outputs.image_name }}" -q | tail -n +4 | xargs -r docker rmi 2>/dev/null || true
-
-      - name: Health check
-        run: |
-          echo "等待服务启动..."
-          for i in $(seq 1 30); do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-              "http://${{ secrets.DEPLOY_SERVER_HOST }}:5000/api/health" 2>/dev/null || true)
-            if [ "$STATUS" = "200" ]; then
-              echo "健康检查通过 (attempt ${i}/30)"
-              exit 0
-            fi
-            echo "Waiting... (attempt ${i}/30, status=${STATUS})"
-            sleep 5
-          done
-          echo "::error::健康检查超时（150s），服务可能未正常启动"
-          exit 1
 
   # ==================== 通知 ====================
   notify:

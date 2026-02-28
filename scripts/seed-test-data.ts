@@ -1,4 +1,4 @@
-import { sql } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { nanoid } from 'nanoid';
 import postgres from 'postgres';
@@ -2670,10 +2670,8 @@ async function seedQuestions() {
   const allTypes = await db.select().from(testTypes);
   const slugToId = new Map(allTypes.map((t) => [t.slug, t.id]));
 
-  // Delete existing preset questions for a clean re-seed
-  await db.delete(questions).where(sql`${questions.source} = 'preset'`);
-
-  let totalQuestions = 0;
+  let inserted = 0;
+  let skipped = 0;
 
   for (const seed of questionSeeds) {
     const testTypeId = slugToId.get(seed.testSlug);
@@ -2687,6 +2685,23 @@ async function seedQuestions() {
       .slice(0, questionSeeds.indexOf(seed))
       .filter((q) => q.testSlug === seed.testSlug).length;
 
+    // Check if this question already exists (by testTypeId + text) to avoid duplicates
+    const existing = await db
+      .select({ id: questions.id })
+      .from(questions)
+      .where(
+        and(
+          eq(questions.testTypeId, testTypeId),
+          eq(questions.text, seed.text),
+        ),
+      )
+      .limit(1);
+
+    if (existing.length > 0) {
+      skipped++;
+      continue;
+    }
+
     await db.insert(questions).values({
       id: nanoid(),
       testTypeId,
@@ -2699,10 +2714,12 @@ async function seedQuestions() {
       isActive: true,
     });
 
-    totalQuestions++;
+    inserted++;
   }
 
-  console.log(`  ✓ Seeded ${totalQuestions} questions`);
+  console.log(
+    `  ✓ Questions: ${inserted} inserted, ${skipped} already existed`,
+  );
 }
 
 async function seedSystemConfig() {
@@ -2716,16 +2733,12 @@ async function seedSystemConfig() {
         value: seed.value,
         description: seed.description,
       })
-      .onConflictDoUpdate({
-        target: systemConfig.key,
-        set: {
-          value: seed.value,
-          description: seed.description,
-        },
-      });
+      .onConflictDoNothing({ target: systemConfig.key });
   }
 
-  console.log(`  ✓ Seeded ${systemConfigSeeds.length} system config entries`);
+  console.log(
+    `  ✓ System config: ${systemConfigSeeds.length} entries ensured (existing values preserved)`,
+  );
 }
 
 // ============================================================

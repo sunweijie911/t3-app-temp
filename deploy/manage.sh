@@ -143,8 +143,6 @@ start_container() {
             -p "${PORT}:${APP_PORT}" \
             --add-host=host.docker.internal:host-gateway \
             "${env_file_args[@]}" \
-            -e DATABASE_URL="${DATABASE_URL:-}" \
-            -e BETTER_AUTH_SECRET="${BETTER_AUTH_SECRET:-}" \
             --restart unless-stopped \
             "$IMAGE_NAME"
     fi
