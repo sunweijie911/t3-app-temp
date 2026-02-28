@@ -7,7 +7,7 @@
 - [ ] `DEPLOY_SERVER_HOST` — ECS 公网 IP 或域名
 - [ ] `DEPLOY_SERVER_USER` — SSH 登录用户名（如 `root`）
 - [ ] `DEPLOY_SERVER_PATH` — 部署目标路径（如 `/home/deploy/workspace/t3-app-temp`）
-- [ ] `DEPLOY_SSH_KEY` — SSH 私钥（完整内容，包括 BEGIN/END 行）
+- [ ] `DEPLOY_SSH_PRIVATE_KEY` — SSH 私钥（完整内容，包括 BEGIN/END 行）
 
 > **注意**：镜像推送到 GHCR 使用 `GITHUB_TOKEN`，无需额外配置。
 

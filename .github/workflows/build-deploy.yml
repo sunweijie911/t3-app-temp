@@ -11,7 +11,7 @@
 #     - DEPLOY_SERVER_HOST: 服务器 IP 或域名
 #     - DEPLOY_SERVER_USER: SSH 用户名
 #     - DEPLOY_SERVER_PATH: 部署目标路径
-#     - DEPLOY_SSH_KEY: SSH 私钥 (完整内容，包括 BEGIN/END)
+#     - DEPLOY_SSH_PRIVATE_KEY: SSH 私钥 (完整内容，包括 BEGIN/END)
 
 name: Build and Deploy
 
@@ -116,7 +116,7 @@ jobs:
       - name: Check secrets
         run: |
           has_error=0
-          for secret_name in DEPLOY_SERVER_HOST DEPLOY_SERVER_USER DEPLOY_SERVER_PATH DEPLOY_SSH_KEY; do
+          for secret_name in DEPLOY_SERVER_HOST DEPLOY_SERVER_USER DEPLOY_SERVER_PATH DEPLOY_SSH_PRIVATE_KEY; do
             eval "val=\${$secret_name:-}"
             if [[ -z "$val" ]]; then
               echo "::error::缺少 ${secret_name} secret"
@@ -131,14 +131,14 @@ jobs:
           DEPLOY_SERVER_HOST: ${{ secrets.DEPLOY_SERVER_HOST }}
           DEPLOY_SERVER_USER: ${{ secrets.DEPLOY_SERVER_USER }}
           DEPLOY_SERVER_PATH: ${{ secrets.DEPLOY_SERVER_PATH }}
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
 
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.DEPLOY_SERVER_HOST }}
           username: ${{ secrets.DEPLOY_SERVER_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
           script: |
             set -e
 
