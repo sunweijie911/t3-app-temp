@@ -91,10 +91,10 @@ export async function POST(
           );
         }
         controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-      } catch (error) {
+      } catch (_error) {
         controller.enqueue(
           encoder.encode(
-            `data: ${JSON.stringify({ error: String(error) })}\n\n`,
+            `data: ${JSON.stringify({ error: '报告生成失败，请稍后重试' })}\n\n`,
           ),
         );
       } finally {

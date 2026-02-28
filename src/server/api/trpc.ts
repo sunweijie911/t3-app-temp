@@ -11,9 +11,9 @@ import { initTRPC, TRPCError } from '@trpc/server';
 import superjson from 'superjson';
 import { ZodError } from 'zod';
 
-import { env } from '@/env';
 import { auth } from '@/server/better-auth';
 import { db } from '@/server/db';
+import { isAdminEmail } from '@/server/services/admin-check';
 
 /**
  * 1. CONTEXT
@@ -97,8 +97,10 @@ const timingMiddleware = t.middleware(async ({ next, path }) => {
 
   const result = await next();
 
-  const end = Date.now();
-  console.log(`[TRPC] ${path} took ${end - start}ms to execute`);
+  if (t._config.isDev) {
+    const end = Date.now();
+    console.log(`[TRPC] ${path} took ${end - start}ms to execute`);
+  }
 
   return result;
 });
@@ -143,11 +145,7 @@ export const adminProcedure = t.procedure
     if (!ctx.session?.user) {
       throw new TRPCError({ code: 'UNAUTHORIZED' });
     }
-    const adminEmails = (env.ADMIN_EMAILS ?? '')
-      .split(',')
-      .map((e) => e.trim().toLowerCase())
-      .filter(Boolean);
-    if (!adminEmails.includes(ctx.session.user.email.toLowerCase())) {
+    if (!isAdminEmail(ctx.session.user.email)) {
       throw new TRPCError({
         code: 'FORBIDDEN',
         message: 'Admin access required',

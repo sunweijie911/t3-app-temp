@@ -3,9 +3,9 @@ import { and, desc, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 
-import { env } from '@/env';
 import { createTRPCRouter, protectedProcedure } from '@/server/api/trpc';
 import { orders, testResults } from '@/server/db/schema';
+import { isAdminEmail } from '@/server/services/admin-check';
 import { simulatePayment } from '@/server/services/payment';
 
 export const orderRouter = createTRPCRouter({
@@ -30,6 +30,22 @@ export const orderRouter = createTRPCRouter({
         });
       }
 
+      // Check for existing pending or paid order
+      const existingOrder = await ctx.db.query.orders.findFirst({
+        where: and(
+          eq(orders.resultId, input.resultId),
+          eq(orders.userId, ctx.session.user.id),
+        ),
+      });
+
+      if (existingOrder?.status === 'paid') {
+        return { id: existingOrder.id };
+      }
+
+      if (existingOrder?.status === 'pending') {
+        return { id: existingOrder.id };
+      }
+
       const id = nanoid();
       await ctx.db.insert(orders).values({
         id,
@@ -44,17 +60,14 @@ export const orderRouter = createTRPCRouter({
   simulatePayment: protectedProcedure
     .input(z.object({ orderId: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      if (env.NODE_ENV === 'production') {
-        const adminEmails = (env.ADMIN_EMAILS ?? '')
-          .split(',')
-          .map((e) => e.trim().toLowerCase())
-          .filter(Boolean);
-        if (!adminEmails.includes(ctx.session.user.email.toLowerCase())) {
-          throw new TRPCError({
-            code: 'FORBIDDEN',
-            message: 'Payment simulation is not available in production',
-          });
-        }
+      if (
+        process.env.NODE_ENV === 'production' &&
+        !isAdminEmail(ctx.session.user.email)
+      ) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Payment simulation is not available in production',
+        });
       }
 
       const order = await ctx.db.query.orders.findFirst({

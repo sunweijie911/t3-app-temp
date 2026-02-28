@@ -57,7 +57,7 @@ function ConfigItem({
 
   const handleSave = () => {
     setSaving(true);
-    let parsed: unknown = value;
+    let parsed: string | number | boolean = value;
     if (!Number.isNaN(Number(value)) && value.trim() !== '') {
       parsed = Number(value);
     }

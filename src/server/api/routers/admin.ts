@@ -2,7 +2,6 @@ import { TRPCError } from '@trpc/server';
 import { and, asc, desc, eq, lt, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
-import { env } from '@/env';
 import {
   adminProcedure,
   createTRPCRouter,
@@ -16,16 +15,13 @@ import {
   testTypes,
   user,
 } from '@/server/db/schema';
+import { isAdminEmail } from '@/server/services/admin-check';
 import { generateQuestions as generateQuestionsService } from '@/server/services/question-generator';
 import { questionGenerateLimiter } from '@/server/services/rate-limiter';
 
 export const adminRouter = createTRPCRouter({
   isAdmin: protectedProcedure.query(({ ctx }) => {
-    const adminEmails = (env.ADMIN_EMAILS ?? '')
-      .split(',')
-      .map((e) => e.trim().toLowerCase())
-      .filter(Boolean);
-    return adminEmails.includes(ctx.session.user.email.toLowerCase());
+    return isAdminEmail(ctx.session.user.email);
   }),
   getQuestions: adminProcedure
     .input(
@@ -88,7 +84,7 @@ export const adminRouter = createTRPCRouter({
     .input(
       z.object({
         key: z.string(),
-        value: z.any(),
+        value: z.union([z.string(), z.number(), z.boolean()]),
         description: z.string().optional(),
       }),
     )
@@ -302,7 +298,7 @@ export const adminRouter = createTRPCRouter({
         Date.now() - input.thresholdHours * 60 * 60 * 1000,
       );
 
-      const _result = await ctx.db
+      const result = await ctx.db
         .update(testAttempts)
         .set({ status: 'abandoned' })
         .where(
@@ -310,9 +306,10 @@ export const adminRouter = createTRPCRouter({
             eq(testAttempts.status, 'in_progress'),
             lt(testAttempts.createdAt, threshold),
           ),
-        );
+        )
+        .returning({ id: testAttempts.id });
 
-      return { success: true };
+      return { success: true, count: result.length };
     }),
 
   generateQuestions: adminProcedure

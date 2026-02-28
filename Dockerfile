@@ -53,4 +53,4 @@ EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 
-CMD ["sh", "-c", "node migrate.mjs && node seed.mjs && node server.js"]
+CMD ["sh", "-c", "node migrate.mjs && if [ \"$RUN_SEEDS\" = 'true' ]; then node seed.mjs; fi && node server.js"]

@@ -2,12 +2,8 @@ import 'server-only';
 import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { db } from '@/server/db';
-import {
-  aiReports,
-  systemConfig,
-  testResults,
-  testTypes,
-} from '@/server/db/schema';
+import { aiReports, testResults, testTypes } from '@/server/db/schema';
+import { getConfigString } from './config';
 import { getLLMConfig, streamCompletion } from './llm';
 
 const DEFAULT_SYSTEM_PROMPT = `你是一位专业且温暖的心理咨询顾问。你擅长根据心理测试结果为用户提供深入、个性化的分析报告。
@@ -40,19 +36,6 @@ const DEFAULT_PROMPT_TEMPLATE = `## 测试信息
 6. **人际关系**：在社交和工作中的互动风格分析
 
 请使用 Markdown 格式输出报告。`;
-
-async function getConfigString(key: string, fallback: string): Promise<string> {
-  const row = await db
-    .select({ value: systemConfig.value })
-    .from(systemConfig)
-    .where(eq(systemConfig.key, key))
-    .limit(1);
-  if (row.length > 0 && row[0]?.value != null) {
-    const v = row[0]?.value;
-    return typeof v === 'string' ? v : String(v);
-  }
-  return fallback;
-}
 
 export async function getSystemPrompt(): Promise<string> {
   return getConfigString('report.system_prompt', DEFAULT_SYSTEM_PROMPT);

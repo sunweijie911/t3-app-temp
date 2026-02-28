@@ -18,7 +18,10 @@ export const attemptRouter = createTRPCRouter({
     .input(z.object({ testTypeId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const testType = await ctx.db.query.testTypes.findFirst({
-        where: eq(testTypes.id, input.testTypeId),
+        where: and(
+          eq(testTypes.id, input.testTypeId),
+          eq(testTypes.isActive, true),
+        ),
       });
 
       if (!testType) {

@@ -1,9 +1,7 @@
 import 'server-only';
-import { eq } from 'drizzle-orm';
 import OpenAI from 'openai';
 import { env } from '@/env';
-import { db } from '@/server/db';
-import { systemConfig } from '@/server/db/schema';
+import { getConfigValue } from './config';
 
 interface LLMConfig {
   baseURL: string;
@@ -16,19 +14,6 @@ interface LLMConfig {
 let cachedConfig: LLMConfig | null = null;
 let cacheTimestamp = 0;
 const CACHE_TTL_MS = 60_000; // 1 minute
-
-async function getConfigValue(key: string): Promise<string | null> {
-  const row = await db
-    .select({ value: systemConfig.value })
-    .from(systemConfig)
-    .where(eq(systemConfig.key, key))
-    .limit(1);
-  if (row.length > 0 && row[0]?.value != null) {
-    const v = row[0]?.value;
-    return typeof v === 'string' ? v : String(v);
-  }
-  return null;
-}
 
 export async function getLLMConfig(): Promise<LLMConfig> {
   const now = Date.now();
