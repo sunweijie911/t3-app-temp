@@ -1,68 +1,107 @@
+import { MousePointerClick, PenLine, Sparkles } from 'lucide-react';
 import Link from 'next/link';
 import { Suspense } from 'react';
-
-import { LatestPost } from '@/app/_components/post';
-import { getSession } from '@/server/better-auth/server';
+import { Footer } from '@/app/_components/layout/footer';
+import { Header } from '@/app/_components/layout/header';
+import { TestGrid } from '@/app/_components/test/test-grid';
 import { api, HydrateClient } from '@/trpc/server';
 
+async function FeaturedTests() {
+  const tests = await api.test.getFeatured();
+  return <TestGrid tests={tests} />;
+}
+
 export default async function Home() {
-  const hello = await api.post.hello({ text: 'from tRPC' });
-  const session = await getSession();
-
-  if (session) {
-    void api.post.getLatest.prefetch();
-  }
-
   return (
     <HydrateClient>
-      <main className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-b from-[#2e026d] to-[#15162c] text-white">
-        <div className="container flex flex-col items-center justify-center gap-12 px-4 py-16">
-          <h1 className="font-extrabold text-5xl tracking-tight sm:text-[5rem]">
-            Create <span className="text-[hsl(280,100%,70%)]">T3</span> App
-          </h1>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:gap-8">
+      <Header />
+      <main className="min-h-screen bg-white">
+        {/* Hero Section */}
+        <section className="bg-gradient-to-br from-purple-600 via-purple-700 to-pink-600 px-4 py-20 text-white">
+          <div className="mx-auto max-w-4xl text-center">
+            <h1 className="mb-4 font-bold text-4xl tracking-tight sm:text-5xl">
+              探索你的内心世界
+            </h1>
+            <p className="mb-8 text-lg text-purple-100">
+              10种专业人格测试 + 专家定制化深度分析
+            </p>
             <Link
-              className="flex max-w-xs flex-col gap-4 rounded-xl bg-white/10 p-4 hover:bg-white/20"
-              href="https://create.t3.gg/en/usage/first-steps"
-              target="_blank"
+              className="inline-block rounded-xl bg-white px-8 py-3.5 font-semibold text-purple-700 shadow-lg transition-all hover:bg-purple-50 hover:shadow-xl"
+              href="/tests"
             >
-              <h3 className="font-bold text-2xl">First Steps →</h3>
-              <div className="text-lg">
-                Just the basics - Everything you need to know to set up your
-                database and authentication.
-              </div>
-            </Link>
-            <Link
-              className="flex max-w-xs flex-col gap-4 rounded-xl bg-white/10 p-4 hover:bg-white/20"
-              href="https://create.t3.gg/en/introduction"
-              target="_blank"
-            >
-              <h3 className="font-bold text-2xl">Documentation →</h3>
-              <div className="text-lg">
-                Learn more about Create T3 App, the libraries it uses, and how
-                to deploy it.
-              </div>
+              开始测试
             </Link>
           </div>
-          <div className="flex flex-col items-center gap-2">
-            <p className="text-2xl text-white">
-              {hello ? hello.greeting : 'Loading tRPC query...'}
-            </p>
+        </section>
 
-            <div className="flex flex-col items-center justify-center gap-4">
-              <p className="text-center text-2xl text-white">
-                {session && <span>Logged in as {session.user?.name}</span>}
-              </p>
+        {/* Featured Tests */}
+        <section className="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-8">
+          <div className="mb-8 flex items-center justify-between">
+            <h2 className="font-bold text-2xl text-gray-900">热门测试</h2>
+            <Link
+              className="font-medium text-purple-600 text-sm hover:text-purple-700"
+              href="/tests"
+            >
+              查看全部 &rarr;
+            </Link>
+          </div>
+          <Suspense
+            fallback={
+              <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+                {[1, 2, 3].map((i) => (
+                  <div
+                    className="h-48 animate-pulse rounded-2xl bg-gray-100"
+                    key={i}
+                  />
+                ))}
+              </div>
+            }
+          >
+            <FeaturedTests />
+          </Suspense>
+        </section>
+
+        {/* How It Works */}
+        <section className="bg-gray-50 px-4 py-16">
+          <div className="mx-auto max-w-4xl">
+            <h2 className="mb-12 text-center font-bold text-2xl text-gray-900">
+              三步探索自我
+            </h2>
+            <div className="grid grid-cols-1 gap-8 md:grid-cols-3">
+              <div className="text-center">
+                <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-purple-100 text-purple-600">
+                  <MousePointerClick className="h-6 w-6" />
+                </div>
+                <h3 className="mb-2 font-semibold text-gray-900">选择测试</h3>
+                <p className="text-gray-500 text-sm">
+                  从MBTI、九型人格等10种测试中选择你感兴趣的
+                </p>
+              </div>
+              <div className="text-center">
+                <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-purple-100 text-purple-600">
+                  <PenLine className="h-6 w-6" />
+                </div>
+                <h3 className="mb-2 font-semibold text-gray-900">完成答题</h3>
+                <p className="text-gray-500 text-sm">
+                  轻松作答，即刻获取免费结果摘要和维度分析
+                </p>
+              </div>
+              <div className="text-center">
+                <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-purple-100 text-purple-600">
+                  <Sparkles className="h-6 w-6" />
+                </div>
+                <h3 className="mb-2 font-semibold text-gray-900">
+                  专家深度报告
+                </h3>
+                <p className="text-gray-500 text-sm">
+                  付费解锁专家为你定制的深度分析报告
+                </p>
+              </div>
             </div>
           </div>
-
-          {session?.user && (
-            <Suspense fallback={<p>Loading...</p>}>
-              <LatestPost />
-            </Suspense>
-          )}
-        </div>
+        </section>
       </main>
+      <Footer />
     </HydrateClient>
   );
 }

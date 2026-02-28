@@ -2,9 +2,9 @@ name: Check Quality
 
 on:
   push:
-    branches: [main]
+    branches: [main, master, 'release/**']
   pull_request:
-    branches: [main]
+    branches: [main, master, 'release/**']
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

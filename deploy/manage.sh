@@ -14,7 +14,7 @@ NC='\033[0m' # No Color
 
 # 配置变量
 CONTAINER_NAME="t3-app"
-IMAGE_NAME="t3-app:local"
+IMAGE_NAME="${IMAGE_NAME:-t3-app:local}"
 PORT="${PORT:-3000}"
 APP_PORT=3000
 
@@ -113,9 +113,18 @@ start_container() {
         log_info "Creating and starting container '$CONTAINER_NAME'..."
         log_blue "Mapping port: ${PORT} -> ${APP_PORT}"
 
+        # 构建 env-file 参数
+        local env_file_args=()
+        if [ -f ".env" ]; then
+            log_info "Loading environment variables from .env"
+            env_file_args=(--env-file .env)
+        fi
+
         docker run -d \
             --name "$CONTAINER_NAME" \
             -p "${PORT}:${APP_PORT}" \
+            --add-host=host.docker.internal:host-gateway \
+            "${env_file_args[@]}" \
             -e DATABASE_URL="${DATABASE_URL:-}" \
             -e BETTER_AUTH_SECRET="${BETTER_AUTH_SECRET:-}" \
             --restart unless-stopped \

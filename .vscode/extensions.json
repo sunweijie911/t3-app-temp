@@ -1,12 +1,12 @@
 {
-	"recommendations": [
-		"biomejs.biome",
-		"antfu.unocss",
+  "recommendations": [
+    "biomejs.biome",
+    "antfu.unocss",
     "lokalise.i18n-ally",
     "henrynguyen5-vsc.vsc-nvm",
     "clinyong.vscode-css-modules",
     "dsznajder.es7-react-js-snippets",
     "vunguyentuan.vscode-css-variables",
-		"streetsidesoftware.code-spell-checker"
-	]
+    "streetsidesoftware.code-spell-checker"
+  ]
 }

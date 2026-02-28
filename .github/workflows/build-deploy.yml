@@ -44,20 +44,6 @@ jobs:
     if: |
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: t3_build
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd="pg_isready -U postgres"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -208,6 +194,9 @@ jobs:
             # 加载 Docker 镜像
             echo "加载 Docker 镜像..."
             docker load -i "${{ env.IMAGE_PREFIX }}_${hash}.tar"
+
+            # 重新标记镜像为 manage.sh 使用的名称
+            docker tag "${{ env.IMAGE_PREFIX }}:${hash}" "${{ env.IMAGE_PREFIX }}:local"
 
             # 停止旧容器
             echo "停止旧容器..."
