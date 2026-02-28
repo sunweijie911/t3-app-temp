@@ -39,7 +39,7 @@ function scoreDimension(input: ScoringInput): ScoringOutput {
     if (Array.isArray(d)) return d as [string, string];
     // Object format: { id: "EI", labels: [...] } - split id into sides
     const id = d.id;
-    return [id[0]!, id[1]!] as [string, string];
+    return [id[0] ?? '', id[1] ?? ''] as [string, string];
   });
 
   const dimScores: Record<string, number> = {};
@@ -144,7 +144,7 @@ function scoreScale(input: ScoringInput): ScoringOutput {
   const levelLabels: string[] = [];
 
   for (const dim of Object.keys(dimTotals)) {
-    const avg = dimTotals[dim]! / (dimCounts[dim] ?? 1);
+    const avg = (dimTotals[dim] ?? 0) / (dimCounts[dim] ?? 1);
     dimensionScores[dim] = Math.round(avg * 100) / 100;
 
     const scaleConfig = scales[dim];
@@ -159,9 +159,63 @@ function scoreScale(input: ScoringInput): ScoringOutput {
   }
 
   const resultCode = levelLabels.join(',');
-  const def = input.resultDefinitions[resultCode] as
+  let def = input.resultDefinitions[resultCode] as
     | { label?: string; summary?: string; description?: string }
     | undefined;
+
+  // Fallback: find best matching resultDefinition by dimension levels
+  if (!def) {
+    const currentLevels = new Map(
+      levelLabels.map((l) => {
+        const [dim, ...rest] = l.split(':');
+        return [dim ?? '', rest.join(':')] as [string, string];
+      }),
+    );
+    let bestKey: string | undefined;
+    let bestMatchCount = 0;
+
+    for (const key of Object.keys(input.resultDefinitions)) {
+      const parts = key.split(',');
+      let matchCount = 0;
+      let allMatch = true;
+      for (const part of parts) {
+        const [dim, ...rest] = part.split(':');
+        const level = rest.join(':');
+        if (currentLevels.get(dim ?? '') === level) {
+          matchCount++;
+        } else {
+          allMatch = false;
+        }
+      }
+      if (allMatch && matchCount > bestMatchCount) {
+        bestMatchCount = matchCount;
+        bestKey = key;
+      }
+    }
+    // If no full match, take the one with most matching dimensions
+    if (!bestKey) {
+      for (const key of Object.keys(input.resultDefinitions)) {
+        const parts = key.split(',');
+        let matchCount = 0;
+        for (const part of parts) {
+          const [dim, ...rest] = part.split(':');
+          const level = rest.join(':');
+          if (currentLevels.get(dim ?? '') === level) {
+            matchCount++;
+          }
+        }
+        if (matchCount > bestMatchCount) {
+          bestMatchCount = matchCount;
+          bestKey = key;
+        }
+      }
+    }
+    if (bestKey) {
+      def = input.resultDefinitions[bestKey] as
+        | { label?: string; summary?: string; description?: string }
+        | undefined;
+    }
+  }
 
   return {
     resultCode,
@@ -191,7 +245,7 @@ function scoreComposite(input: ScoringInput): ScoringOutput {
   const dimensionScores: Record<string, number> = {};
   for (const dim of Object.keys(dimTotals)) {
     dimensionScores[dim] =
-      Math.round((dimTotals[dim]! / (dimCounts[dim] ?? 1)) * 100) / 100;
+      Math.round(((dimTotals[dim] ?? 0) / (dimCounts[dim] ?? 1)) * 100) / 100;
   }
 
   // Build composite code from sorted dimension keys
@@ -200,33 +254,53 @@ function scoreComposite(input: ScoringInput): ScoringOutput {
     .map(([dim, score]) => `${dim}:${score}`);
   const resultCode = codeParts.join(',');
 
-  const def = input.resultDefinitions[resultCode] as
+  let def = input.resultDefinitions[resultCode] as
     | { label?: string; summary?: string; description?: string }
     | undefined;
 
-  // If no exact match, try to find closest or use default
-  let label = def?.label;
-  let summary = def?.summary;
-  if (!label) {
-    // Try to find a partial match or first available definition
-    const defKeys = Object.keys(input.resultDefinitions);
-    if (defKeys.length > 0) {
-      const firstDef = input.resultDefinitions[defKeys[0]!] as
+  // If no exact match, find closest by dimension score distance
+  if (!def) {
+    let bestKey: string | undefined;
+    let bestDistance = Infinity;
+
+    for (const key of Object.keys(input.resultDefinitions)) {
+      const parts = key.split(',');
+      let distance = 0;
+      let valid = true;
+      for (const part of parts) {
+        const [dim, scoreStr] = part.split(':');
+        if (!dim || scoreStr === undefined) {
+          valid = false;
+          break;
+        }
+        const defScore = Number.parseFloat(scoreStr);
+        const actualScore = dimensionScores[dim] ?? 0;
+        if (Number.isNaN(defScore)) {
+          valid = false;
+          break;
+        }
+        distance += (actualScore - defScore) ** 2;
+      }
+      if (valid && distance < bestDistance) {
+        bestDistance = distance;
+        bestKey = key;
+      }
+    }
+    if (bestKey) {
+      def = input.resultDefinitions[bestKey] as
         | { label?: string; summary?: string; description?: string }
         | undefined;
-      label = firstDef?.label ?? 'Composite Result';
-      summary = firstDef?.summary;
-    } else {
-      label = 'Composite Result';
     }
   }
 
   return {
     resultCode,
-    resultLabel: label,
+    resultLabel: def?.label ?? resultCode,
     dimensionScores,
     summary:
-      summary ?? def?.description ?? `Your composite profile: ${resultCode}.`,
+      def?.summary ??
+      def?.description ??
+      `Your composite profile: ${resultCode}.`,
   };
 }
 

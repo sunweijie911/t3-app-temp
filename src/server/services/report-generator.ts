@@ -80,6 +80,7 @@ export async function buildReportPrompt(resultId: string): Promise<{
     throw new Error(`Test result not found: ${resultId}`);
   }
 
+  // biome-ignore lint/style/noNonNullAssertion: length checked above
   const testResult = result[0]!;
 
   const testType = await db
@@ -92,6 +93,7 @@ export async function buildReportPrompt(resultId: string): Promise<{
     throw new Error(`Test type not found: ${testResult.testTypeId}`);
   }
 
+  // biome-ignore lint/style/noNonNullAssertion: length checked above
   const tt = testType[0]!;
 
   const [systemPrompt, promptTemplate] = await Promise.all([
