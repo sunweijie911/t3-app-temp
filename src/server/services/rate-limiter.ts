@@ -7,7 +7,8 @@ export class RateLimiter {
     this.maxRequests = maxRequests;
     this.windowMs = windowMs;
     // Clean up expired records every 60 seconds
-    setInterval(() => this.cleanup(), 60_000);
+    // unref() allows the process to exit even if this timer is still active
+    setInterval(() => this.cleanup(), 60_000).unref();
   }
 
   check(key: string): { allowed: boolean; retryAfterMs: number } {

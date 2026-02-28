@@ -9,9 +9,9 @@
   "packageManager": "pnpm@9.15.5",
   "scripts": {
     "build": "next build",
-    "check": "biome check .",
-    "check:unsafe": "biome check --write --unsafe .",
-    "check:write": "biome check --write .",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "lint:fix-unsafe": "biome check --write --unsafe .",
     "commit": "czg",
     "changelog": "conventional-changelog -p angular -i CHANGELOG.md -s",
     "db:generate": "drizzle-kit generate",

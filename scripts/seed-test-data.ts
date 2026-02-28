@@ -5,6 +5,7 @@ import postgres from 'postgres';
 import * as schema from '@/server/db/schema';
 import { questions, systemConfig, testTypes } from '@/server/db/schema';
 
+// biome-ignore lint/style/noNonNullAssertion: seed script runs outside env.js validation
 const conn = postgres(process.env.DATABASE_URL!);
 const db = drizzle(conn, { schema });
 
