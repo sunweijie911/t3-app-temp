@@ -39,6 +39,9 @@ env:
   IMAGE_NAME: ${{ github.repository }}
   APP_PORT: 3000
 
+# github.repository may contain uppercase letters (e.g. sunweijieMJ/t3-app-temp)
+# but Docker requires lowercase image names, so we normalize it in the prepare step.
+
 jobs:
   # ==================== 构建并推送到 GHCR ====================
   build:
@@ -62,6 +65,12 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
+      - name: Normalize image name
+        id: repo
+        run: echo "image_name=${IMAGE_NAME,,}" >> "$GITHUB_OUTPUT"
+        env:
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+
       - name: Generate build info
         id: info
         run: |
@@ -79,7 +88,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.image_name }}
           tags: |
             type=sha,prefix=
             type=ref,event=branch
@@ -113,6 +122,12 @@ jobs:
       - name: Checkout (for deploy scripts)
         uses: actions/checkout@v4
 
+      - name: Normalize image name
+        id: repo
+        run: echo "image_name=${IMAGE_NAME,,}" >> "$GITHUB_OUTPUT"
+        env:
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+
       - name: Check secrets
         run: |
           has_error=0
@@ -144,7 +159,7 @@ jobs:
 
             DEPLOY_PATH="${{ secrets.DEPLOY_SERVER_PATH }}"
             REGISTRY="${{ env.REGISTRY }}"
-            IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build.outputs.git_hash }}"
+            IMAGE="${{ env.REGISTRY }}/${{ steps.repo.outputs.image_name }}:${{ needs.build.outputs.git_hash }}"
 
             echo "=========================================="
             echo "部署信息:"
@@ -181,7 +196,7 @@ jobs:
             ./manage.sh start
 
             # 清理旧 Docker 镜像（保留最近 3 个）
-            docker images "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}" -q | tail -n +4 | xargs -r docker rmi 2>/dev/null || true
+            docker images "${{ env.REGISTRY }}/${{ steps.repo.outputs.image_name }}" -q | tail -n +4 | xargs -r docker rmi 2>/dev/null || true
 
       - name: Health check
         run: |
@@ -217,8 +232,9 @@ jobs:
             echo "| 构建 & 推送 | ${{ needs.build.result }} |"
             echo "| 部署 | ${{ needs.deploy.result || 'skipped' }} |"
             echo ""
+            IMAGE_NAME_LOWER="${IMAGE_NAME,,}"
             if [[ "${{ needs.build.result }}" == "success" ]]; then
-              echo "**镜像**: \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build.outputs.git_hash }}\`"
+              echo "**镜像**: \`${{ env.REGISTRY }}/${IMAGE_NAME_LOWER}:${{ needs.build.outputs.git_hash }}\`"
               echo "**构建时间**: ${{ needs.build.outputs.build_time }}"
             fi
             if [[ "${{ needs.deploy.result }}" == "success" ]]; then
