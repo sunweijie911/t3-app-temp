@@ -34,8 +34,11 @@
   },
   "lint-staged": {
     "*.{js,jsx,ts,tsx,cjs,mjs}": [
-      "biome check --write --no-errors-on-unmatched",
+      "biome check --write --unsafe --no-errors-on-unmatched",
       "cspell --no-must-find-files"
+    ],
+    "*.{json}": [
+      "biome format --write --no-errors-on-unmatched"
     ],
     "*.css": [
       "biome check --write --no-errors-on-unmatched"
