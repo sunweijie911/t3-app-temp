@@ -1,7 +1,12 @@
 import { sql } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/postgres-js';
 import { nanoid } from 'nanoid';
-import { db } from '@/server/db';
+import postgres from 'postgres';
+import * as schema from '@/server/db/schema';
 import { questions, systemConfig, testTypes } from '@/server/db/schema';
+
+const conn = postgres(process.env.DATABASE_URL!);
+const db = drizzle(conn, { schema });
 
 // ============================================================
 // Test Type Definitions
@@ -2728,15 +2733,16 @@ async function seedSystemConfig() {
 // ============================================================
 
 async function main() {
-  console.log('Seeding test data...');
+  console.log('[seed] Seeding test data...');
   await seedTestTypes();
   await seedQuestions();
   await seedSystemConfig();
-  console.log('Seed complete!');
+  console.log('[seed] Seed complete!');
+  await conn.end();
   process.exit(0);
 }
 
 main().catch((e) => {
-  console.error(e);
+  console.error('[seed] Seed failed:', e);
   process.exit(1);
 });

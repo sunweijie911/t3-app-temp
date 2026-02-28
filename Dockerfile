@@ -21,6 +21,13 @@ ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN pnpm build
 
+# Compile seed script for production (no tsx in runner)
+RUN npx esbuild scripts/seed-test-data.ts \
+    --bundle --platform=node --format=esm \
+    --outfile=seed.mjs \
+    --external:postgres \
+    --tsconfig=tsconfig.json
+
 ##### RUNNER
 FROM node:22-alpine AS runner
 WORKDIR /app
@@ -37,6 +44,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/postgres ./node_modules/postgres
 COPY --from=builder --chown=nextjs:nodejs /app/drizzle ./drizzle
 COPY --from=builder --chown=nextjs:nodejs /app/migrate.mjs ./migrate.mjs
+COPY --from=builder --chown=nextjs:nodejs /app/seed.mjs ./seed.mjs
 
 USER nextjs
 
@@ -45,4 +53,4 @@ EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 
-CMD ["sh", "-c", "node migrate.mjs && node server.js"]
+CMD ["sh", "-c", "node migrate.mjs && node seed.mjs && node server.js"]
