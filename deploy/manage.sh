@@ -174,18 +174,14 @@ stop_container() {
     log_info "Container stopped successfully"
 }
 
-# 重启容器
+# 重启容器（销毁并重建，确保重新读取 .env）
 restart_container() {
     if container_exists; then
-        log_info "Restarting container '$CONTAINER_NAME'..."
-        docker restart "$CONTAINER_NAME"
-        sleep 2
-        log_info "Container restarted successfully"
-        show_status
-    else
-        log_warn "Container does not exist. Starting new container..."
-        start_container
+        log_info "Recreating container '$CONTAINER_NAME'..."
+        stop_container
+        remove_container
     fi
+    start_container
 }
 
 # 删除容器

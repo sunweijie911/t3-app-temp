@@ -1,6 +1,10 @@
 import { createEnv } from '@t3-oss/env-nextjs';
 import { z } from 'zod';
 
+/** Strip surrounding quotes that Docker --env-file preserves verbatim */
+const stripQuotes = (/** @type {string | undefined} */ v) =>
+  v?.replace(/^["']|["']$/g, '');
+
 export const env = createEnv({
   /**
    * Specify your server-side environment variables schema here. This way you can ensure the app
@@ -34,12 +38,12 @@ export const env = createEnv({
    * middlewares) or client-side so we need to destruct manually.
    */
   runtimeEnv: {
-    BETTER_AUTH_SECRET: process.env.BETTER_AUTH_SECRET,
-    DATABASE_URL: process.env.DATABASE_URL,
-    NODE_ENV: process.env.NODE_ENV,
-    ADMIN_EMAILS: process.env.ADMIN_EMAILS,
-    LLM_API_KEY: process.env.LLM_API_KEY,
-    BETTER_AUTH_URL: process.env.BETTER_AUTH_URL,
+    BETTER_AUTH_SECRET: stripQuotes(process.env.BETTER_AUTH_SECRET),
+    DATABASE_URL: stripQuotes(process.env.DATABASE_URL),
+    NODE_ENV: stripQuotes(process.env.NODE_ENV),
+    ADMIN_EMAILS: stripQuotes(process.env.ADMIN_EMAILS),
+    LLM_API_KEY: stripQuotes(process.env.LLM_API_KEY),
+    BETTER_AUTH_URL: stripQuotes(process.env.BETTER_AUTH_URL),
   },
   /**
    * Run `build` or `dev` with `SKIP_ENV_VALIDATION` to skip env validation. This is especially

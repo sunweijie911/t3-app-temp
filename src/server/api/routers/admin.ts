@@ -23,9 +23,9 @@ export const adminRouter = createTRPCRouter({
   isAdmin: protectedProcedure.query(({ ctx }) => {
     const adminEmails = (env.ADMIN_EMAILS ?? '')
       .split(',')
-      .map((e) => e.trim())
+      .map((e) => e.trim().toLowerCase())
       .filter(Boolean);
-    return adminEmails.includes(ctx.session.user.email);
+    return adminEmails.includes(ctx.session.user.email.toLowerCase());
   }),
   getQuestions: adminProcedure
     .input(

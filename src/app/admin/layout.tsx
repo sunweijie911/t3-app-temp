@@ -14,10 +14,10 @@ export default async function AdminLayout({
 
   const adminEmails = (env.ADMIN_EMAILS ?? '')
     .split(',')
-    .map((e) => e.trim())
+    .map((e) => e.trim().toLowerCase())
     .filter(Boolean);
 
-  if (!adminEmails.includes(session.user.email)) {
+  if (!adminEmails.includes(session.user.email.toLowerCase())) {
     redirect('/');
   }
 
