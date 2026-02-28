@@ -1,0 +1,259 @@
+# 构建与部署工作流
+# 构建 Docker 镜像并通过 SSH 部署到服务器
+#
+# 触发条件:
+#   1. Check Quality 成功后自动触发 (workflow_run，自动部署)
+#   2. 手动触发 (workflow_dispatch，可选择是否部署)
+#
+# 配置步骤:
+#   在 GitHub 仓库 Settings -> Secrets and variables -> Actions 中添加:
+#     - DEPLOY_SERVER_HOST: 服务器 IP 或域名
+#     - DEPLOY_SERVER_USER: SSH 用户名
+#     - DEPLOY_SERVER_PATH: 部署目标路径
+#     - DEPLOY_SSH_PRIVATE_KEY: SSH 私钥 (完整内容，包括 BEGIN/END)
+
+name: Build and Deploy
+
+on:
+  workflow_run:
+    workflows: ["Check Quality"]
+    branches: [main, master, 'release/**']
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: '是否部署到服务器'
+        required: true
+        default: true
+        type: boolean
+
+concurrency:
+  group: build-${{ github.event.workflow_run.head_branch || github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_PREFIX: 't3-app'
+  PACKAGE_PREFIX: 't3-app'
+  APP_PORT: 3000
+
+jobs:
+  # ==================== 构建 Docker 镜像 ====================
+  build:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: t3_build
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Generate build info
+        id: info
+        run: |
+          GIT_HASH=$(git rev-parse --short HEAD)
+          GIT_BRANCH="${{ github.event.workflow_run.head_branch || github.ref_name }}"
+          BUILD_TIME=$(date "+%Y-%m-%d_%H-%M-%S")
+          IMAGE_TAG_NAME="${{ env.IMAGE_PREFIX }}:${GIT_HASH}"
+          PACKAGE_NAME="${{ env.PACKAGE_PREFIX }}_${GIT_HASH}_${BUILD_TIME}.tar.gz"
+
+          echo "git_hash=${GIT_HASH}" >> "$GITHUB_OUTPUT"
+          echo "build_time=${BUILD_TIME}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${IMAGE_TAG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "package_name=${PACKAGE_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Docker image
+        run: |
+          docker build -t "${{ steps.info.outputs.image_tag }}" .
+
+      - name: Create deploy package
+        run: |
+          IMAGE_TAG="${{ steps.info.outputs.image_tag }}"
+          PACKAGE_NAME="${{ steps.info.outputs.package_name }}"
+
+          # 准备部署文件
+          mkdir -p deploy_package
+          cp deploy/manage.sh deploy_package/
+
+          # 保存 Docker 镜像
+          SAVED_NAME="${IMAGE_TAG//:/\_}.tar"
+          docker save "${IMAGE_TAG}" -o "deploy_package/${SAVED_NAME}"
+
+          # 写入构建信息
+          cat > deploy_package/build_info.sh << EOF
+          hash=${{ steps.info.outputs.git_hash }}
+          build_at=${{ steps.info.outputs.build_time }}
+          branch=${{ github.event.workflow_run.head_branch || github.ref_name }}
+          image_tag=${IMAGE_TAG}
+          docker_md5=$(md5sum deploy_package/${SAVED_NAME} | awk '{print $1}')
+          EOF
+
+          # 创建最终部署包
+          tar -czf "${PACKAGE_NAME}" deploy_package
+          echo "Package created - ${PACKAGE_NAME}"
+
+      - name: Upload deploy package
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-package
+          path: |
+            *.tar.gz
+            deploy_package/build_info.sh
+          retention-days: 30
+
+  # ==================== 部署到服务器 ====================
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy == 'true') ||
+      github.event_name == 'workflow_run'
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    environment:
+      name: production
+
+    steps:
+      - name: Check secrets
+        run: |
+          has_error=0
+          if [[ -z "${{ secrets.DEPLOY_SERVER_HOST }}" ]]; then
+            echo "::error::缺少 DEPLOY_SERVER_HOST secret"
+            has_error=1
+          fi
+          if [[ -z "${{ secrets.DEPLOY_SERVER_USER }}" ]]; then
+            echo "::error::缺少 DEPLOY_SERVER_USER secret"
+            has_error=1
+          fi
+          if [[ -z "${{ secrets.DEPLOY_SERVER_PATH }}" ]]; then
+            echo "::error::缺少 DEPLOY_SERVER_PATH secret"
+            has_error=1
+          fi
+          if [[ -z "${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}" ]]; then
+            echo "::error::缺少 DEPLOY_SSH_PRIVATE_KEY secret"
+            has_error=1
+          fi
+          if [[ $has_error -eq 1 ]]; then
+            echo "请在 Settings -> Secrets and variables -> Actions 中配置以上 secrets"
+            exit 1
+          fi
+
+      - name: Download deploy package
+        uses: actions/download-artifact@v4
+        with:
+          name: deploy-package
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.DEPLOY_SERVER_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Deploy to server
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_SERVER_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_SERVER_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_SERVER_PATH }}
+        run: |
+          source deploy_package/build_info.sh
+          PACKAGE_FILE=$(ls ${{ env.PACKAGE_PREFIX }}_${hash}_*.tar.gz | head -1)
+
+          echo "=========================================="
+          echo "部署信息:"
+          echo "  分支: ${{ github.event.workflow_run.head_branch || github.ref_name }}"
+          echo "  服务器: ${DEPLOY_USER}@${DEPLOY_HOST}"
+          echo "  路径: ${DEPLOY_PATH}"
+          echo "  部署包: ${PACKAGE_FILE}"
+          echo "  Git Hash: ${hash}"
+          echo "  构建时间: ${build_at}"
+          echo "=========================================="
+
+          # 确保目标目录存在
+          ssh -i ~/.ssh/deploy_key "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p ${DEPLOY_PATH}"
+
+          # 上传部署包到服务器
+          scp -i ~/.ssh/deploy_key "${PACKAGE_FILE}" "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/"
+
+          # 在服务器上执行部署
+          ssh -i ~/.ssh/deploy_key "${DEPLOY_USER}@${DEPLOY_HOST}" << EOF
+            set -e
+            cd ${DEPLOY_PATH}
+
+            # 解压部署包
+            echo "解压部署包..."
+            tar -xzf $(basename ${PACKAGE_FILE})
+
+            # 进入部署目录
+            cd deploy_package
+
+            # 加载 Docker 镜像
+            echo "加载 Docker 镜像..."
+            docker load -i "${{ env.IMAGE_PREFIX }}_${hash}.tar"
+
+            # 停止旧容器
+            echo "停止旧容器..."
+            chmod +x manage.sh
+            ./manage.sh stop || true
+            ./manage.sh remove || true
+
+            # 启动新容器
+            echo "启动新容器..."
+            ./manage.sh start
+
+            # 显示状态
+            echo "部署完成！"
+            ./manage.sh status
+
+            # 清理旧部署包（保留最近3个）
+            cd ${DEPLOY_PATH}
+            ls -t ${{ env.PACKAGE_PREFIX }}_*.tar.gz | tail -n +4 | xargs -r rm -f
+
+            # 清理旧 Docker 镜像（保留最近3个）
+            docker images "${{ env.IMAGE_PREFIX }}" -q | tail -n +4 | xargs -r docker rmi 2>/dev/null || true
+          EOF
+
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
+
+  # ==================== 通知 ====================
+  notify:
+    name: Notify
+    needs: [build, deploy]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Summary
+        run: |
+          {
+            echo "# 部署结果"
+            echo ""
+            echo "| 项目 | 状态 |"
+            echo "|------|------|"
+            echo "| 构建 | ${{ needs.build.result }} |"
+            echo "| 部署 | ${{ needs.deploy.result || 'skipped' }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "${{ needs.deploy.result }}" == "success" ]]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "**服务器**: ${{ secrets.DEPLOY_SERVER_HOST }}" >> "$GITHUB_STEP_SUMMARY"
+          fi

@@ -1,0 +1,26 @@
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: t3-app-temp
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # app:
+  #   build: .
+  #   restart: unless-stopped
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     DATABASE_URL: postgresql://postgres:postgres@db:5432/t3-app-temp
+  #   depends_on:
+  #     db:
+  #       condition: service_started
+
+volumes:
+  postgres_data:
