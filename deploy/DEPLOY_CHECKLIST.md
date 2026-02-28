@@ -15,7 +15,7 @@
 - [ ] 安装 PostgreSQL 16（见下方步骤）
 - [ ] 将 SSH 公钥添加到 `~/.ssh/authorized_keys`
 - [ ] 创建部署目录（与 `DEPLOY_SERVER_PATH` 一致）
-- [ ] 安全组放通 3000 端口（TCP 入方向）
+- [ ] 安全组放通 5000 端口（TCP 入方向）
 - [ ] 安全组**不要**放通 5432 端口（数据库仅本机访问）
 
 ### PostgreSQL 安装与初始化

@@ -20,7 +20,11 @@ export function TestContainer({ attemptId }: TestContainerProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const autoAdvanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const { data: questions, isLoading } = api.attempt.getQuestions.useQuery({
+  const {
+    data: questions,
+    isLoading,
+    isError,
+  } = api.attempt.getQuestions.useQuery({
     attemptId,
   });
 
@@ -80,10 +84,25 @@ export function TestContainer({ attemptId }: TestContainerProps) {
     }
   }, [answers, attemptId, complete, questions, router, submitBatch]);
 
-  if (isLoading || !questions) {
+  if (isLoading) {
     return (
       <div className="flex min-h-[400px] items-center justify-center">
         <LoadingSpinner size="lg" />
+      </div>
+    );
+  }
+
+  if (isError || !questions) {
+    return (
+      <div className="flex min-h-[400px] flex-col items-center justify-center gap-4">
+        <p className="text-gray-500">加载题目失败，请刷新页面重试</p>
+        <button
+          className="rounded-lg border border-gray-300 px-4 py-2 text-gray-600 text-sm transition-colors hover:bg-gray-50"
+          onClick={() => router.back()}
+          type="button"
+        >
+          返回
+        </button>
       </div>
     );
   }

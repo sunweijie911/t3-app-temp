@@ -15,7 +15,7 @@ NC='\033[0m' # No Color
 # 配置变量
 CONTAINER_NAME="t3-app"
 IMAGE_NAME="${IMAGE_NAME:-t3-app:local}"
-PORT="${PORT:-3000}"
+PORT="${PORT:-5000}"
 APP_PORT=3000
 
 # 日志函数

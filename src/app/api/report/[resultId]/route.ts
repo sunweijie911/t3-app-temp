@@ -1,7 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import { auth } from '@/server/better-auth';
 import { db } from '@/server/db';
-import { orders, testResults } from '@/server/db/schema';
+import { aiReports, orders, testResults } from '@/server/db/schema';
 import { generateReport } from '@/server/services/report-generator';
 
 export async function GET(
@@ -28,10 +28,40 @@ export async function GET(
 
   // Verify payment
   const order = await db.query.orders.findFirst({
-    where: and(eq(orders.resultId, resultId), eq(orders.status, 'paid')),
+    where: and(
+      eq(orders.resultId, resultId),
+      eq(orders.userId, session.user.id),
+      eq(orders.status, 'paid'),
+    ),
   });
   if (!order) {
     return new Response('Payment required', { status: 402 });
+  }
+
+  // Check for existing completed report
+  const existingReport = await db.query.aiReports.findFirst({
+    where: eq(aiReports.resultId, resultId),
+  });
+  if (existingReport?.status === 'completed' && existingReport.content) {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({ content: existingReport.content })}\n\n`,
+          ),
+        );
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        controller.close();
+      },
+    });
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+      },
+    });
   }
 
   // Stream the report

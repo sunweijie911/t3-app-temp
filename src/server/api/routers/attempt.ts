@@ -256,23 +256,27 @@ export const attemptRouter = createTRPCRouter({
         };
       });
 
+      let insertedCount = 0;
       if (answerValues.length > 0) {
-        await ctx.db
+        const inserted = await ctx.db
           .insert(testAnswers)
           .values(answerValues)
-          .onConflictDoNothing();
+          .onConflictDoNothing()
+          .returning({ id: testAnswers.id });
+        insertedCount = inserted.length;
       }
 
-      // Update current question index
-      await ctx.db
-        .update(testAttempts)
-        .set({
-          currentQuestionIndex:
-            attempt.currentQuestionIndex + uniqueAnswers.length,
-        })
-        .where(eq(testAttempts.id, input.attemptId));
+      // Update current question index based on actually inserted rows
+      if (insertedCount > 0) {
+        await ctx.db
+          .update(testAttempts)
+          .set({
+            currentQuestionIndex: attempt.currentQuestionIndex + insertedCount,
+          })
+          .where(eq(testAttempts.id, input.attemptId));
+      }
 
-      return { count: uniqueAnswers.length };
+      return { count: insertedCount };
     }),
 
   complete: protectedProcedure

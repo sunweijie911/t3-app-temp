@@ -13,11 +13,12 @@ export function StartTestButton({
   testSlug: string;
 }) {
   const router = useRouter();
-  const { data: session } = authClient.useSession();
+  const { data: session, isPending } = authClient.useSession();
 
   const startAttempt = api.attempt.start.useMutation();
 
   const handleStart = async () => {
+    if (isPending) return;
     if (!session?.user) {
       router.push('/signin');
       return;
@@ -34,11 +35,15 @@ export function StartTestButton({
   return (
     <button
       className="w-full rounded-xl bg-gradient-to-r from-purple-600 to-pink-600 px-8 py-4 font-semibold text-lg text-white shadow-lg transition-all hover:from-purple-700 hover:to-pink-700 hover:shadow-xl disabled:opacity-50"
-      disabled={startAttempt.isPending}
+      disabled={startAttempt.isPending || isPending}
       onClick={handleStart}
       type="button"
     >
-      {startAttempt.isPending ? '准备中...' : '开始测试'}
+      {isPending
+        ? '加载中...'
+        : startAttempt.isPending
+          ? '准备中...'
+          : '开始测试'}
     </button>
   );
 }

@@ -41,8 +41,11 @@ function markdownToHtml(md: string): string {
     return `<ol>${items}</ol>`;
   });
   // Unordered lists
-  html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
-  html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+  html = html.replace(/^- (.+)$/gm, '<uli>$1</uli>');
+  html = html.replace(/((?:<uli>.*<\/uli>\n?)+)/g, (match) => {
+    const items = match.replace(/<uli>(.*?)<\/uli>/g, '<li>$1</li>');
+    return `<ul>${items}</ul>`;
+  });
   // Paragraphs - wrap lines not already in tags
   html = html.replace(/^(?!<[houlb]|<li|<bl|<\/[uo]l>)(.+)$/gm, '<p>$1</p>');
   // Line breaks

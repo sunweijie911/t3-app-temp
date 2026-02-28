@@ -9,7 +9,7 @@ import {
   X,
 } from 'lucide-react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { authClient } from '@/lib/auth-client';
@@ -17,6 +17,7 @@ import { api } from '@/trpc/react';
 
 export function Header() {
   const pathname = usePathname();
+  const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
   const { data: session } = authClient.useSession();
   const { data: isAdmin } = api.admin.isAdmin.useQuery(undefined, {
@@ -86,6 +87,8 @@ export function Header() {
                     fetchOptions: {
                       onSuccess: () => {
                         toast.success('已退出登录');
+                        router.push('/');
+                        router.refresh();
                       },
                     },
                   });
