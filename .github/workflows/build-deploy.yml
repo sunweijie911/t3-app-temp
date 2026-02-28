@@ -148,6 +148,16 @@ jobs:
           DEPLOY_SERVER_PATH: ${{ secrets.DEPLOY_SERVER_PATH }}
           DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
 
+      - name: Sync deploy scripts
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_SERVER_HOST }}
+          username: ${{ secrets.DEPLOY_SERVER_USER }}
+          key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          source: "deploy/*"
+          target: ${{ secrets.DEPLOY_SERVER_PATH }}
+          overwrite: true
+
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.0
         with:
@@ -195,10 +205,11 @@ jobs:
 
             # 启动新容器
             echo "启动新容器..."
-            cd "${DEPLOY_PATH}/deploy"
             ENV_FILE_ARG=""
-            if [ -f ".env" ]; then
-              ENV_FILE_ARG="--env-file .env"
+            if [ -f "${DEPLOY_PATH}/.env" ]; then
+              ENV_FILE_ARG="--env-file ${DEPLOY_PATH}/.env"
+            elif [ -f "${DEPLOY_PATH}/deploy/.env" ]; then
+              ENV_FILE_ARG="--env-file ${DEPLOY_PATH}/deploy/.env"
             fi
 
             docker run -d \
