@@ -1,6 +1,7 @@
 import 'server-only';
 import { eq } from 'drizzle-orm';
 import OpenAI from 'openai';
+import { env } from '@/env';
 import { db } from '@/server/db';
 import { systemConfig } from '@/server/db/schema';
 
@@ -45,7 +46,7 @@ export async function getLLMConfig(): Promise<LLMConfig> {
 
   cachedConfig = {
     baseURL: baseURL ?? 'https://api.deepseek.com/v1',
-    apiKey: apiKey ?? '',
+    apiKey: env.LLM_API_KEY ?? apiKey ?? '',
     model: model ?? 'deepseek-chat',
     temperature: temperature ? parseFloat(temperature) : 0.7,
     maxTokens: maxTokens ? parseInt(maxTokens, 10) : 2048,

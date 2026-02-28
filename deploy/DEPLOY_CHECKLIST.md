@@ -55,6 +55,7 @@ openssl rand -base64 32
 # 必填 — 用户名密码与上一步创建的一致
 DATABASE_URL=postgresql://t3app:替换为强密码@host.docker.internal:5432/t3app
 BETTER_AUTH_SECRET=openssl生成的随机字符串
+BETTER_AUTH_URL=http://<ECS公网IP>:5000
 
 # 可选
 ADMIN_EMAILS=admin@example.com
@@ -64,6 +65,7 @@ ADMIN_EMAILS=admin@example.com
 |------|------|------|
 | `DATABASE_URL` | 是 | 本机 PostgreSQL 连接串 |
 | `BETTER_AUTH_SECRET` | 生产必填 | 认证密钥，`openssl rand -base64 32` 生成 |
+| `BETTER_AUTH_URL` | 生产必填 | 应用访问地址，如 `http://<IP>:5000` 或 `https://yourdomain.com` |
 | `ADMIN_EMAILS` | 否 | 管理员邮箱，多个用逗号分隔 |
 
 ## 4. 镜像分发方式

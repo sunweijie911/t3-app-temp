@@ -3,6 +3,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 
+import { env } from '@/env';
 import { createTRPCRouter, protectedProcedure } from '@/server/api/trpc';
 import { orders, testResults } from '@/server/db/schema';
 import { simulatePayment } from '@/server/services/payment';
@@ -43,6 +44,19 @@ export const orderRouter = createTRPCRouter({
   simulatePayment: protectedProcedure
     .input(z.object({ orderId: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      if (env.NODE_ENV === 'production') {
+        const adminEmails = (env.ADMIN_EMAILS ?? '')
+          .split(',')
+          .map((e) => e.trim().toLowerCase())
+          .filter(Boolean);
+        if (!adminEmails.includes(ctx.session.user.email.toLowerCase())) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Payment simulation is not available in production',
+          });
+        }
+      }
+
       const order = await ctx.db.query.orders.findFirst({
         where: and(
           eq(orders.id, input.orderId),

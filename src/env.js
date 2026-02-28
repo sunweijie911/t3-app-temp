@@ -16,6 +16,8 @@ export const env = createEnv({
       .enum(['development', 'test', 'production'])
       .default('development'),
     ADMIN_EMAILS: z.string().optional(),
+    LLM_API_KEY: z.string().optional(),
+    BETTER_AUTH_URL: z.string().url().optional(),
   },
 
   /**
@@ -36,6 +38,8 @@ export const env = createEnv({
     DATABASE_URL: process.env.DATABASE_URL,
     NODE_ENV: process.env.NODE_ENV,
     ADMIN_EMAILS: process.env.ADMIN_EMAILS,
+    LLM_API_KEY: process.env.LLM_API_KEY,
+    BETTER_AUTH_URL: process.env.BETTER_AUTH_URL,
   },
   /**
    * Run `build` or `dev` with `SKIP_ENV_VALIDATION` to skip env validation. This is especially

@@ -4,18 +4,18 @@ import { db } from '@/server/db';
 import { aiReports, orders, testResults } from '@/server/db/schema';
 import { generateReport } from '@/server/services/report-generator';
 
-export async function GET(
-  request: Request,
-  { params }: { params: Promise<{ resultId: string }> },
-) {
+const SSE_HEADERS = {
+  'Content-Type': 'text/event-stream',
+  'Cache-Control': 'no-cache',
+  Connection: 'keep-alive',
+} as const;
+
+async function verifyAccess(request: Request, resultId: string) {
   const session = await auth.api.getSession({ headers: request.headers });
   if (!session?.user) {
-    return new Response('Unauthorized', { status: 401 });
+    return { error: new Response('Unauthorized', { status: 401 }) };
   }
 
-  const { resultId } = await params;
-
-  // Verify ownership
   const result = await db.query.testResults.findFirst({
     where: and(
       eq(testResults.id, resultId),
@@ -23,10 +23,9 @@ export async function GET(
     ),
   });
   if (!result) {
-    return new Response('Not found', { status: 404 });
+    return { error: new Response('Not found', { status: 404 }) };
   }
 
-  // Verify payment
   const order = await db.query.orders.findFirst({
     where: and(
       eq(orders.resultId, resultId),
@@ -35,13 +34,25 @@ export async function GET(
     ),
   });
   if (!order) {
-    return new Response('Payment required', { status: 402 });
+    return { error: new Response('Payment required', { status: 402 }) };
   }
 
-  // Check for existing completed report
+  return { session };
+}
+
+export async function GET(
+  request: Request,
+  { params }: { params: Promise<{ resultId: string }> },
+) {
+  const { resultId } = await params;
+  const access = await verifyAccess(request, resultId);
+  if ('error' in access) return access.error;
+
+  // Read-only: return existing completed report or 404
   const existingReport = await db.query.aiReports.findFirst({
     where: eq(aiReports.resultId, resultId),
   });
+
   if (existingReport?.status === 'completed' && existingReport.content) {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
@@ -55,21 +66,25 @@ export async function GET(
         controller.close();
       },
     });
-    return new Response(stream, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
-      },
-    });
+    return new Response(stream, { headers: SSE_HEADERS });
   }
 
-  // Stream the report
+  return new Response('Report not found', { status: 404 });
+}
+
+export async function POST(
+  request: Request,
+  { params }: { params: Promise<{ resultId: string }> },
+) {
+  const { resultId } = await params;
+  const access = await verifyAccess(request, resultId);
+  if ('error' in access) return access.error;
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        const generator = generateReport(resultId, session.user.id);
+        const generator = generateReport(resultId, access.session.user.id);
         for await (const chunk of generator) {
           controller.enqueue(
             encoder.encode(`data: ${JSON.stringify({ content: chunk })}\n\n`),
@@ -88,11 +103,5 @@ export async function GET(
     },
   });
 
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-    },
-  });
+  return new Response(stream, { headers: SSE_HEADERS });
 }

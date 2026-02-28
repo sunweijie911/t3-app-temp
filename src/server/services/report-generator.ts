@@ -121,6 +121,27 @@ export async function* generateReport(
   resultId: string,
   userId: string,
 ): AsyncGenerator<string, string> {
+  // Check for existing report status before proceeding
+  const existing = await db.query.aiReports.findFirst({
+    where: eq(aiReports.resultId, resultId),
+  });
+
+  // If already completed, return cached content
+  if (existing?.status === 'completed' && existing.content) {
+    yield existing.content;
+    return existing.content;
+  }
+
+  // If currently generating (and not stale), reject duplicate request
+  if (existing?.status === 'generating') {
+    const lastUpdated =
+      (existing.updatedAt ?? existing.createdAt)?.getTime() ?? 0;
+    const isStale = Date.now() - lastUpdated > 5 * 60 * 1000; // 5 minute timeout
+    if (!isStale) {
+      throw new Error('Report is already being generated');
+    }
+  }
+
   // Create or update the aiReport record (upsert to prevent race condition duplicates)
   const reportId = nanoid();
   const upsertResult = await db

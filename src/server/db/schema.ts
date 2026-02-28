@@ -290,7 +290,7 @@ export const testResults = createTable(
   }),
   (t) => [
     index('result_user_idx').on(t.userId),
-    index('result_attempt_idx').on(t.attemptId),
+    uniqueIndex('result_attempt_idx').on(t.attemptId),
     uniqueIndex('result_share_token_idx').on(t.shareToken),
   ],
 );

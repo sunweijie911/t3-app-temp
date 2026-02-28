@@ -300,6 +300,16 @@ export const attemptRouter = createTRPCRouter({
         });
       }
 
+      // Idempotency: if already completed, return existing result
+      if (attempt.status === 'completed') {
+        const existingResult = await ctx.db.query.testResults.findFirst({
+          where: eq(testResults.attemptId, input.attemptId),
+        });
+        if (existingResult) {
+          return { resultId: existingResult.id };
+        }
+      }
+
       if (attempt.status !== 'in_progress') {
         throw new TRPCError({
           code: 'BAD_REQUEST',
