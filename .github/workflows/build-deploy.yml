@@ -184,16 +184,33 @@ jobs:
               sleep 10
             done
 
-            # 重新标记镜像
-            docker tag "${IMAGE}" "t3-app:local"
+            CONTAINER_NAME="t3-app"
+            HOST_PORT=5000
+            APP_PORT=3000
 
-            # 部署
-            cd "${DEPLOY_PATH}"
-            chmod +x deploy/manage.sh
-            cd deploy
-            ./manage.sh stop || true
-            ./manage.sh remove || true
-            ./manage.sh start
+            # 停止并移除旧容器
+            echo "停止旧容器..."
+            docker stop "${CONTAINER_NAME}" 2>/dev/null || true
+            docker rm "${CONTAINER_NAME}" 2>/dev/null || true
+
+            # 启动新容器
+            echo "启动新容器..."
+            cd "${DEPLOY_PATH}/deploy"
+            ENV_FILE_ARG=""
+            if [ -f ".env" ]; then
+              ENV_FILE_ARG="--env-file .env"
+            fi
+
+            docker run -d \
+              --name "${CONTAINER_NAME}" \
+              -p "${HOST_PORT}:${APP_PORT}" \
+              --add-host=host.docker.internal:host-gateway \
+              ${ENV_FILE_ARG} \
+              --restart unless-stopped \
+              "${IMAGE}"
+
+            echo "容器已启动"
+            docker ps --filter "name=${CONTAINER_NAME}" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 
             # 清理旧 Docker 镜像（保留最近 3 个）
             docker images "${{ env.REGISTRY }}/${{ steps.repo.outputs.image_name }}" -q | tail -n +4 | xargs -r docker rmi 2>/dev/null || true
