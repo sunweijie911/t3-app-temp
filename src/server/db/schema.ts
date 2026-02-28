@@ -11,8 +11,12 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
 
+// Business tables use a "pg-drizzle_" prefix to avoid naming conflicts.
 export const createTable = pgTableCreator((name) => `pg-drizzle_${name}`);
 
+// Auth tables (user, session, account, verification) use pgTable WITHOUT the
+// prefix because Better Auth expects fixed table names. Do not change these
+// to createTable — it would break authentication.
 export const user = pgTable('user', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),

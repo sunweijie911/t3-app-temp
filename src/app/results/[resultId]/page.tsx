@@ -1,3 +1,4 @@
+import { TRPCError } from '@trpc/server';
 import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { Footer } from '@/app/_components/layout/footer';
@@ -20,8 +21,11 @@ export default async function ResultDetailPage({
 
   const { resultId } = await params;
 
-  const result = await api.result.getById({ id: resultId }).catch(() => {
-    notFound();
+  const result = await api.result.getById({ id: resultId }).catch((error) => {
+    if (error instanceof TRPCError && error.code === 'NOT_FOUND') {
+      notFound();
+    }
+    throw error;
   });
 
   return (

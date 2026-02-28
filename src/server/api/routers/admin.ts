@@ -285,6 +285,54 @@ export const adminRouter = createTRPCRouter({
       return { count: values.length };
     }),
 
+  deleteTestType: adminProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const testType = await ctx.db.query.testTypes.findFirst({
+        where: eq(testTypes.id, input.id),
+      });
+
+      if (!testType) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Test type not found',
+        });
+      }
+
+      // Soft delete: set isActive = false to preserve historical data
+      // (testAttempts/testResults reference testTypes without cascade)
+      await ctx.db
+        .update(testTypes)
+        .set({ isActive: false })
+        .where(eq(testTypes.id, input.id));
+
+      return { success: true };
+    }),
+
+  deleteQuestion: adminProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const question = await ctx.db.query.questions.findFirst({
+        where: eq(questions.id, input.id),
+      });
+
+      if (!question) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Question not found',
+        });
+      }
+
+      // Soft delete: set isActive = false to preserve historical answers
+      // (testAnswers references questions without cascade)
+      await ctx.db
+        .update(questions)
+        .set({ isActive: false })
+        .where(eq(questions.id, input.id));
+
+      return { success: true };
+    }),
+
   cleanupAbandonedAttempts: adminProcedure
     .input(
       z
@@ -369,29 +417,27 @@ export const adminRouter = createTRPCRouter({
     }),
 
   stats: adminProcedure.query(async ({ ctx }) => {
-    const [userCount] = await ctx.db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(user);
-
-    const [attemptCount] = await ctx.db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(testAttempts);
-
-    const [completedCount] = await ctx.db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(testAttempts)
-      .where(eq(testAttempts.status, 'completed'));
-
-    const [orderCount] = await ctx.db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(orders);
-
-    const [revenueResult] = await ctx.db
-      .select({
-        total: sql<string>`coalesce(sum(${orders.amount}::numeric), 0)::text`,
-      })
-      .from(orders)
-      .where(eq(orders.status, 'paid'));
+    const [
+      [userCount],
+      [attemptCount],
+      [completedCount],
+      [orderCount],
+      [revenueResult],
+    ] = await Promise.all([
+      ctx.db.select({ count: sql<number>`count(*)::int` }).from(user),
+      ctx.db.select({ count: sql<number>`count(*)::int` }).from(testAttempts),
+      ctx.db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(testAttempts)
+        .where(eq(testAttempts.status, 'completed')),
+      ctx.db.select({ count: sql<number>`count(*)::int` }).from(orders),
+      ctx.db
+        .select({
+          total: sql<string>`coalesce(sum(${orders.amount}::numeric), 0)::text`,
+        })
+        .from(orders)
+        .where(eq(orders.status, 'paid')),
+    ]);
 
     return {
       totalUsers: userCount?.count ?? 0,

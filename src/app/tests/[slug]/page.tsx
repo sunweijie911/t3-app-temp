@@ -1,3 +1,4 @@
+import { TRPCError } from '@trpc/server';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Footer } from '@/app/_components/layout/footer';
@@ -12,8 +13,11 @@ export default async function TestDetailPage({
 }) {
   const { slug } = await params;
 
-  const testType = await api.test.getBySlug({ slug }).catch(() => {
-    notFound();
+  const testType = await api.test.getBySlug({ slug }).catch((error) => {
+    if (error instanceof TRPCError && error.code === 'NOT_FOUND') {
+      notFound();
+    }
+    throw error;
   });
 
   return (

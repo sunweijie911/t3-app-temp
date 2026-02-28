@@ -93,7 +93,7 @@ export const reportRouter = createTRPCRouter({
         });
       }
 
-      // Check if a completed report already exists
+      // Check if a completed or in-progress report already exists
       const existingReport = await ctx.db.query.aiReports.findFirst({
         where: eq(aiReports.resultId, input.resultId),
       });
@@ -102,33 +102,36 @@ export const reportRouter = createTRPCRouter({
         return { reportId: existingReport.id, status: 'completed' as const };
       }
 
-      try {
-        // generateReport handles its own aiReports record creation/update
-        const generator = generateReport(input.resultId, ctx.session.user.id);
-
-        // Consume the entire stream to completion
-        let fullContent = '';
-        let chunk = await generator.next();
-        while (!chunk.done) {
-          fullContent += chunk.value;
-          chunk = await generator.next();
-        }
-        // The generator's return value is the full content
-        fullContent = chunk.value ?? fullContent;
-
-        // Fetch the report record to get its ID
-        const report = await ctx.db.query.aiReports.findFirst({
-          where: eq(aiReports.resultId, input.resultId),
-        });
-
-        return { reportId: report?.id ?? null, status: 'completed' as const };
-      } catch (_error) {
-        // generateReport already marks the report as failed in the DB
-        throw new TRPCError({
-          code: 'INTERNAL_SERVER_ERROR',
-          message: 'Failed to generate report',
-        });
+      if (existingReport?.status === 'generating') {
+        return {
+          reportId: existingReport.id,
+          status: 'generating' as const,
+        };
       }
+
+      // Fire-and-forget: generateReport manages its own DB record lifecycle
+      // (creates record as 'generating', updates to 'completed'/'failed')
+      const generator = generateReport(input.resultId, ctx.session.user.id);
+      void (async () => {
+        try {
+          let chunk = await generator.next();
+          while (!chunk.done) {
+            chunk = await generator.next();
+          }
+        } catch (_error) {
+          // generateReport already marks the report as failed in the DB
+        }
+      })();
+
+      // Return immediately — frontend should poll report.status
+      const report = await ctx.db.query.aiReports.findFirst({
+        where: eq(aiReports.resultId, input.resultId),
+      });
+
+      return {
+        reportId: report?.id ?? null,
+        status: 'generating' as const,
+      };
     }),
 
   status: protectedProcedure

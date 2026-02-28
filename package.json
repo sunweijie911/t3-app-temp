@@ -38,7 +38,7 @@
       "biome check --write --unsafe --no-errors-on-unmatched",
       "cspell --no-must-find-files"
     ],
-    "*.{json}": [
+    "*.json": [
       "biome format --write --no-errors-on-unmatched"
     ],
     "*.css": [

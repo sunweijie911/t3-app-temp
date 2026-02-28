@@ -29,12 +29,28 @@ export const testRouter = createTRPCRouter({
   getBySlug: publicProcedure
     .input(z.object({ slug: z.string() }))
     .query(async ({ ctx, input }) => {
-      const testType = await ctx.db.query.testTypes.findFirst({
-        where: and(
-          eq(testTypes.slug, input.slug),
-          eq(testTypes.isActive, true),
-        ),
-      });
+      const results = await ctx.db
+        .select({
+          id: testTypes.id,
+          name: testTypes.name,
+          slug: testTypes.slug,
+          description: testTypes.description,
+          shortDescription: testTypes.shortDescription,
+          iconUrl: testTypes.iconUrl,
+          coverImageUrl: testTypes.coverImageUrl,
+          questionCount: testTypes.questionCount,
+          estimatedMinutes: testTypes.estimatedMinutes,
+          isFeatured: testTypes.isFeatured,
+          reportPrice: testTypes.reportPrice,
+          scoringStrategy: testTypes.scoringStrategy,
+        })
+        .from(testTypes)
+        .where(
+          and(eq(testTypes.slug, input.slug), eq(testTypes.isActive, true)),
+        )
+        .limit(1);
+
+      const testType = results[0];
 
       if (!testType) {
         throw new TRPCError({
@@ -48,7 +64,18 @@ export const testRouter = createTRPCRouter({
 
   getFeatured: publicProcedure.query(async ({ ctx }) => {
     const results = await ctx.db
-      .select()
+      .select({
+        id: testTypes.id,
+        name: testTypes.name,
+        slug: testTypes.slug,
+        shortDescription: testTypes.shortDescription,
+        iconUrl: testTypes.iconUrl,
+        coverImageUrl: testTypes.coverImageUrl,
+        questionCount: testTypes.questionCount,
+        estimatedMinutes: testTypes.estimatedMinutes,
+        isFeatured: testTypes.isFeatured,
+        reportPrice: testTypes.reportPrice,
+      })
       .from(testTypes)
       .where(and(eq(testTypes.isFeatured, true), eq(testTypes.isActive, true)))
       .orderBy(asc(testTypes.sortOrder))

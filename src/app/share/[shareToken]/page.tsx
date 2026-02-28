@@ -1,3 +1,4 @@
+import { TRPCError } from '@trpc/server';
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { Footer } from '@/app/_components/layout/footer';
@@ -34,9 +35,14 @@ export default async function SharePage({
 }) {
   const { shareToken } = await params;
 
-  const result = await api.result.getByShareToken({ shareToken }).catch(() => {
-    notFound();
-  });
+  const result = await api.result
+    .getByShareToken({ shareToken })
+    .catch((error) => {
+      if (error instanceof TRPCError && error.code === 'NOT_FOUND') {
+        notFound();
+      }
+      throw error;
+    });
 
   return (
     <>

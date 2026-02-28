@@ -83,14 +83,22 @@ export function Header() {
               <button
                 className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-gray-600 text-sm transition-colors hover:bg-gray-50"
                 onClick={() => {
-                  authClient.signOut({
-                    fetchOptions: {
-                      onSuccess: () => {
-                        toast.success('已退出登录');
-                        router.push('/');
-                        router.refresh();
+                  toast('确定要退出登录吗？', {
+                    action: {
+                      label: '确定退出',
+                      onClick: () => {
+                        authClient.signOut({
+                          fetchOptions: {
+                            onSuccess: () => {
+                              toast.success('已退出登录');
+                              router.push('/');
+                              router.refresh();
+                            },
+                          },
+                        });
                       },
                     },
+                    cancel: { label: '取消', onClick: () => {} },
                   });
                 }}
                 type="button"

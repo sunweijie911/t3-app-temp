@@ -25,6 +25,7 @@ export function UnlockReportCta({
   const createOrder = api.order.create.useMutation();
   const simulatePayment = api.order.simulatePayment.useMutation();
   const generateReport = api.report.generate.useMutation();
+  const utils = api.useUtils();
 
   if (hasReport) {
     return (
@@ -39,6 +40,29 @@ export function UnlockReportCta({
     );
   }
 
+  const pollUntilComplete = async (toastId: string | number) => {
+    const maxAttempts = 60; // 60 * 2s = 2 minutes max
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const { status } = await utils.report.status.fetch({ resultId });
+      if (status === 'completed') {
+        toast.dismiss(toastId);
+        toast.success('报告生成完成！');
+        router.push(`/results/${resultId}/report`);
+        return;
+      }
+      if (status === 'failed') {
+        toast.dismiss(toastId);
+        toast.error('报告生成失败，请稍后重试');
+        setIsLoading(false);
+        return;
+      }
+    }
+    toast.dismiss(toastId);
+    toast.error('报告生成超时，请稍后查看');
+    setIsLoading(false);
+  };
+
   const handleUnlock = async () => {
     setIsLoading(true);
     try {
@@ -47,11 +71,10 @@ export function UnlockReportCta({
         await simulatePayment.mutateAsync({ orderId: order.id });
         toast.success('支付成功！');
       }
-      const toastId = toast.loading('正在生成报告...');
+      const toastId = toast.loading('正在生成报告，请稍候...');
       await generateReport.mutateAsync({ resultId });
-      toast.dismiss(toastId);
-      toast.success('报告生成完成！');
-      router.push(`/results/${resultId}/report`);
+      // Generation is now async — poll for completion
+      void pollUntilComplete(toastId);
     } catch (_error) {
       toast.error('操作失败，请稍后重试');
       setIsLoading(false);
