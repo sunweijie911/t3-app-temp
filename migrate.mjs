@@ -1,0 +1,67 @@
+import { existsSync, readdirSync, readFileSync } from 'fs';
+import { join } from 'path';
+import postgres from 'postgres';
+
+const DATABASE_URL = process.env.DATABASE_URL;
+if (!DATABASE_URL) {
+  console.log('[migrate] DATABASE_URL not set, skipping migrations');
+  process.exit(0);
+}
+
+const sql = postgres(DATABASE_URL, { max: 1 });
+
+try {
+  await sql`
+    CREATE TABLE IF NOT EXISTS "__drizzle_migrations" (
+      id SERIAL PRIMARY KEY,
+      hash TEXT NOT NULL UNIQUE,
+      created_at BIGINT
+    )
+  `;
+
+  const migrationsDir = './drizzle';
+  const journalPath = join(migrationsDir, 'meta', '_journal.json');
+
+  if (!existsSync(journalPath)) {
+    console.log('[migrate] No migration journal found, skipping');
+    process.exit(0);
+  }
+
+  const journal = JSON.parse(readFileSync(journalPath, 'utf-8'));
+  const entries = journal.entries || [];
+  let applied = 0;
+
+  for (const entry of entries) {
+    const hash = entry.tag;
+    const existing =
+      await sql`SELECT 1 FROM "__drizzle_migrations" WHERE hash = ${hash}`;
+
+    if (existing.length === 0) {
+      const sqlFile = join(migrationsDir, `${entry.tag}.sql`);
+      const content = readFileSync(sqlFile, 'utf-8');
+      const statements = content
+        .split('--> statement-breakpoint')
+        .map((s) => s.trim())
+        .filter(Boolean);
+
+      for (const stmt of statements) {
+        await sql.unsafe(stmt);
+      }
+
+      await sql`INSERT INTO "__drizzle_migrations" (hash, created_at) VALUES (${hash}, ${Date.now()})`;
+      console.log(`[migrate] Applied: ${entry.tag}`);
+      applied++;
+    }
+  }
+
+  console.log(
+    applied > 0
+      ? `[migrate] Done, ${applied} migration(s) applied`
+      : '[migrate] Database is up to date',
+  );
+} catch (error) {
+  console.error('[migrate] Migration failed:', error);
+  process.exit(1);
+} finally {
+  await sql.end();
+}
