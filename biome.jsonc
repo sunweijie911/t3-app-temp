@@ -17,6 +17,9 @@
       }
     }
   },
+  "files": {
+    "includes": ["**", "!drizzle"]
+  },
   "formatter": {
     "enabled": true,
     "indentStyle": "space"
