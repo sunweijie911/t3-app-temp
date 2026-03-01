@@ -6,16 +6,22 @@ import { db } from '@/server/db';
 import { systemConfig } from '@/server/db/schema';
 
 export async function getConfigValue(key: string): Promise<string | null> {
-  const row = await db
-    .select({ value: systemConfig.value })
-    .from(systemConfig)
-    .where(eq(systemConfig.key, key))
-    .limit(1);
-  if (row.length > 0 && row[0]?.value != null) {
-    const v = row[0]?.value;
-    return typeof v === 'string' ? v : String(v);
+  try {
+    const row = await db
+      .select({ value: systemConfig.value })
+      .from(systemConfig)
+      .where(eq(systemConfig.key, key))
+      .limit(1);
+    if (row.length > 0 && row[0]?.value != null) {
+      const v = row[0]?.value;
+      return typeof v === 'string' ? v : String(v);
+    }
+    return null;
+  } catch {
+    // DB unavailable (e.g. CI build without database) – fall back to null
+    // so callers use their env/default values.
+    return null;
   }
-  return null;
 }
 
 export async function getConfigString(
