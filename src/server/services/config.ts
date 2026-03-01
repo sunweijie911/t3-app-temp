@@ -36,5 +36,5 @@ export async function getConfigString(
  *  Wrapped with React `cache()` to deduplicate within a single RSC render pass. */
 export const getDefaultModuleId = cache(async (): Promise<string> => {
   const value = await getConfigValue('app.default_module');
-  return value ?? env.NEXT_PUBLIC_DEFAULT_MODULE;
+  return value ?? env.NEXT_PUBLIC_DEFAULT_MODULE ?? 'lucky-wheel';
 });
