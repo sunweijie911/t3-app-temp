@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
-import { env } from '@/env';
 import { getSession } from '@/server/better-auth/server';
+import { isAdminEmail } from '@/server/services/admin-check';
 
 export default async function AdminLayout({
   children,
@@ -12,12 +12,7 @@ export default async function AdminLayout({
     redirect('/signin');
   }
 
-  const adminEmails = (env.ADMIN_EMAILS ?? '')
-    .split(',')
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean);
-
-  if (!adminEmails.includes(session.user.email.toLowerCase())) {
+  if (!isAdminEmail(session.user.email)) {
     redirect('/');
   }
 

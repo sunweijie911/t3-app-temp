@@ -30,7 +30,7 @@ export const env = createEnv({
    * `NEXT_PUBLIC_`.
    */
   client: {
-    // NEXT_PUBLIC_CLIENTVAR: z.string(),
+    NEXT_PUBLIC_DEFAULT_MODULE: z.string().default('lucky-wheel'),
   },
 
   /**
@@ -44,6 +44,9 @@ export const env = createEnv({
     ADMIN_EMAILS: stripQuotes(process.env.ADMIN_EMAILS),
     LLM_API_KEY: stripQuotes(process.env.LLM_API_KEY),
     BETTER_AUTH_URL: stripQuotes(process.env.BETTER_AUTH_URL),
+    NEXT_PUBLIC_DEFAULT_MODULE: stripQuotes(
+      process.env.NEXT_PUBLIC_DEFAULT_MODULE,
+    ),
   },
   /**
    * Run `build` or `dev` with `SKIP_ENV_VALIDATION` to skip env validation. This is especially

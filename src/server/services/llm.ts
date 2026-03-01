@@ -12,6 +12,7 @@ interface LLMConfig {
 }
 
 let cachedConfig: LLMConfig | null = null;
+let cachedClient: OpenAI | null = null;
 let cacheTimestamp = 0;
 const CACHE_TTL_MS = 60_000; // 1 minute
 
@@ -31,26 +32,38 @@ export async function getLLMConfig(): Promise<LLMConfig> {
 
   cachedConfig = {
     baseURL: baseURL ?? 'https://api.deepseek.com/v1',
-    apiKey: env.LLM_API_KEY ?? apiKey ?? '',
+    // DB config takes priority; env var is the fallback
+    apiKey: apiKey ?? env.LLM_API_KEY ?? '',
     model: model ?? 'deepseek-chat',
     temperature: temperature ? parseFloat(temperature) : 0.7,
     maxTokens: maxTokens ? parseInt(maxTokens, 10) : 2048,
   };
+  cachedClient = new OpenAI({
+    baseURL: cachedConfig.baseURL,
+    apiKey: cachedConfig.apiKey,
+  });
   cacheTimestamp = now;
 
   return cachedConfig;
 }
 
+async function getClient(): Promise<{ client: OpenAI; config: LLMConfig }> {
+  const config = await getLLMConfig();
+  if (!cachedClient) throw new Error('LLM client not initialized');
+  return { client: cachedClient, config };
+}
+
+type CompletionOptions = {
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+};
+
 export async function streamCompletion(
   messages: OpenAI.ChatCompletionMessageParam[],
-  options?: { model?: string; temperature?: number; maxTokens?: number },
+  options?: CompletionOptions,
 ) {
-  const config = await getLLMConfig();
-  const client = new OpenAI({
-    baseURL: config.baseURL,
-    apiKey: config.apiKey,
-  });
-
+  const { client, config } = await getClient();
   return client.chat.completions.create({
     model: options?.model ?? config.model,
     messages,
@@ -62,14 +75,9 @@ export async function streamCompletion(
 
 export async function completion(
   messages: OpenAI.ChatCompletionMessageParam[],
-  options?: { model?: string; temperature?: number; maxTokens?: number },
+  options?: CompletionOptions,
 ): Promise<OpenAI.ChatCompletion> {
-  const config = await getLLMConfig();
-  const client = new OpenAI({
-    baseURL: config.baseURL,
-    apiKey: config.apiKey,
-  });
-
+  const { client, config } = await getClient();
   return client.chat.completions.create({
     model: options?.model ?? config.model,
     messages,

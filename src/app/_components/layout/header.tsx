@@ -1,18 +1,13 @@
 'use client';
 
-import {
-  BarChart3,
-  FlaskConical,
-  LogOut,
-  Menu,
-  Settings,
-  X,
-} from 'lucide-react';
+import { LogOut, Menu, Settings, X } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { toast } from 'sonner';
+import { useDefaultModuleId } from '@/app/_components/default-module-provider';
 import { authClient } from '@/lib/auth-client';
+import { getModuleByPathname } from '@/modules/registry';
 import { api } from '@/trpc/react';
 
 export function Header() {
@@ -22,38 +17,36 @@ export function Header() {
   const { data: session } = authClient.useSession();
   const { data: isAdmin } = api.admin.isAdmin.useQuery(undefined, {
     enabled: !!session?.user,
+    staleTime: Infinity,
   });
+
+  const defaultModuleId = useDefaultModuleId();
+  const mod = getModuleByPathname(pathname, defaultModuleId);
+  const theme = mod.theme;
 
   const navLinks = (
     <>
-      <Link
-        className={`flex items-center gap-1.5 font-medium text-sm transition-colors hover:text-purple-600 ${
-          pathname.startsWith('/tests') ? 'text-purple-600' : 'text-gray-600'
-        }`}
-        href="/tests"
-        onClick={() => setMenuOpen(false)}
-      >
-        <FlaskConical className="h-4 w-4" />
-        全部测试
-      </Link>
-      {session?.user && (
-        <Link
-          className={`flex items-center gap-1.5 font-medium text-sm transition-colors hover:text-purple-600 ${
-            pathname.startsWith('/results')
-              ? 'text-purple-600'
-              : 'text-gray-600'
-          }`}
-          href="/results"
-          onClick={() => setMenuOpen(false)}
-        >
-          <BarChart3 className="h-4 w-4" />
-          我的结果
-        </Link>
-      )}
+      {mod.navLinks.map((link) => {
+        if (link.auth && !session?.user) return null;
+        const isActive =
+          pathname === link.href || pathname.startsWith(`${link.href}/`);
+        return (
+          <Link
+            className={`flex items-center gap-1.5 font-medium text-sm transition-colors ${
+              isActive ? theme.active : 'text-gray-600'
+            }`}
+            href={link.href}
+            key={link.href}
+            onClick={() => setMenuOpen(false)}
+          >
+            {link.label}
+          </Link>
+        );
+      })}
       {isAdmin && (
         <Link
-          className={`flex items-center gap-1.5 font-medium text-sm transition-colors hover:text-purple-600 ${
-            pathname.startsWith('/admin') ? 'text-purple-600' : 'text-gray-600'
+          className={`flex items-center gap-1.5 font-medium text-sm transition-colors ${
+            pathname.startsWith('/admin') ? theme.active : 'text-gray-600'
           }`}
           href="/admin"
           onClick={() => setMenuOpen(false)}
@@ -69,8 +62,8 @@ export function Header() {
     <header className="sticky top-0 z-50 w-full border-gray-200 border-b bg-white/80 backdrop-blur-sm">
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
         <div className="flex items-center gap-8">
-          <Link className="font-bold text-purple-600 text-xl" href="/">
-            SoulScope
+          <Link className={`font-bold text-xl ${theme.brand}`} href="/">
+            {mod.name}
           </Link>
           <nav className="hidden items-center gap-6 md:flex">{navLinks}</nav>
         </div>
@@ -109,7 +102,7 @@ export function Header() {
             </div>
           ) : (
             <Link
-              className="rounded-lg bg-purple-600 px-4 py-2 font-medium text-sm text-white transition-colors hover:bg-purple-700"
+              className={`rounded-lg px-4 py-2 font-medium text-sm text-white transition-colors ${theme.btn}`}
               href="/signin"
             >
               登录

@@ -1,5 +1,7 @@
 import 'server-only';
 import { eq } from 'drizzle-orm';
+import { cache } from 'react';
+import { env } from '@/env';
 import { db } from '@/server/db';
 import { systemConfig } from '@/server/db/schema';
 
@@ -23,3 +25,10 @@ export async function getConfigString(
   const value = await getConfigValue(key);
   return value ?? fallback;
 }
+
+/** Read the default module id from DB, falling back to the env var.
+ *  Wrapped with React `cache()` to deduplicate within a single RSC render pass. */
+export const getDefaultModuleId = cache(async (): Promise<string> => {
+  const value = await getConfigValue('app.default_module');
+  return value ?? env.NEXT_PUBLIC_DEFAULT_MODULE;
+});

@@ -48,3 +48,6 @@ export const reportGenerateLimiter = new RateLimiter(3, 60_000);
 
 // 1 minute window, 5 requests — for question generation
 export const questionGenerateLimiter = new RateLimiter(5, 60_000);
+
+// 1 minute window, 10 requests — for lucky wheel draws
+export const drawLimiter = new RateLimiter(10, 60_000);

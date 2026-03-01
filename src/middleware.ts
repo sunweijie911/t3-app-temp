@@ -3,8 +3,9 @@ import { NextResponse } from 'next/server';
 
 const protectedPatterns = [
   /^\/admin(\/|$)/,
-  /^\/results(\/|$)/,
-  /^\/tests\/[^/]+\/take(\/|$)/,
+  /^\/soulscope\/results(\/|$)/,
+  /^\/soulscope\/tests\/[^/]+\/take(\/|$)/,
+  /^\/lucky-wheel\/records(\/|$)/,
 ];
 
 export function middleware(request: NextRequest) {
@@ -27,5 +28,10 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/admin/:path*', '/results/:path*', '/tests/:slug/take/:path*'],
+  matcher: [
+    '/admin/:path*',
+    '/soulscope/results/:path*',
+    '/soulscope/tests/:slug/take/:path*',
+    '/lucky-wheel/records/:path*',
+  ],
 };

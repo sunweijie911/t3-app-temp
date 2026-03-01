@@ -15,6 +15,13 @@
       "when": 1772289332382,
       "tag": "0001_majestic_dust",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1772370054604,
+      "tag": "0002_nappy_roughhouse",
+      "breakpoints": true
     }
   ]
 }
