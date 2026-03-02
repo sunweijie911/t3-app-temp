@@ -1,6 +1,6 @@
 'use client';
 
-import { LogOut, Menu, Settings, X } from 'lucide-react';
+import { LogOut, Menu, X } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useState } from 'react';
@@ -51,7 +51,6 @@ export function Header() {
           href="/admin"
           onClick={() => setMenuOpen(false)}
         >
-          <Settings className="h-4 w-4" />
           管理后台
         </Link>
       )}

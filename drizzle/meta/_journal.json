@@ -22,6 +22,34 @@
       "when": 1772370054604,
       "tag": "0002_nappy_roughhouse",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1772425317710,
+      "tag": "0003_yummy_rattler",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1772434289843,
+      "tag": "0004_brown_deathstrike",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1772434462671,
+      "tag": "0005_romantic_arachne",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1772500000000,
+      "tag": "0006_drop_max_draws_per_day",
+      "breakpoints": true
     }
   ]
 }

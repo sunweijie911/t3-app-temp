@@ -1,5 +1,7 @@
+import { Card, Col, Row, Statistic } from 'antd';
 import Link from 'next/link';
 import { Header } from '@/app/_components/layout/header';
+import { ModuleSwitcher } from '@/app/admin/_components/module-switcher';
 import { getModule } from '@/modules/registry';
 import { api, HydrateClient } from '@/trpc/server';
 
@@ -14,60 +16,76 @@ export default async function AdminSoulscopePage() {
   return (
     <HydrateClient>
       <Header />
-      <main className="min-h-screen bg-gray-50">
-        <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:px-8">
-          <div className="mb-8">
-            <Link className={`text-sm ${mod.theme.link}`} href="/admin">
-              &larr; 返回管理后台
-            </Link>
-            <h1 className="mt-2 font-bold text-3xl text-gray-900">
+      <main style={{ minHeight: '100vh', background: '#f5f5f5' }}>
+        <div style={{ maxWidth: 1152, margin: '0 auto', padding: '48px 24px' }}>
+          {/* 页头 */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: 32,
+            }}
+          >
+            <h1
+              style={{
+                fontSize: 28,
+                fontWeight: 700,
+                color: '#111827',
+                margin: 0,
+              }}
+            >
               SoulScope 管理
             </h1>
+            <ModuleSwitcher currentModuleId="soulscope" />
           </div>
 
-          {/* Stats */}
-          <div className="mb-12 grid grid-cols-2 gap-4 md:grid-cols-4">
-            <div className="rounded-xl bg-white p-6 shadow-sm">
-              <p className="text-gray-500 text-sm">总用户数</p>
-              <p className="font-bold text-3xl text-gray-900">
-                {stats.totalUsers}
-              </p>
-            </div>
-            <div className="rounded-xl bg-white p-6 shadow-sm">
-              <p className="text-gray-500 text-sm">总测试数</p>
-              <p className="font-bold text-3xl text-gray-900">
-                {stats.totalAttempts}
-              </p>
-            </div>
-            <div className="rounded-xl bg-white p-6 shadow-sm">
-              <p className="text-gray-500 text-sm">已完成</p>
-              <p className="font-bold text-3xl text-gray-900">
-                {stats.totalCompleted}
-              </p>
-            </div>
-            <div className="rounded-xl bg-white p-6 shadow-sm">
-              <p className="text-gray-500 text-sm">总收入</p>
-              <p className="font-bold text-3xl text-gray-900">
-                &yen;{stats.revenue}
-              </p>
-            </div>
-          </div>
+          {/* 统计卡片 */}
+          <Row gutter={16} style={{ marginBottom: 32 }}>
+            <Col span={6}>
+              <Card>
+                <Statistic title="总用户数" value={stats.totalUsers} />
+              </Card>
+            </Col>
+            <Col span={6}>
+              <Card>
+                <Statistic title="总测试数" value={stats.totalAttempts} />
+              </Card>
+            </Col>
+            <Col span={6}>
+              <Card>
+                <Statistic title="已完成" value={stats.totalCompleted} />
+              </Card>
+            </Col>
+            <Col span={6}>
+              <Card>
+                <Statistic prefix="¥" title="总收入" value={stats.revenue} />
+              </Card>
+            </Col>
+          </Row>
 
-          {/* Navigation */}
-          <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+          {/* 导航卡片 */}
+          <Row gutter={16}>
             {mod.adminNavItems.map((item) => (
-              <Link
-                className="rounded-xl bg-white p-6 shadow-sm transition-all hover:shadow-md"
-                href={item.href}
-                key={item.href}
-              >
-                <h3 className="mb-2 font-semibold text-gray-900 text-lg">
-                  {item.label}
-                </h3>
-                <p className="text-gray-500 text-sm">{item.description}</p>
-              </Link>
+              <Col key={item.href} sm={8} xs={24}>
+                <Link
+                  href={item.href}
+                  style={{ display: 'block', marginBottom: 16 }}
+                >
+                  <Card hoverable>
+                    <h3
+                      style={{ fontWeight: 600, marginBottom: 4, fontSize: 15 }}
+                    >
+                      {item.label}
+                    </h3>
+                    <p style={{ color: '#6b7280', fontSize: 13, margin: 0 }}>
+                      {item.description}
+                    </p>
+                  </Card>
+                </Link>
+              </Col>
             ))}
-          </div>
+          </Row>
         </div>
       </main>
     </HydrateClient>

@@ -1,8 +1,9 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { MyRecordsSheet } from '@/modules/lucky-wheel/components/record/my-records';
-import { WheelContainer } from '@/modules/lucky-wheel/components/wheel/wheel-container';
+import { getSession } from '@/server/better-auth/server';
 import { api, HydrateClient } from '@/trpc/server';
+import { WheelSection } from './wheel-section';
 
 interface Props {
   params: Promise<{ slug: string }>;
@@ -18,7 +19,16 @@ async function getActivity(slug: string) {
 
 export default async function WheelPage({ params }: Props) {
   const { slug } = await params;
-  const activity = await getActivity(slug);
+  const [session, activity] = await Promise.all([
+    getSession(),
+    getActivity(slug),
+  ]);
+
+  const isLoggedIn = !!session?.user;
+
+  const now = new Date();
+  const notStarted = activity.startAt && now < new Date(activity.startAt);
+  const ended = activity.endAt && now > new Date(activity.endAt);
 
   return (
     <HydrateClient>
@@ -53,16 +63,34 @@ export default async function WheelPage({ params }: Props) {
         </Link>
 
         <div className="mx-auto max-w-2xl px-4 pt-16 pb-12">
-          <h1 className="mb-2 text-center font-bold text-3xl text-white">
+          <h1 className="mb-8 text-center font-bold text-3xl text-white">
             {activity.name}
           </h1>
-          {activity.description && (
-            <p className="mb-8 text-center text-white/80">
-              {activity.description}
-            </p>
-          )}
 
-          <WheelContainer activityId={activity.id} prizes={activity.prizes} />
+          {notStarted ? (
+            <div className="flex flex-col items-center gap-3 py-16 text-center">
+              <div className="text-5xl">⏳</div>
+              <p className="font-semibold text-white text-xl">活动尚未开始</p>
+              <p className="text-white/80">
+                预计开始时间：
+                {activity.startAt
+                  ? new Date(activity.startAt).toLocaleString('zh-CN')
+                  : '未定'}
+              </p>
+            </div>
+          ) : ended ? (
+            <div className="flex flex-col items-center gap-3 py-16 text-center">
+              <div className="text-5xl">🎉</div>
+              <p className="font-semibold text-white text-xl">活动已结束</p>
+              <p className="text-white/80">感谢您的参与！</p>
+            </div>
+          ) : (
+            <WheelSection
+              activityId={activity.id}
+              initialLoggedIn={isLoggedIn}
+              prizes={activity.prizes}
+            />
+          )}
 
           {/* Rules — frosted glass card, always shown */}
           <div
@@ -75,20 +103,13 @@ export default async function WheelPage({ params }: Props) {
             }}
           >
             <h3 className="mb-3 font-semibold text-gray-900">活动规则</h3>
-            <ul className="list-inside list-disc space-y-1 text-gray-500 text-sm">
-              {activity.maxDrawsPerUser > 0 && (
-                <li>每人最多抽奖 {activity.maxDrawsPerUser} 次</li>
-              )}
-              {activity.maxDrawsPerDay > 0 && (
-                <li>每人每天最多抽奖 {activity.maxDrawsPerDay} 次</li>
-              )}
-              {activity.endAt && (
-                <li>
-                  活动截止：
-                  {new Date(activity.endAt).toLocaleDateString()}
-                </li>
-              )}
-            </ul>
+            {activity.rules?.html && (
+              <div
+                className="rich-text text-gray-500 text-sm"
+                // biome-ignore lint/security/noDangerouslySetInnerHtml: 内容由管理员后台录入，非用户输入
+                dangerouslySetInnerHTML={{ __html: activity.rules.html }}
+              />
+            )}
           </div>
         </div>
 

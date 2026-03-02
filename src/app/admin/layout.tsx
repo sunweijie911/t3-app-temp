@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
+import { AdminAntdProvider } from '@/app/admin/antd-provider';
 import { getSession } from '@/server/better-auth/server';
-import { isAdminEmail } from '@/server/services/admin-check';
+import { isAdminPhone } from '@/server/services/admin-check';
 
 export default async function AdminLayout({
   children,
@@ -12,9 +13,10 @@ export default async function AdminLayout({
     redirect('/signin');
   }
 
-  if (!isAdminEmail(session.user.email)) {
+  const phone = (session.user as { phoneNumber?: string | null }).phoneNumber;
+  if (!isAdminPhone(phone)) {
     redirect('/');
   }
 
-  return <>{children}</>;
+  return <AdminAntdProvider>{children}</AdminAntdProvider>;
 }

@@ -1,19 +1,30 @@
 import { TRPCError } from '@trpc/server';
-import { and, eq, gte, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import {
+  type WheelUserInfo,
   wheelActivities,
   wheelDrawRecords,
 } from '@/modules/lucky-wheel/schema';
-import { executeDraw } from '@/modules/lucky-wheel/services/draw-engine';
+import {
+  executeDraw,
+  resolveDrawLimit,
+} from '@/modules/lucky-wheel/services/draw-engine';
 import { createTRPCRouter, protectedProcedure } from '@/server/api/trpc';
 import { drawLimiter } from '@/server/services/rate-limiter';
 
 export const drawRouter = createTRPCRouter({
   execute: protectedProcedure
-    .input(z.object({ activityId: z.string() }))
+    .input(
+      z.object({
+        activityId: z.string(),
+        // 姓名和地址由客户端收集，做 trim 和长度限制防止脏数据写入 DB
+        name: z.string().trim().max(100).optional(),
+        address: z.string().trim().max(500).optional(),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
-      // Rate limit check
+      // 频率限制检查
       const rateCheck = drawLimiter.check(ctx.session.user.id);
       if (!rateCheck.allowed) {
         throw new TRPCError({
@@ -22,13 +33,26 @@ export const drawRouter = createTRPCRouter({
         });
       }
 
+      const sessionUser = ctx.session.user as {
+        id: string;
+        name: string;
+        phoneNumber?: string | null;
+      };
+
+      // 构建 userInfo 快照，随抽奖记录一次性写入
+      const userInfo: WheelUserInfo = {
+        name: input.name ?? sessionUser.name,
+        phone: sessionUser.phoneNumber ?? null,
+        address: input.address ?? null,
+      };
+
       try {
-        const result = await executeDraw(
+        return await executeDraw(
           ctx.db,
           input.activityId,
           ctx.session.user.id,
+          userInfo,
         );
-        return result;
       } catch (err) {
         const message =
           err instanceof Error ? err.message : '抽奖失败，请稍后重试';
@@ -43,7 +67,10 @@ export const drawRouter = createTRPCRouter({
     .input(z.object({ activityId: z.string() }))
     .query(async ({ ctx, input }) => {
       const activity = await ctx.db.query.wheelActivities.findFirst({
-        where: eq(wheelActivities.id, input.activityId),
+        where: and(
+          eq(wheelActivities.id, input.activityId),
+          eq(wheelActivities.isActive, true),
+        ),
       });
 
       if (!activity) {
@@ -51,51 +78,29 @@ export const drawRouter = createTRPCRouter({
       }
 
       const userId = ctx.session.user.id;
-      const hasTotal = activity.maxDrawsPerUser > 0;
-      const hasDaily = activity.maxDrawsPerDay > 0;
+      const totalAllowed = await resolveDrawLimit(
+        ctx.db,
+        input.activityId,
+        userId,
+        activity.maxDrawsPerUser,
+      );
 
-      // Unlimited draws
-      if (!hasTotal && !hasDaily) {
+      // totalAllowed 为 0 表示不限次数
+      if (totalAllowed === 0) {
         return { remaining: -1, isUnlimited: true } as const;
       }
 
-      let remainingTotal = Infinity;
-      let remainingDaily = Infinity;
-
-      if (hasTotal) {
-        const [row] = await ctx.db
-          .select({ count: sql<number>`count(*)::int` })
-          .from(wheelDrawRecords)
-          .where(
-            and(
-              eq(wheelDrawRecords.activityId, input.activityId),
-              eq(wheelDrawRecords.userId, userId),
-            ),
-          );
-        remainingTotal = activity.maxDrawsPerUser - (row?.count ?? 0);
-      }
-
-      if (hasDaily) {
-        const todayStart = new Date(
-          `${new Date().toLocaleDateString('en-CA', {
-            timeZone: 'Asia/Shanghai',
-          })}T00:00:00+08:00`,
+      const [row] = await ctx.db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(wheelDrawRecords)
+        .where(
+          and(
+            eq(wheelDrawRecords.activityId, input.activityId),
+            eq(wheelDrawRecords.userId, userId),
+          ),
         );
 
-        const [row] = await ctx.db
-          .select({ count: sql<number>`count(*)::int` })
-          .from(wheelDrawRecords)
-          .where(
-            and(
-              eq(wheelDrawRecords.activityId, input.activityId),
-              eq(wheelDrawRecords.userId, userId),
-              gte(wheelDrawRecords.createdAt, todayStart),
-            ),
-          );
-        remainingDaily = activity.maxDrawsPerDay - (row?.count ?? 0);
-      }
-
-      const remaining = Math.max(0, Math.min(remainingTotal, remainingDaily));
+      const remaining = Math.max(0, totalAllowed - (row?.count ?? 0));
       return { remaining, isUnlimited: false } as const;
     }),
 });

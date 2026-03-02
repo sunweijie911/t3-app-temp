@@ -6,11 +6,13 @@ import {
   protectedProcedure,
 } from '@/server/api/trpc';
 import { systemConfig } from '@/server/db/schema';
-import { isAdminEmail } from '@/server/services/admin-check';
+import { isAdminPhone } from '@/server/services/admin-check';
 
 export const adminRouter = createTRPCRouter({
   isAdmin: protectedProcedure.query(({ ctx }) => {
-    return isAdminEmail(ctx.session.user.email);
+    const phone = (ctx.session.user as { phoneNumber?: string | null })
+      .phoneNumber;
+    return isAdminPhone(phone);
   }),
 
   getConfig: adminProcedure

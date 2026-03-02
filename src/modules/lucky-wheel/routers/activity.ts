@@ -17,7 +17,6 @@ export const activityRouter = createTRPCRouter({
         startAt: wheelActivities.startAt,
         endAt: wheelActivities.endAt,
         maxDrawsPerUser: wheelActivities.maxDrawsPerUser,
-        maxDrawsPerDay: wheelActivities.maxDrawsPerDay,
       })
       .from(wheelActivities)
       .where(

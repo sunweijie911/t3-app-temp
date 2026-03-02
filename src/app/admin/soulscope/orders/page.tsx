@@ -1,5 +1,7 @@
 'use client';
 
+import type { TableProps } from 'antd';
+import { Breadcrumb, Table, Tag } from 'antd';
 import Link from 'next/link';
 import { useState } from 'react';
 import { Header } from '@/app/_components/layout/header';
@@ -7,114 +9,91 @@ import { api } from '@/trpc/react';
 
 const PAGE_SIZE = 20;
 
+type OrderItem = NonNullable<
+  ReturnType<typeof api.soulscope.admin.allOrders.useQuery>['data']
+>['items'][number];
+
+const STATUS_TAG: Record<string, { color: string; label: string }> = {
+  paid: { color: 'green', label: '已付款' },
+  pending: { color: 'orange', label: '待付款' },
+};
+
+const columns: TableProps<OrderItem>['columns'] = [
+  {
+    title: '订单ID',
+    dataIndex: 'id',
+    render: (id: string) => (
+      <span style={{ fontFamily: 'monospace', fontSize: 13 }}>
+        {id.slice(0, 12)}...
+      </span>
+    ),
+  },
+  {
+    title: '金额',
+    dataIndex: 'amount',
+    render: (amount: number) => `¥${amount}`,
+  },
+  {
+    title: '状态',
+    dataIndex: 'status',
+    render: (status: string) => {
+      const tag = STATUS_TAG[status];
+      return <Tag color={tag?.color ?? 'default'}>{tag?.label ?? status}</Tag>;
+    },
+  },
+  {
+    title: '时间',
+    dataIndex: 'createdAt',
+    render: (date: Date | string) => new Date(date).toLocaleString('zh-CN'),
+  },
+];
+
 export default function AdminOrdersPage() {
-  const [page, setPage] = useState(0);
+  const [page, setPage] = useState(1);
 
   const { data, isLoading } = api.soulscope.admin.allOrders.useQuery({
     limit: PAGE_SIZE,
-    offset: page * PAGE_SIZE,
+    offset: (page - 1) * PAGE_SIZE,
   });
 
   return (
     <>
       <Header />
-      <main className="min-h-screen bg-gray-50">
-        <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:px-8">
-          <Link
-            className="text-purple-600 text-sm hover:text-purple-700"
-            href="/admin/soulscope"
+      <main style={{ minHeight: '100vh', background: '#f5f5f5' }}>
+        <div style={{ maxWidth: 1152, margin: '0 auto', padding: '48px 24px' }}>
+          <Breadcrumb
+            items={[
+              { title: <Link href="/admin/soulscope">SoulScope 管理</Link> },
+              { title: '订单管理' },
+            ]}
+            style={{ marginBottom: 24 }}
+          />
+          <h1
+            style={{
+              fontSize: 28,
+              fontWeight: 700,
+              color: '#111827',
+              marginBottom: 24,
+            }}
           >
-            &larr; 返回管理后台
-          </Link>
-          <h1 className="mt-2 mb-8 font-bold text-3xl text-gray-900">
             订单管理
           </h1>
 
-          {isLoading ? (
-            <div className="py-20 text-center text-gray-500">加载中...</div>
-          ) : (
-            <>
-              <div className="overflow-x-auto rounded-xl bg-white shadow-sm">
-                <table className="w-full">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-6 py-3 text-left font-medium text-gray-500 text-xs uppercase tracking-wider">
-                        订单ID
-                      </th>
-                      <th className="px-6 py-3 text-left font-medium text-gray-500 text-xs uppercase tracking-wider">
-                        金额
-                      </th>
-                      <th className="px-6 py-3 text-left font-medium text-gray-500 text-xs uppercase tracking-wider">
-                        状态
-                      </th>
-                      <th className="px-6 py-3 text-left font-medium text-gray-500 text-xs uppercase tracking-wider">
-                        时间
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-200">
-                    {data?.items.map((order) => (
-                      <tr key={order.id}>
-                        <td className="whitespace-nowrap px-6 py-4 font-mono text-gray-900 text-sm">
-                          {order.id.slice(0, 12)}...
-                        </td>
-                        <td className="whitespace-nowrap px-6 py-4 text-gray-500">
-                          &yen;{order.amount}
-                        </td>
-                        <td className="whitespace-nowrap px-6 py-4">
-                          <span
-                            className={`rounded-full px-2 py-1 font-medium text-xs ${
-                              order.status === 'paid'
-                                ? 'bg-green-100 text-green-700'
-                                : order.status === 'pending'
-                                  ? 'bg-yellow-100 text-yellow-700'
-                                  : 'bg-red-100 text-red-700'
-                            }`}
-                          >
-                            {order.status === 'paid'
-                              ? '已付款'
-                              : order.status === 'pending'
-                                ? '待付款'
-                                : order.status}
-                          </span>
-                        </td>
-                        <td className="whitespace-nowrap px-6 py-4 text-gray-500 text-sm">
-                          {new Date(order.createdAt).toLocaleString('zh-CN')}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="mt-4 flex items-center justify-between">
-                <span className="text-gray-500 text-sm">
-                  共 {data?.total ?? 0} 条记录
-                </span>
-                <div className="flex items-center gap-2">
-                  <button
-                    className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm transition-colors hover:bg-gray-50 disabled:opacity-50"
-                    disabled={page === 0}
-                    onClick={() => setPage((p) => p - 1)}
-                    type="button"
-                  >
-                    上一页
-                  </button>
-                  <span className="text-gray-600 text-sm">
-                    第 {page + 1} 页
-                  </span>
-                  <button
-                    className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm transition-colors hover:bg-gray-50 disabled:opacity-50"
-                    disabled={!data || (page + 1) * PAGE_SIZE >= data.total}
-                    onClick={() => setPage((p) => p + 1)}
-                    type="button"
-                  >
-                    下一页
-                  </button>
-                </div>
-              </div>
-            </>
-          )}
+          <Table<OrderItem>
+            columns={columns}
+            dataSource={data?.items ?? []}
+            loading={isLoading}
+            pagination={{
+              current: page,
+              pageSize: PAGE_SIZE,
+              total: data?.total ?? 0,
+              showSizeChanger: false,
+              showTotal: (total) => `共 ${total} 条`,
+              onChange: (p) => setPage(p),
+            }}
+            rowKey="id"
+            style={{ background: '#fff', borderRadius: 12 }}
+          />
         </div>
       </main>
     </>

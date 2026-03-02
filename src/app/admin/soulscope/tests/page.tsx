@@ -1,84 +1,85 @@
+'use client';
+
+import type { TableProps } from 'antd';
+import { Breadcrumb, Table, Tag } from 'antd';
 import Link from 'next/link';
 import { Header } from '@/app/_components/layout/header';
-import { api, HydrateClient } from '@/trpc/server';
+import { api } from '@/trpc/react';
 
-export default async function AdminTestsPage() {
-  const tests = await api.soulscope.test.list();
+type TestItem = NonNullable<
+  ReturnType<typeof api.soulscope.test.list.useQuery>['data']
+>[number];
+
+const columns: TableProps<TestItem>['columns'] = [
+  {
+    title: '名称',
+    dataIndex: 'name',
+    key: 'name',
+  },
+  {
+    title: '题数',
+    dataIndex: 'questionCount',
+    key: 'questionCount',
+  },
+  {
+    title: '价格',
+    dataIndex: 'reportPrice',
+    key: 'reportPrice',
+    render: (price: number) => `¥${price}`,
+  },
+  {
+    title: '状态',
+    key: 'status',
+    render: (_, record) =>
+      record.isFeatured ? <Tag color="purple">热门</Tag> : null,
+  },
+  {
+    title: '操作',
+    key: 'action',
+    render: (_, record) => (
+      <Link href={`/admin/soulscope/tests/${record.id}/questions`}>
+        管理题目
+      </Link>
+    ),
+  },
+];
+
+export default function AdminTestsPage() {
+  const { data: tests, isLoading } = api.soulscope.test.list.useQuery();
 
   return (
-    <HydrateClient>
+    <>
       <Header />
-      <main className="min-h-screen bg-gray-50">
-        <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:px-8">
-          <div className="mb-8 flex items-center justify-between">
-            <div>
-              <Link
-                className="text-purple-600 text-sm hover:text-purple-700"
-                href="/admin/soulscope"
-              >
-                &larr; 返回 SoulScope 管理
-              </Link>
-              <h1 className="mt-2 font-bold text-3xl text-gray-900">
-                测试管理
-              </h1>
-            </div>
-          </div>
+      <main style={{ minHeight: '100vh', background: '#f5f5f5' }}>
+        <div style={{ maxWidth: 1152, margin: '0 auto', padding: '48px 24px' }}>
+          <Breadcrumb
+            items={[
+              { title: <Link href="/admin/soulscope">SoulScope 管理</Link> },
+              { title: '测试管理' },
+            ]}
+            style={{ marginBottom: 24 }}
+          />
+          <h1
+            style={{
+              fontSize: 28,
+              fontWeight: 700,
+              color: '#111827',
+              marginBottom: 24,
+            }}
+          >
+            测试管理
+          </h1>
 
-          <div className="overflow-x-auto rounded-xl bg-white shadow-sm">
-            <table className="w-full">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left font-medium text-gray-500 text-xs uppercase tracking-wider">
-                    名称
-                  </th>
-                  <th className="px-6 py-3 text-left font-medium text-gray-500 text-xs uppercase tracking-wider">
-                    题数
-                  </th>
-                  <th className="px-6 py-3 text-left font-medium text-gray-500 text-xs uppercase tracking-wider">
-                    价格
-                  </th>
-                  <th className="px-6 py-3 text-left font-medium text-gray-500 text-xs uppercase tracking-wider">
-                    状态
-                  </th>
-                  <th className="px-6 py-3 text-left font-medium text-gray-500 text-xs uppercase tracking-wider">
-                    操作
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200">
-                {tests.map((test) => (
-                  <tr key={test.id}>
-                    <td className="whitespace-nowrap px-6 py-4 font-medium text-gray-900">
-                      {test.name}
-                    </td>
-                    <td className="whitespace-nowrap px-6 py-4 text-gray-500">
-                      {test.questionCount}
-                    </td>
-                    <td className="whitespace-nowrap px-6 py-4 text-gray-500">
-                      &yen;{test.reportPrice}
-                    </td>
-                    <td className="whitespace-nowrap px-6 py-4">
-                      {test.isFeatured && (
-                        <span className="mr-2 rounded-full bg-purple-100 px-2 py-1 text-purple-700 text-xs">
-                          热门
-                        </span>
-                      )}
-                    </td>
-                    <td className="whitespace-nowrap px-6 py-4">
-                      <Link
-                        className="text-purple-600 text-sm hover:text-purple-700"
-                        href={`/admin/soulscope/tests/${test.id}/questions`}
-                      >
-                        管理题目
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <Table<TestItem>
+            columns={columns}
+            dataSource={tests ?? []}
+            loading={isLoading}
+            pagination={false}
+            rowKey="id"
+            style={{ background: '#fff', borderRadius: 12 }}
+          />
         </div>
       </main>
-    </HydrateClient>
+    </>
   );
 }

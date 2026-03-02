@@ -1,6 +1,7 @@
 import '@unocss/reset/tailwind.css';
 import '@/styles/globals.css';
 
+import { AntdRegistry } from '@ant-design/nextjs-registry';
 import type { Metadata } from 'next';
 import { Geist } from 'next/font/google';
 import { Toaster } from 'sonner';
@@ -33,11 +34,13 @@ export default async function RootLayout({
   return (
     <html className={`${geist.variable}`} lang="zh-CN">
       <body>
-        <TRPCReactProvider>
-          <DefaultModuleProvider moduleId={defaultModuleId}>
-            {children}
-          </DefaultModuleProvider>
-        </TRPCReactProvider>
+        <AntdRegistry>
+          <TRPCReactProvider>
+            <DefaultModuleProvider moduleId={defaultModuleId}>
+              {children}
+            </DefaultModuleProvider>
+          </TRPCReactProvider>
+        </AntdRegistry>
         <Toaster position="top-center" richColors />
       </body>
     </html>

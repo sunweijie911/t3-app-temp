@@ -6,7 +6,7 @@ import { toast } from 'sonner';
 import { api } from '@/trpc/react';
 import { PrizeModal } from './prize-modal';
 
-interface Prize {
+export interface Prize {
   id: string;
   name: string;
   image: string | null;
@@ -16,9 +16,18 @@ interface Prize {
 interface WheelContainerProps {
   activityId: string;
   prizes: Prize[];
+  isLoggedIn: boolean;
+  name?: string;
+  address?: string;
 }
 
-export function WheelContainer({ activityId, prizes }: WheelContainerProps) {
+export function WheelContainer({
+  activityId,
+  prizes,
+  isLoggedIn,
+  name,
+  address,
+}: WheelContainerProps) {
   const wheelRef = useRef<{
     play: () => void;
     stop: (idx: number) => void;
@@ -27,25 +36,31 @@ export function WheelContainer({ activityId, prizes }: WheelContainerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [wheelSize, setWheelSize] = useState(340);
   const [spinning, setSpinning] = useState(false);
+  // 用 ref 同步跟踪旋转状态，供 ResizeObserver 回调读取（避免闭包旧值）
+  const spinningRef = useRef(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [result, setResult] = useState<{
     isWin: boolean;
     prize: Prize | null;
+    recordId: string | null;
   } | null>(null);
 
   const drawMutation = api.luckyWheel.draw.execute.useMutation();
   const utils = api.useUtils();
 
-  const { data: drawsData } = api.luckyWheel.draw.getRemainingDraws.useQuery({
-    activityId,
-  });
+  const { data: drawsData } = api.luckyWheel.draw.getRemainingDraws.useQuery(
+    { activityId },
+    { enabled: isLoggedIn },
+  );
 
   // Responsive sizing via ResizeObserver
+  // 旋转期间跳过 resize 更新，防止 key 变化触发重挂载导致 onEnd 不触发、spinning 卡死
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
 
     const measure = () => {
+      if (spinningRef.current) return;
       const w = el.clientWidth;
       setWheelSize(Math.min(340, Math.floor(w * 0.85)));
     };
@@ -98,13 +113,23 @@ export function WheelContainer({ activityId, prizes }: WheelContainerProps) {
   };
 
   const handleStart = useCallback(async () => {
+    if (!isLoggedIn) {
+      // Should not reach here — UserInfoModal guards this path
+      return;
+    }
+
     if (spinning || prizes.length === 0) return;
 
     setSpinning(true);
+    spinningRef.current = true;
     wheelRef.current?.play();
 
     try {
-      const drawResult = await drawMutation.mutateAsync({ activityId });
+      const drawResult = await drawMutation.mutateAsync({
+        activityId,
+        address,
+        name,
+      });
 
       // Find the target index
       let idx = 0;
@@ -122,6 +147,7 @@ export function WheelContainer({ activityId, prizes }: WheelContainerProps) {
       setResult({
         isWin: drawResult.isWin,
         prize: drawResult.prize as Prize | null,
+        recordId: drawResult.recordId,
       });
 
       // Tell wheel where to stop
@@ -130,13 +156,18 @@ export function WheelContainer({ activityId, prizes }: WheelContainerProps) {
       const message =
         err instanceof Error ? err.message : '抽奖失败，请稍后重试';
       toast.error(message);
-      wheelRef.current?.stop(0);
+      // Stop at thanks slot if available to avoid misleading visual
+      const thanksIdx = prizes.findIndex((p) => p.type === 'thanks');
+      wheelRef.current?.stop(
+        thanksIdx >= 0 ? thanksIdx : Math.floor(Math.random() * prizes.length),
+      );
       setResult(null);
     }
-  }, [spinning, prizes, activityId, drawMutation]);
+  }, [isLoggedIn, spinning, prizes, activityId, name, address, drawMutation]);
 
   const handleEnd = useCallback(() => {
     setSpinning(false);
+    spinningRef.current = false;
     // Refresh remaining draws count after each draw
     void utils.luckyWheel.draw.getRemainingDraws.invalidate();
     if (result) {
@@ -165,7 +196,7 @@ export function WheelContainer({ activityId, prizes }: WheelContainerProps) {
       />
 
       {/* Remaining draws hint */}
-      {drawsData && !drawsData.isUnlimited && (
+      {isLoggedIn && drawsData && !drawsData.isUnlimited && (
         <p className="text-sm text-white/90">
           剩余抽奖次数：
           <span className="font-bold text-white">{drawsData.remaining}</span>

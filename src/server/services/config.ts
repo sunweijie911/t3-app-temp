@@ -17,9 +17,10 @@ export async function getConfigValue(key: string): Promise<string | null> {
       return typeof v === 'string' ? v : String(v);
     }
     return null;
-  } catch {
+  } catch (error) {
     // DB unavailable (e.g. CI build without database) – fall back to null
     // so callers use their env/default values.
+    console.error('[config] getConfigValue failed for key:', key, error);
     return null;
   }
 }

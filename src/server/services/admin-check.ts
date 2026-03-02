@@ -1,17 +1,18 @@
 import 'server-only';
 import { env } from '@/env';
 
-let parsedEmails: string[] | null = null;
+let parsedPhones: string[] | null = null;
 
-function getAdminEmails(): string[] {
-  if (parsedEmails) return parsedEmails;
-  parsedEmails = (env.ADMIN_EMAILS ?? '')
+function getAdminPhones(): string[] {
+  if (parsedPhones) return parsedPhones;
+  parsedPhones = (env.ADMIN_PHONES ?? '')
     .split(',')
-    .map((e) => e.trim().toLowerCase())
+    .map((p) => p.trim())
     .filter(Boolean);
-  return parsedEmails;
+  return parsedPhones;
 }
 
-export function isAdminEmail(email: string): boolean {
-  return getAdminEmails().includes(email.toLowerCase());
+export function isAdminPhone(phone: string | null | undefined): boolean {
+  if (!phone) return false;
+  return getAdminPhones().includes(phone.trim());
 }

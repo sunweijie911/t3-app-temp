@@ -1,48 +1,53 @@
 'use client';
 
+import {
+  Breadcrumb,
+  Button,
+  Card,
+  Form,
+  Input,
+  InputNumber,
+  Spin,
+  Typography,
+} from 'antd';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import { toast } from 'sonner';
 import { Header } from '@/app/_components/layout/header';
 import { api } from '@/trpc/react';
 
-const CONFIG_KEYS = [
-  { key: 'llm.base_url', label: 'LLM API地址', type: 'text' as const },
-  { key: 'llm.api_key', label: 'LLM API密钥', type: 'password' as const },
-  { key: 'llm.model', label: '模型名称', type: 'text' as const },
-  { key: 'llm.temperature', label: 'Temperature', type: 'number' as const },
-  { key: 'llm.max_tokens', label: 'Max Tokens', type: 'number' as const },
-  {
-    key: 'report.system_prompt',
-    label: '系统提示词',
-    type: 'textarea' as const,
-  },
-  { key: 'report.price', label: '报告价格', type: 'number' as const },
+type ConfigType = 'text' | 'password' | 'number' | 'textarea';
+
+type ConfigDef = { key: string; label: string; type: ConfigType };
+
+const LLM_CONFIGS: ConfigDef[] = [
+  { key: 'llm.base_url', label: 'API 地址', type: 'text' },
+  { key: 'llm.api_key', label: 'API 密钥', type: 'password' },
+  { key: 'llm.model', label: '模型名称', type: 'text' },
+  { key: 'llm.temperature', label: 'Temperature', type: 'number' },
+  { key: 'llm.max_tokens', label: 'Max Tokens', type: 'number' },
 ];
 
-function ConfigItem({
-  configKey,
-  label,
-  type,
-}: {
-  configKey: string;
-  label: string;
-  type: string;
-}) {
-  const [value, setValue] = useState('');
-  const [saving, setSaving] = useState(false);
+const REPORT_CONFIGS: ConfigDef[] = [
+  { key: 'report.system_prompt', label: '系统提示词', type: 'textarea' },
+  { key: 'report.price', label: '报告价格（元）', type: 'number' },
+];
+
+function ConfigItem({ configKey, label, type }: ConfigDef) {
+  const [value, setValue] = useState<string | number>('');
   const utils = api.useUtils();
 
-  const { data } = api.admin.getConfig.useQuery(
+  const { data, isLoading } = api.admin.getConfig.useQuery(
     { key: configKey },
     { retry: false },
   );
 
   const setConfig = api.admin.setConfig.useMutation({
     onSuccess: () => {
+      toast.success(`${label} 已保存`);
       void utils.admin.getConfig.invalidate();
-      setSaving(false);
     },
-    onError: () => setSaving(false),
+    onError: (err) => toast.error(err.message),
   });
 
   useEffect(() => {
@@ -56,51 +61,87 @@ function ConfigItem({
   }, [data]);
 
   const handleSave = () => {
-    setSaving(true);
     let parsed: string | number | boolean = value;
-    if (!Number.isNaN(Number(value)) && value.trim() !== '') {
+    if (
+      typeof value === 'string' &&
+      !Number.isNaN(Number(value)) &&
+      value.trim() !== ''
+    ) {
       parsed = Number(value);
     }
     setConfig.mutate({ key: configKey, value: parsed });
   };
 
   return (
-    <div className="rounded-xl bg-white p-6 shadow-sm">
-      <label
-        className="mb-2 block font-medium text-gray-900 text-sm"
-        htmlFor={`config-${configKey}`}
-      >
-        {label}
-        <span className="ml-2 text-gray-400 text-xs">{configKey}</span>
-      </label>
-      <div className="flex flex-col gap-3 sm:flex-row">
-        {type === 'textarea' ? (
-          <textarea
-            className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
-            id={`config-${configKey}`}
+    <Form.Item
+      label={
+        <span>
+          {label}
+          <Typography.Text
+            style={{ fontSize: 12, marginLeft: 6 }}
+            type="secondary"
+          >
+            {configKey}
+          </Typography.Text>
+        </span>
+      }
+    >
+      <div style={{ display: 'flex', gap: 8 }}>
+        {isLoading ? (
+          <Spin size="small" style={{ flex: 1 }} />
+        ) : type === 'textarea' ? (
+          <Input.TextArea
             onChange={(e) => setValue(e.target.value)}
             rows={6}
-            value={value}
+            style={{ flex: 1 }}
+            value={value as string}
+          />
+        ) : type === 'password' ? (
+          <Input.Password
+            onChange={(e) => setValue(e.target.value)}
+            style={{ flex: 1 }}
+            value={value as string}
+          />
+        ) : type === 'number' ? (
+          <InputNumber
+            onChange={(val) => setValue(val ?? '')}
+            style={{ flex: 1 }}
+            value={value === '' ? undefined : Number(value)}
           />
         ) : (
-          <input
-            className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
-            id={`config-${configKey}`}
+          <Input
             onChange={(e) => setValue(e.target.value)}
-            type={type}
-            value={value}
+            style={{ flex: 1 }}
+            value={value as string}
           />
         )}
-        <button
-          className="rounded-lg bg-purple-600 px-4 py-2 font-medium text-sm text-white hover:bg-purple-700 disabled:opacity-50"
-          disabled={saving}
+        <Button
+          loading={setConfig.isPending}
           onClick={handleSave}
-          type="button"
+          type="primary"
         >
-          {saving ? '保存中...' : '保存'}
-        </button>
+          保存
+        </Button>
       </div>
-    </div>
+    </Form.Item>
+  );
+}
+
+function ConfigSection({
+  title,
+  configs,
+}: {
+  title: string;
+  configs: ConfigDef[];
+}) {
+  return (
+    <Card style={{ marginBottom: 24 }} title={title}>
+      <Form layout="vertical">
+        {configs.map((config) => (
+          <ConfigItem key={config.key} {...config} />
+        ))}
+      </Form>
+    </Card>
   );
 }
 
@@ -108,28 +149,28 @@ export default function AdminConfigPage() {
   return (
     <>
       <Header />
-      <main className="min-h-screen bg-gray-50">
-        <div className="mx-auto max-w-4xl px-4 py-12 sm:px-6 lg:px-8">
-          <Link
-            className="text-purple-600 text-sm hover:text-purple-700"
-            href="/admin/soulscope"
+      <main style={{ minHeight: '100vh', background: '#f5f5f5' }}>
+        <div style={{ maxWidth: 896, margin: '0 auto', padding: '48px 24px' }}>
+          <Breadcrumb
+            items={[
+              { title: <Link href="/admin/soulscope">SoulScope 管理</Link> },
+              { title: '系统配置' },
+            ]}
+            style={{ marginBottom: 8 }}
+          />
+          <h1
+            style={{
+              fontSize: 28,
+              fontWeight: 700,
+              color: '#111827',
+              marginBottom: 32,
+            }}
           >
-            &larr; 返回管理后台
-          </Link>
-          <h1 className="mt-2 mb-8 font-bold text-3xl text-gray-900">
             系统配置
           </h1>
 
-          <div className="space-y-6">
-            {CONFIG_KEYS.map((config) => (
-              <ConfigItem
-                configKey={config.key}
-                key={config.key}
-                label={config.label}
-                type={config.type}
-              />
-            ))}
-          </div>
+          <ConfigSection configs={LLM_CONFIGS} title="LLM 配置" />
+          <ConfigSection configs={REPORT_CONFIGS} title="报告配置" />
         </div>
       </main>
     </>

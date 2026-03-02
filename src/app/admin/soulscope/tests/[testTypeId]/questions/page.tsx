@@ -1,5 +1,6 @@
 'use client';
 
+import { Breadcrumb, Button, List, Pagination, Tag, Typography } from 'antd';
 import Link from 'next/link';
 import { use, useState } from 'react';
 import { Header } from '@/app/_components/layout/header';
@@ -14,13 +15,13 @@ export default function AdminQuestionsPage({
 }) {
   const { testTypeId } = use(params);
   const utils = api.useUtils();
-  const [page, setPage] = useState(0);
+  const [page, setPage] = useState(1);
 
   const { data: questions, isLoading } =
     api.soulscope.admin.getQuestions.useQuery({
       testTypeId,
       limit: PAGE_SIZE,
-      offset: page * PAGE_SIZE,
+      offset: (page - 1) * PAGE_SIZE,
     });
 
   const generateQuestions = api.soulscope.admin.generateQuestions.useMutation({
@@ -32,97 +33,114 @@ export default function AdminQuestionsPage({
   return (
     <>
       <Header />
-      <main className="min-h-screen bg-gray-50">
-        <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:px-8">
-          <div className="mb-8">
-            <Link
-              className="text-purple-600 text-sm hover:text-purple-700"
-              href="/admin/soulscope/tests"
+      <main style={{ minHeight: '100vh', background: '#f5f5f5' }}>
+        <div style={{ maxWidth: 1152, margin: '0 auto', padding: '48px 24px' }}>
+          <Breadcrumb
+            items={[
+              {
+                title: <Link href="/admin/soulscope/tests">测试管理</Link>,
+              },
+              { title: '题目管理' },
+            ]}
+            style={{ marginBottom: 8 }}
+          />
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: 24,
+            }}
+          >
+            <h1
+              style={{
+                fontSize: 28,
+                fontWeight: 700,
+                color: '#111827',
+                margin: 0,
+              }}
             >
-              &larr; 返回测试列表
-            </Link>
-            <h1 className="mt-2 font-bold text-3xl text-gray-900">题目管理</h1>
-          </div>
-
-          <div className="mb-6 flex items-center gap-4">
-            <button
-              className="rounded-lg bg-purple-600 px-4 py-2 font-medium text-sm text-white hover:bg-purple-700 disabled:opacity-50"
-              disabled={generateQuestions.isPending}
+              题目管理
+            </h1>
+            <Button
+              loading={generateQuestions.isPending}
               onClick={() => generateQuestions.mutate({ testTypeId, count: 5 })}
-              type="button"
+              type="primary"
             >
               {generateQuestions.isPending ? 'AI生成中...' : 'AI生成5道题'}
-            </button>
+            </Button>
           </div>
 
-          {isLoading ? (
-            <div className="py-20 text-center text-gray-500">加载中...</div>
-          ) : (
-            <>
-              <div className="space-y-4">
-                {questions?.items.map((q, i) => (
-                  <div className="rounded-xl bg-white p-6 shadow-sm" key={q.id}>
-                    <div className="mb-2 flex items-center justify-between">
-                      <span className="text-gray-400 text-sm">
-                        #{page * PAGE_SIZE + i + 1}
-                      </span>
-                      <div className="flex items-center gap-2">
-                        {q.dimension && (
-                          <span className="rounded-full bg-blue-100 px-2 py-1 text-blue-700 text-xs">
-                            {q.dimension}
-                          </span>
-                        )}
-                        <span className="rounded-full bg-gray-100 px-2 py-1 text-gray-500 text-xs">
-                          {q.source}
-                        </span>
-                      </div>
-                    </div>
-                    <p className="mb-3 font-medium text-gray-900">{q.text}</p>
-                    <div className="flex flex-wrap gap-2">
-                      {(
-                        q.options as Array<{ value: string; label: string }>
-                      ).map((opt) => (
-                        <span
-                          className="rounded-lg bg-gray-50 px-3 py-1 text-gray-600 text-sm"
-                          key={opt.value}
-                        >
-                          {opt.label}
-                        </span>
-                      ))}
-                    </div>
+          <List
+            dataSource={questions?.items ?? []}
+            loading={isLoading}
+            locale={{ emptyText: '暂无题目' }}
+            renderItem={(q, i) => (
+              <List.Item
+                key={q.id}
+                style={{
+                  background: '#fff',
+                  borderRadius: 12,
+                  marginBottom: 12,
+                  padding: '20px 24px',
+                  display: 'block',
+                }}
+              >
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    marginBottom: 8,
+                  }}
+                >
+                  <Typography.Text style={{ fontSize: 13 }} type="secondary">
+                    #{(page - 1) * PAGE_SIZE + i + 1}
+                  </Typography.Text>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    {q.dimension && <Tag color="blue">{q.dimension}</Tag>}
+                    <Tag color="default">{q.source}</Tag>
                   </div>
-                ))}
-              </div>
-
-              <div className="mt-4 flex items-center justify-between">
-                <span className="text-gray-500 text-sm">
-                  共 {questions?.total ?? 0} 道题目
-                </span>
-                <div className="flex items-center gap-2">
-                  <button
-                    className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm transition-colors hover:bg-gray-50 disabled:opacity-50"
-                    disabled={page === 0}
-                    onClick={() => setPage((p) => p - 1)}
-                    type="button"
-                  >
-                    上一页
-                  </button>
-                  <span className="text-gray-600 text-sm">
-                    第 {page + 1} 页
-                  </span>
-                  <button
-                    className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm transition-colors hover:bg-gray-50 disabled:opacity-50"
-                    disabled={
-                      !questions || (page + 1) * PAGE_SIZE >= questions.total
-                    }
-                    onClick={() => setPage((p) => p + 1)}
-                    type="button"
-                  >
-                    下一页
-                  </button>
                 </div>
-              </div>
-            </>
+                <Typography.Text
+                  strong
+                  style={{ fontSize: 15, display: 'block', marginBottom: 12 }}
+                >
+                  {q.text}
+                </Typography.Text>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {(q.options as Array<{ value: string; label: string }>).map(
+                    (opt) => (
+                      <span
+                        key={opt.value}
+                        style={{
+                          background: '#f3f4f6',
+                          borderRadius: 8,
+                          padding: '4px 12px',
+                          fontSize: 13,
+                          color: '#4b5563',
+                        }}
+                      >
+                        {opt.label}
+                      </span>
+                    ),
+                  )}
+                </div>
+              </List.Item>
+            )}
+          />
+
+          {questions && questions.total > PAGE_SIZE && (
+            <div style={{ marginTop: 16, textAlign: 'right' }}>
+              <Pagination
+                current={page}
+                onChange={(p) => setPage(p)}
+                pageSize={PAGE_SIZE}
+                showSizeChanger={false}
+                showTotal={(total) => `共 ${total} 道题目`}
+                total={questions.total}
+              />
+            </div>
           )}
         </div>
       </main>

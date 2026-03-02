@@ -7,11 +7,13 @@ import { boolean, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
 export const user = pgTable('user', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
-  email: text('email').notNull().unique(),
-  emailVerified: boolean('email_verified')
-    .$defaultFn(() => false)
-    .notNull(),
+  // better-auth 内部需要这两个字段，实际登录不使用 email
+  email: text('email').unique(),
+  emailVerified: boolean('email_verified').default(false),
   image: text('image'),
+  // Added by better-auth phoneNumber plugin
+  phoneNumber: text('phone_number').unique(),
+  phoneNumberVerified: boolean('phone_number_verified').$defaultFn(() => false),
   createdAt: timestamp('created_at')
     .$defaultFn(() => /* @__PURE__ */ new Date())
     .notNull(),

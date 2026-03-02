@@ -1,18 +1,113 @@
 'use client';
 
+import { HolderOutlined } from '@ant-design/icons';
+import type { DragEndEvent } from '@dnd-kit/core';
+import {
+  DndContext,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import {
+  Alert,
+  Breadcrumb,
+  Button,
+  Input,
+  InputNumber,
+  Select,
+  Space,
+  Switch,
+  Table,
+  Typography,
+} from 'antd';
+import type { ColumnsType } from 'antd/es/table';
 import Link from 'next/link';
-import { use, useState } from 'react';
+import { use, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Header } from '@/app/_components/layout/header';
+import { PRIZE_TYPE_LABELS } from '@/modules/lucky-wheel/constants';
 import { api } from '@/trpc/react';
 
-const prizeTypeLabels: Record<string, string> = {
-  physical: '实物',
-  virtual: '虚拟',
-  coupon: '优惠券',
-  points: '积分',
-  thanks: '谢谢参与',
+type PrizeType = 'physical' | 'virtual' | 'coupon' | 'points' | 'thanks';
+
+type PrizeRow = {
+  _key: string;
+  id?: string;
+  name: string;
+  type: PrizeType;
+  probability: string;
+  totalStock: string;
+  isActive: boolean;
 };
+
+function toPrizeRow(p: {
+  id: string;
+  name: string;
+  type: string;
+  probability: number;
+  totalStock: number;
+  sortOrder: number;
+  isActive: boolean;
+}): PrizeRow {
+  return {
+    _key: p.id,
+    id: p.id,
+    name: p.name,
+    type: p.type as PrizeType,
+    probability: String(p.probability / 100),
+    totalStock: String(p.totalStock),
+    isActive: p.isActive,
+  };
+}
+
+// 可拖拽的 Table Row
+function SortableRow({
+  children,
+  ...props
+}: React.HTMLAttributes<HTMLTableRowElement> & { 'data-row-key': string }) {
+  const key = props['data-row-key'];
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: key });
+
+  const style: React.CSSProperties = {
+    ...props.style,
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    position: isDragging ? 'relative' : undefined,
+    zIndex: isDragging ? 999 : undefined,
+  };
+
+  return (
+    <tr
+      {...props}
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+    >
+      {children}
+    </tr>
+  );
+}
+
+const prizeTypeOptions = Object.entries(PRIZE_TYPE_LABELS).map(([k, v]) => ({
+  label: v,
+  value: k,
+}));
 
 interface Props {
   params: Promise<{ activityId: string }>;
@@ -24,244 +119,288 @@ export default function AdminPrizesPage({ params }: Props) {
   const { data: prizes, refetch } = api.luckyWheel.admin.getPrizes.useQuery({
     activityId,
   });
-  const upsertMutation = api.luckyWheel.admin.upsertPrize.useMutation({
-    onSuccess: () => {
-      toast.success('保存成功');
-      void refetch();
-      setEditing(null);
-    },
-    onError: (err) => toast.error(err.message),
-  });
-  const deleteMutation = api.luckyWheel.admin.deletePrize.useMutation({
-    onSuccess: () => {
-      toast.success('已下线');
-      void refetch();
-    },
-    onError: (err) => toast.error(err.message),
-  });
+  const batchUpsertMutation =
+    api.luckyWheel.admin.batchUpsertPrizes.useMutation({
+      onSuccess: () => {
+        toast.success('保存成功');
+        initialized.current = false;
+        void refetch();
+      },
+      onError: (err) => toast.error(err.message),
+    });
 
-  const [editing, setEditing] = useState<{
-    id?: string;
-    name: string;
-    type: 'physical' | 'virtual' | 'coupon' | 'points' | 'thanks';
-    probability: number;
-    totalStock: number;
-    sortOrder: number;
-  } | null>(null);
+  const [rows, setRows] = useState<PrizeRow[]>([]);
+  const initialized = useRef(false);
+
+  useEffect(() => {
+    if (prizes && !initialized.current) {
+      setRows(prizes.map(toPrizeRow));
+      initialized.current = true;
+    }
+  }, [prizes]);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      // 拖拽前需移动 5px，避免点击输入框时误触发拖拽
+      activationConstraint: { distance: 5 },
+    }),
+  );
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    setRows((prev) => {
+      const fromIdx = prev.findIndex((r) => r._key === active.id);
+      const toIdx = prev.findIndex((r) => r._key === over.id);
+      return arrayMove(prev, fromIdx, toIdx);
+    });
+  }
+
+  const activePct = rows
+    .filter((r) => r.isActive)
+    .reduce((sum, r) => sum + (Number(r.probability) || 0), 0);
+  const totalPctDisplay = Math.round(activePct * 10) / 10;
+  const isPctValid = Math.abs(activePct - 100) < 0.1;
+
+  function updateRow(key: string, patch: Partial<PrizeRow>) {
+    setRows((prev) =>
+      prev.map((r) => (r._key === key ? { ...r, ...patch } : r)),
+    );
+  }
+
+  function addRow() {
+    const key = `new-${Date.now()}`;
+    setRows((prev) => [
+      ...prev,
+      {
+        _key: key,
+        name: '',
+        type: 'thanks',
+        probability: '',
+        totalStock: '',
+        isActive: true,
+      },
+    ]);
+  }
+
+  function removeRow(key: string) {
+    setRows((prev) => prev.filter((r) => r._key !== key));
+  }
+
+  function handleSaveAll() {
+    for (const row of rows) {
+      if (!row.name.trim()) {
+        toast.error('请填写所有奖品名称');
+        return;
+      }
+      if (row.isActive && (Number(row.probability) || 0) <= 0) {
+        toast.error(`「${row.name || '新奖品'}」概率不能为 0`);
+        return;
+      }
+      if (
+        row.isActive &&
+        row.type !== 'thanks' &&
+        (Number(row.totalStock) || 0) <= 0
+      ) {
+        toast.error(`「${row.name}」不是谢谢参与类型，库存不能为 0`);
+        return;
+      }
+    }
+    if (rows.length > 0 && Math.abs(activePct - 100) >= 0.1) {
+      toast.error(`概率总计为 ${totalPctDisplay}%，请调整至 100% 后再保存`);
+      return;
+    }
+    batchUpsertMutation.mutate(
+      rows.map((row, idx) => ({
+        id: row.id,
+        activityId,
+        name: row.name,
+        type: row.type,
+        probability: Math.round((Number(row.probability) || 0) * 100),
+        totalStock: Number(row.totalStock) || 0,
+        sortOrder: idx,
+        isActive: row.isActive,
+      })),
+    );
+  }
+
+  const columns: ColumnsType<PrizeRow> = [
+    {
+      title: '',
+      dataIndex: '_drag',
+      width: 32,
+      render: () => (
+        <HolderOutlined style={{ color: '#9ca3af', fontSize: 16 }} />
+      ),
+    },
+    {
+      title: '奖品名称',
+      dataIndex: 'name',
+      render: (_, row) => (
+        <Input
+          onChange={(e) => updateRow(row._key, { name: e.target.value })}
+          placeholder="奖品名称"
+          style={{ minWidth: 120 }}
+          value={row.name}
+        />
+      ),
+    },
+    {
+      title: '类型',
+      dataIndex: 'type',
+      render: (_, row) => (
+        <Select
+          onChange={(val) => updateRow(row._key, { type: val as PrizeType })}
+          options={prizeTypeOptions}
+          style={{ width: 120 }}
+          value={row.type}
+        />
+      ),
+    },
+    {
+      title: '概率 %',
+      dataIndex: 'probability',
+      render: (_, row) => (
+        <Space.Compact style={{ width: 130 }}>
+          <InputNumber
+            max={100}
+            min={0}
+            onChange={(val) =>
+              updateRow(row._key, {
+                probability: val == null ? '' : String(val),
+              })
+            }
+            placeholder="0"
+            step={0.01}
+            style={{ flex: 1 }}
+            value={row.probability === '' ? null : Number(row.probability)}
+          />
+          <Typography.Text
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              padding: '0 8px',
+              background: '#fafafa',
+              border: '1px solid #d9d9d9',
+              borderLeft: 0,
+              borderRadius: '0 6px 6px 0',
+              color: '#6b7280',
+              fontSize: 13,
+            }}
+          >
+            %
+          </Typography.Text>
+        </Space.Compact>
+      ),
+    },
+    {
+      title: '总库存',
+      dataIndex: 'totalStock',
+      render: (_, row) => (
+        <InputNumber
+          min={0}
+          onChange={(val) =>
+            updateRow(row._key, {
+              totalStock: val == null ? '' : String(val),
+            })
+          }
+          placeholder="0"
+          style={{ width: 100 }}
+          value={row.totalStock === '' ? null : Number(row.totalStock)}
+        />
+      ),
+    },
+    {
+      title: '状态',
+      dataIndex: 'isActive',
+      render: (_, row) => (
+        <Switch
+          checked={row.isActive}
+          checkedChildren="上线"
+          onChange={(checked) => updateRow(row._key, { isActive: checked })}
+          unCheckedChildren="下线"
+        />
+      ),
+    },
+    {
+      title: '操作',
+      dataIndex: '_key',
+      render: (_, row) =>
+        !row.id ? (
+          <Button danger onClick={() => removeRow(row._key)} type="link">
+            删除
+          </Button>
+        ) : null,
+    },
+  ];
 
   return (
     <>
       <Header />
-      <main className="min-h-screen bg-gray-50">
-        <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:px-8">
-          <div className="mb-8 flex items-center justify-between">
-            <div>
-              <Link
-                className="text-orange-600 text-sm hover:text-orange-700"
-                href="/admin/lucky-wheel/activities"
+      <main style={{ minHeight: '100vh', background: '#f9fafb' }}>
+        <div style={{ maxWidth: 1152, margin: '0 auto', padding: '48px 16px' }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: 32,
+            }}
+          >
+            <Breadcrumb
+              items={[
+                {
+                  title: (
+                    <Link href="/admin/lucky-wheel/activities">活动管理</Link>
+                  ),
+                },
+                { title: '奖品配置' },
+              ]}
+            />
+            <Space>
+              <Button onClick={addRow}>+ 添加奖品</Button>
+              <Button
+                disabled={batchUpsertMutation.isPending}
+                loading={batchUpsertMutation.isPending}
+                onClick={handleSaveAll}
+                type="primary"
               >
-                &larr; 返回活动管理
-              </Link>
-              <h1 className="mt-2 font-bold text-3xl text-gray-900">
-                奖品配置
-              </h1>
-            </div>
-            <button
-              className="rounded-lg bg-orange-500 px-4 py-2 font-medium text-sm text-white hover:bg-orange-600"
-              onClick={() =>
-                setEditing({
-                  name: '',
-                  type: 'thanks',
-                  probability: 0,
-                  totalStock: 0,
-                  sortOrder: 0,
-                })
+                保存全部
+              </Button>
+            </Space>
+          </div>
+
+          {rows.length > 0 && (
+            <Alert
+              message={
+                <>
+                  上线奖品概率总计：<strong>{totalPctDisplay}%</strong>
+                  {isPctValid ? ' ✓' : ' — 建议调整至 100%'}
+                </>
               }
-              type="button"
+              showIcon
+              style={{ marginBottom: 16 }}
+              type={isPctValid ? 'success' : 'warning'}
+            />
+          )}
+
+          <DndContext onDragEnd={handleDragEnd} sensors={sensors}>
+            <SortableContext
+              items={rows.map((r) => r._key)}
+              strategy={verticalListSortingStrategy}
             >
-              添加奖品
-            </button>
-          </div>
-
-          {/* Probability hint */}
-          {prizes && prizes.length > 0 && (
-            <div className="mb-4 rounded-lg bg-orange-50 px-4 py-2 text-orange-700 text-sm">
-              概率总和：
-              {prizes.reduce((s, p) => s + p.probability, 0)} / 10000 （万分比）
-            </div>
-          )}
-
-          {/* Edit Form */}
-          {editing && (
-            <div className="mb-8 rounded-xl bg-white p-6 shadow-sm">
-              <h2 className="mb-4 font-semibold text-lg">
-                {editing.id ? '编辑奖品' : '添加奖品'}
-              </h2>
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                <input
-                  className="rounded-lg border px-3 py-2"
-                  onChange={(e) =>
-                    setEditing({ ...editing, name: e.target.value })
-                  }
-                  placeholder="奖品名称"
-                  value={editing.name}
-                />
-                <select
-                  className="rounded-lg border px-3 py-2"
-                  onChange={(e) =>
-                    setEditing({
-                      ...editing,
-                      type: e.target.value as typeof editing.type,
-                    })
-                  }
-                  value={editing.type}
-                >
-                  {Object.entries(prizeTypeLabels).map(([k, v]) => (
-                    <option key={k} value={k}>
-                      {v}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  className="rounded-lg border px-3 py-2"
-                  onChange={(e) =>
-                    setEditing({
-                      ...editing,
-                      probability: Number(e.target.value) || 0,
-                    })
-                  }
-                  placeholder="概率 (万分比)"
-                  type="number"
-                  value={editing.probability}
-                />
-                <input
-                  className="rounded-lg border px-3 py-2"
-                  onChange={(e) =>
-                    setEditing({
-                      ...editing,
-                      totalStock: Number(e.target.value) || 0,
-                    })
-                  }
-                  placeholder="总库存"
-                  type="number"
-                  value={editing.totalStock}
-                />
-                <input
-                  className="rounded-lg border px-3 py-2"
-                  onChange={(e) =>
-                    setEditing({
-                      ...editing,
-                      sortOrder: Number(e.target.value) || 0,
-                    })
-                  }
-                  placeholder="排序"
-                  type="number"
-                  value={editing.sortOrder}
-                />
-              </div>
-              <div className="mt-4 flex gap-3">
-                <button
-                  className="rounded-lg bg-orange-500 px-4 py-2 font-medium text-sm text-white hover:bg-orange-600 disabled:opacity-50"
-                  disabled={upsertMutation.isPending}
-                  onClick={() =>
-                    upsertMutation.mutate({
-                      id: editing.id,
-                      activityId,
-                      name: editing.name,
-                      type: editing.type,
-                      probability: editing.probability,
-                      totalStock: editing.totalStock,
-                      sortOrder: editing.sortOrder,
-                    })
-                  }
-                  type="button"
-                >
-                  {upsertMutation.isPending ? '保存中...' : '保存'}
-                </button>
-                <button
-                  className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50"
-                  onClick={() => setEditing(null)}
-                  type="button"
-                >
-                  取消
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Prizes Table */}
-          <div className="overflow-x-auto rounded-xl bg-white shadow-sm">
-            <table className="w-full">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left font-medium text-gray-500 text-xs uppercase tracking-wider">
-                    名称
-                  </th>
-                  <th className="px-6 py-3 text-left font-medium text-gray-500 text-xs uppercase tracking-wider">
-                    类型
-                  </th>
-                  <th className="px-6 py-3 text-left font-medium text-gray-500 text-xs uppercase tracking-wider">
-                    概率
-                  </th>
-                  <th className="px-6 py-3 text-left font-medium text-gray-500 text-xs uppercase tracking-wider">
-                    库存
-                  </th>
-                  <th className="px-6 py-3 text-left font-medium text-gray-500 text-xs uppercase tracking-wider">
-                    操作
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200">
-                {prizes?.map((prize) => (
-                  <tr key={prize.id}>
-                    <td className="whitespace-nowrap px-6 py-4 font-medium text-gray-900">
-                      {prize.name}
-                    </td>
-                    <td className="whitespace-nowrap px-6 py-4 text-gray-500">
-                      {prizeTypeLabels[prize.type] ?? prize.type}
-                    </td>
-                    <td className="whitespace-nowrap px-6 py-4 text-gray-500">
-                      {prize.probability} / 10000
-                    </td>
-                    <td className="whitespace-nowrap px-6 py-4 text-gray-500">
-                      {prize.remainingStock} / {prize.totalStock}
-                    </td>
-                    <td className="whitespace-nowrap px-6 py-4">
-                      <div className="flex gap-3">
-                        <button
-                          className="text-orange-600 text-sm hover:text-orange-700"
-                          onClick={() =>
-                            setEditing({
-                              id: prize.id,
-                              name: prize.name,
-                              type: prize.type,
-                              probability: prize.probability,
-                              totalStock: prize.totalStock,
-                              sortOrder: prize.sortOrder,
-                            })
-                          }
-                          type="button"
-                        >
-                          编辑
-                        </button>
-                        {prize.isActive && (
-                          <button
-                            className="text-red-600 text-sm hover:text-red-700"
-                            onClick={() =>
-                              deleteMutation.mutate({ id: prize.id })
-                            }
-                            type="button"
-                          >
-                            下线
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+              <Table
+                columns={columns}
+                components={{ body: { row: SortableRow } }}
+                dataSource={rows}
+                locale={{ emptyText: '暂无奖品，点击「添加奖品」开始配置' }}
+                pagination={false}
+                rowClassName={(row) => (row.isActive ? '' : 'opacity-50')}
+                rowKey="_key"
+                scroll={{ x: true }}
+              />
+            </SortableContext>
+          </DndContext>
         </div>
       </main>
     </>

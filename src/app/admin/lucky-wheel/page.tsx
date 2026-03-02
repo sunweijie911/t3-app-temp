@@ -1,7 +1,8 @@
-import Link from 'next/link';
 import { Header } from '@/app/_components/layout/header';
+import { ModuleSwitcher } from '@/app/admin/_components/module-switcher';
 import { getModule } from '@/modules/registry';
 import { api, HydrateClient } from '@/trpc/server';
+import { StatsDisplay } from './_components/stats-display';
 
 export const metadata = {
   title: '大转盘管理 - 管理后台',
@@ -11,57 +12,56 @@ export default async function AdminLuckyWheelPage() {
   const mod = getModule('lucky-wheel');
   const stats = await api.luckyWheel.admin.stats();
 
+  // 以 activityId 为 key 合并 drawStats + prizeStats
+  const byActivity = stats.activityDrawStats.reduce<
+    Record<
+      string,
+      {
+        activityId: string;
+        activityName: string;
+        totalDraws: number;
+        totalWins: number;
+        prizes: typeof stats.prizeStats;
+      }
+    >
+  >((acc, a) => {
+    acc[a.activityId] = {
+      activityId: a.activityId,
+      activityName: a.activityName,
+      totalDraws: a.totalDraws,
+      totalWins: a.totalWins,
+      prizes: stats.prizeStats.filter((p) => p.activityId === a.activityId),
+    };
+    return acc;
+  }, {});
+
   return (
     <HydrateClient>
       <Header />
-      <main className="min-h-screen bg-gray-50">
-        <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:px-8">
-          <div className="mb-8">
-            <Link className={`text-sm ${mod.theme.link}`} href="/admin">
-              &larr; 返回管理后台
-            </Link>
-            <h1 className="mt-2 font-bold text-3xl text-gray-900">
+      <main style={{ minHeight: '100vh', background: '#f5f5f5' }}>
+        <div style={{ maxWidth: 1152, margin: '0 auto', padding: '48px 24px' }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: 24,
+            }}
+          >
+            <h1
+              style={{
+                fontSize: 28,
+                fontWeight: 700,
+                color: '#111827',
+                margin: 0,
+              }}
+            >
               大转盘管理
             </h1>
+            <ModuleSwitcher currentModuleId="lucky-wheel" />
           </div>
 
-          {/* Stats */}
-          <div className="mb-12 grid grid-cols-2 gap-4 md:grid-cols-3">
-            <div className="rounded-xl bg-white p-6 shadow-sm">
-              <p className="text-gray-500 text-sm">活跃活动数</p>
-              <p className="font-bold text-3xl text-gray-900">
-                {stats.totalActivities}
-              </p>
-            </div>
-            <div className="rounded-xl bg-white p-6 shadow-sm">
-              <p className="text-gray-500 text-sm">总抽奖次数</p>
-              <p className="font-bold text-3xl text-gray-900">
-                {stats.totalDraws}
-              </p>
-            </div>
-            <div className="rounded-xl bg-white p-6 shadow-sm">
-              <p className="text-gray-500 text-sm">总中奖数</p>
-              <p className="font-bold text-3xl text-gray-900">
-                {stats.totalWins}
-              </p>
-            </div>
-          </div>
-
-          {/* Navigation */}
-          <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-            {mod.adminNavItems.map((item) => (
-              <Link
-                className="rounded-xl bg-white p-6 shadow-sm transition-all hover:shadow-md"
-                href={item.href}
-                key={item.href}
-              >
-                <h3 className="mb-2 font-semibold text-gray-900 text-lg">
-                  {item.label}
-                </h3>
-                <p className="text-gray-500 text-sm">{item.description}</p>
-              </Link>
-            ))}
-          </div>
+          <StatsDisplay byActivity={byActivity} navItems={mod.adminNavItems} />
         </div>
       </main>
     </HydrateClient>

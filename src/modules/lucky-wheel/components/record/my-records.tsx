@@ -1,14 +1,28 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { RECORD_STATUS_LABELS } from '@/modules/lucky-wheel/constants';
 import { api } from '@/trpc/react';
 
-const statusLabels: Record<string, string> = {
-  pending: '待确认',
-  confirmed: '已确认',
-  shipped: '已发货',
-  claimed: '已领取',
+// 状态标签颜色配置（方块标签样式，非按钮）
+const STATUS_STYLES: Record<string, { bg: string; text: string }> = {
+  pending: { bg: '#FFF7ED', text: '#C2410C' }, // 待确认 — 橙
+  confirmed: { bg: '#F0FDF4', text: '#15803D' }, // 已确认 — 绿
+  shipped: { bg: '#EFF6FF', text: '#1D4ED8' }, // 已发货 — 蓝
+  claimed: { bg: '#F3F4F6', text: '#9CA3AF' }, // 已领取 — 灰
 };
+
+function StatusTag({ status }: { status: string }) {
+  const style = STATUS_STYLES[status] ?? { bg: '#F3F4F6', text: '#6B7280' };
+  return (
+    <span
+      className="shrink-0 select-none rounded-md px-2 py-1 font-medium text-xs"
+      style={{ backgroundColor: style.bg, color: style.text }}
+    >
+      {RECORD_STATUS_LABELS[status] ?? status}
+    </span>
+  );
+}
 
 // ─── Shared record list rendering (used by both Sheet and standalone page) ───
 
@@ -74,19 +88,11 @@ function RecordListContent({
             </p>
           </div>
 
-          {/* Status badge */}
+          {/* Status tag */}
           {record.isWin ? (
-            <span
-              className="shrink-0 rounded-full px-3 py-1 font-semibold text-white text-xs"
-              style={{
-                background: 'linear-gradient(114deg, #FF8D67, #F0361D)',
-                opacity: record.status === 'claimed' ? 0.3 : 1,
-              }}
-            >
-              {statusLabels[record.status] ?? record.status}
-            </span>
+            <StatusTag status={record.status} />
           ) : (
-            <span className="shrink-0 rounded-full bg-gray-100 px-3 py-1 text-gray-500 text-xs">
+            <span className="shrink-0 select-none rounded-md bg-gray-100 px-2 py-1 text-gray-400 text-xs">
               未中奖
             </span>
           )}

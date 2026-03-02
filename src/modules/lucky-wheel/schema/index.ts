@@ -1,11 +1,28 @@
 import { relations } from 'drizzle-orm';
-import { index, jsonb, pgEnum, uniqueIndex } from 'drizzle-orm/pg-core';
+import {
+  index,
+  integer,
+  jsonb,
+  pgEnum,
+  text,
+  uniqueIndex,
+} from 'drizzle-orm/pg-core';
 
 import { user } from '@/server/db/auth-schema';
 import { createTable } from '@/server/db/table-creator';
 
 // ============================================================
-// Enums
+// 公共类型
+// ============================================================
+
+export type WheelUserInfo = {
+  name: string | null;
+  phone: string | null;
+  address: string | null;
+};
+
+// ============================================================
+// 枚举
 // ============================================================
 
 export const prizeTypeEnum = pgEnum('prize_type', [
@@ -24,7 +41,7 @@ export const drawRecordStatusEnum = pgEnum('draw_record_status', [
 ]);
 
 // ============================================================
-// Lucky Wheel Tables
+// 数据表
 // ============================================================
 
 // 1. wheelActivities — 转盘活动
@@ -38,10 +55,9 @@ export const wheelActivities = createTable(
     coverImage: d.text(),
     startAt: d.timestamp({ withTimezone: true }),
     endAt: d.timestamp({ withTimezone: true }),
-    maxDrawsPerUser: d.integer().notNull().default(0),
-    maxDrawsPerDay: d.integer().notNull().default(0),
+    maxDrawsPerUser: d.integer().notNull().default(1),
     isActive: d.boolean().notNull().default(true),
-    rules: jsonb().$type<Record<string, unknown>>(),
+    rules: jsonb().$type<{ html: string }>(),
     sortOrder: d.integer().notNull().default(0),
     createdAt: d
       .timestamp({ withTimezone: true })
@@ -101,7 +117,7 @@ export const wheelDrawRecords = createTable(
     prizeId: d.varchar({ length: 36 }).references(() => wheelPrizes.id),
     isWin: d.boolean().notNull().default(false),
     status: drawRecordStatusEnum().notNull().default('pending'),
-    userInfo: jsonb().$type<Record<string, unknown>>(),
+    userInfo: jsonb().$type<WheelUserInfo>(),
     adminNote: d.text(),
     createdAt: d
       .timestamp({ withTimezone: true })
@@ -115,8 +131,34 @@ export const wheelDrawRecords = createTable(
   ],
 );
 
+// 4. wheelExtraChances — admin-configured extra draws per phone number
+export const wheelExtraChances = createTable(
+  'wheel_extra_chance',
+  (d) => ({
+    id: d.varchar({ length: 36 }).primaryKey(),
+    activityId: d
+      .varchar({ length: 36 })
+      .notNull()
+      .references(() => wheelActivities.id, { onDelete: 'cascade' }),
+    phone: text().notNull(),
+    extraChances: integer().notNull().default(0),
+    note: text(),
+    createdAt: d
+      .timestamp({ withTimezone: true })
+      .$defaultFn(() => new Date())
+      .notNull(),
+    updatedAt: d.timestamp({ withTimezone: true }).$onUpdate(() => new Date()),
+  }),
+  (t) => [
+    uniqueIndex('wheel_extra_chance_activity_phone_idx').on(
+      t.activityId,
+      t.phone,
+    ),
+  ],
+);
+
 // ============================================================
-// Relations
+// 关联关系
 // ============================================================
 
 export const wheelActivityRelations = relations(
@@ -124,6 +166,7 @@ export const wheelActivityRelations = relations(
   ({ many }) => ({
     prizes: many(wheelPrizes),
     drawRecords: many(wheelDrawRecords),
+    extraChances: many(wheelExtraChances),
   }),
 );
 
@@ -149,6 +192,16 @@ export const wheelDrawRecordRelations = relations(
     prize: one(wheelPrizes, {
       fields: [wheelDrawRecords.prizeId],
       references: [wheelPrizes.id],
+    }),
+  }),
+);
+
+export const wheelExtraChancesRelations = relations(
+  wheelExtraChances,
+  ({ one }) => ({
+    activity: one(wheelActivities, {
+      fields: [wheelExtraChances.activityId],
+      references: [wheelActivities.id],
     }),
   }),
 );

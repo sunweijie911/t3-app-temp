@@ -19,9 +19,14 @@ export const env = createEnv({
     NODE_ENV: z
       .enum(['development', 'test', 'production'])
       .default('development'),
-    ADMIN_EMAILS: z.string().optional(),
+    ADMIN_PHONES: z.string().optional(),
     LLM_API_KEY: z.string().optional(),
     BETTER_AUTH_URL: z.string().url().optional(),
+    // 阿里云短信（生产环境 OTP 发送必填）
+    SMS_ACCESS_KEY_ID: z.string().optional(),
+    SMS_ACCESS_KEY_SECRET: z.string().optional(),
+    SMS_SIGN_NAME: z.string().optional(),
+    SMS_TEMPLATE_CODE: z.string().optional(),
   },
 
   /**
@@ -41,12 +46,16 @@ export const env = createEnv({
     BETTER_AUTH_SECRET: stripQuotes(process.env.BETTER_AUTH_SECRET),
     DATABASE_URL: stripQuotes(process.env.DATABASE_URL),
     NODE_ENV: stripQuotes(process.env.NODE_ENV),
-    ADMIN_EMAILS: stripQuotes(process.env.ADMIN_EMAILS),
+    ADMIN_PHONES: stripQuotes(process.env.ADMIN_PHONES),
     LLM_API_KEY: stripQuotes(process.env.LLM_API_KEY),
     BETTER_AUTH_URL: stripQuotes(process.env.BETTER_AUTH_URL),
     NEXT_PUBLIC_DEFAULT_MODULE: stripQuotes(
       process.env.NEXT_PUBLIC_DEFAULT_MODULE,
     ),
+    SMS_ACCESS_KEY_ID: stripQuotes(process.env.SMS_ACCESS_KEY_ID),
+    SMS_ACCESS_KEY_SECRET: stripQuotes(process.env.SMS_ACCESS_KEY_SECRET),
+    SMS_SIGN_NAME: stripQuotes(process.env.SMS_SIGN_NAME),
+    SMS_TEMPLATE_CODE: stripQuotes(process.env.SMS_TEMPLATE_CODE),
   },
   /**
    * Run `build` or `dev` with `SKIP_ENV_VALIDATION` to skip env validation. This is especially

@@ -1,5 +1,9 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
+import { auth } from '@/server/better-auth';
+
+// Required for auth.api.getSession() which uses the postgres driver (Node.js only)
+export const runtime = 'nodejs';
 
 const protectedPatterns = [
   /^\/admin(\/|$)/,
@@ -8,17 +12,14 @@ const protectedPatterns = [
   /^\/lucky-wheel\/records(\/|$)/,
 ];
 
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const isProtected = protectedPatterns.some((p) => p.test(pathname));
   if (!isProtected) return NextResponse.next();
 
-  // Better Auth default cookie name
-  const sessionCookie =
-    request.cookies.get('better-auth.session_token') ??
-    request.cookies.get('__Secure-better-auth.session_token');
+  const session = await auth.api.getSession({ headers: request.headers });
 
-  if (!sessionCookie) {
+  if (!session) {
     const signinUrl = new URL('/signin', request.url);
     signinUrl.searchParams.set('callbackUrl', pathname);
     return NextResponse.redirect(signinUrl);

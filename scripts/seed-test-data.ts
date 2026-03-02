@@ -3,7 +3,13 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import { nanoid } from 'nanoid';
 import postgres from 'postgres';
 import * as schema from '@/server/db/schema';
-import { questions, systemConfig, testTypes } from '@/server/db/schema';
+import {
+  questions,
+  systemConfig,
+  testTypes,
+  wheelActivities,
+  wheelPrizes,
+} from '@/server/db/schema';
 
 // biome-ignore lint/style/noNonNullAssertion: seed script runs outside env.js validation
 const conn = postgres(process.env.DATABASE_URL!);
@@ -2743,6 +2749,113 @@ async function seedSystemConfig() {
 }
 
 // ============================================================
+// Lucky Wheel Seed Data
+// ============================================================
+
+// Use fixed IDs so re-running the seed is idempotent
+const ACTIVITY_ID = 'seed-lucky-wheel-double12';
+const PRIZE_IDS = {
+  thanks: 'seed-prize-thanks',
+  points10: 'seed-prize-points-10',
+  coupon5: 'seed-prize-coupon-5',
+  coupon50: 'seed-prize-coupon-50',
+  gift: 'seed-prize-gift',
+  iphone: 'seed-prize-iphone',
+};
+
+async function seedLuckyWheel() {
+  console.log('  Seeding lucky wheel...');
+
+  // Upsert activity (skip if already exists)
+  await db
+    .insert(wheelActivities)
+    .values({
+      id: ACTIVITY_ID,
+      name: '双十二大转盘',
+      slug: 'double12',
+      description: '参与转盘抽奖，赢取超值好礼！每人每天可抽 3 次。',
+      maxDrawsPerUser: 0, // unlimited total
+      maxDrawsPerDay: 3,
+      isActive: true,
+      sortOrder: 0,
+    })
+    .onConflictDoNothing({ target: wheelActivities.id });
+
+  // Upsert prizes — total probability weight = 10000 (万分比)
+  const prizes = [
+    {
+      id: PRIZE_IDS.thanks,
+      name: '谢谢参与',
+      type: 'thanks' as const,
+      probability: 5000,
+      totalStock: 0,
+      remainingStock: 0,
+      sortOrder: 0,
+    },
+    {
+      id: PRIZE_IDS.points10,
+      name: '10 积分',
+      type: 'points' as const,
+      probability: 2500,
+      totalStock: 9999,
+      remainingStock: 9999,
+      sortOrder: 1,
+    },
+    {
+      id: PRIZE_IDS.coupon5,
+      name: '5元优惠券',
+      type: 'coupon' as const,
+      probability: 1500,
+      totalStock: 9999,
+      remainingStock: 9999,
+      sortOrder: 2,
+    },
+    {
+      id: PRIZE_IDS.coupon50,
+      name: '50元优惠券',
+      type: 'coupon' as const,
+      probability: 700,
+      totalStock: 200,
+      remainingStock: 200,
+      sortOrder: 3,
+    },
+    {
+      id: PRIZE_IDS.gift,
+      name: '品牌周边礼品',
+      type: 'physical' as const,
+      probability: 280,
+      totalStock: 50,
+      remainingStock: 50,
+      sortOrder: 4,
+    },
+    {
+      id: PRIZE_IDS.iphone,
+      name: 'iPhone 16',
+      type: 'physical' as const,
+      probability: 20,
+      totalStock: 1,
+      remainingStock: 1,
+      sortOrder: 5,
+    },
+  ];
+
+  let inserted = 0;
+  let skipped = 0;
+  for (const prize of prizes) {
+    const result = await db
+      .insert(wheelPrizes)
+      .values({ ...prize, activityId: ACTIVITY_ID })
+      .onConflictDoNothing({ target: wheelPrizes.id });
+    if (result.rowCount === 0) skipped++;
+    else inserted++;
+  }
+
+  console.log(
+    `  ✓ Lucky wheel: 1 activity, ${inserted} prizes inserted, ${skipped} already existed`,
+  );
+}
+
+// ============================================================
 // Main
 // ============================================================
 
@@ -2751,6 +2864,7 @@ async function main() {
   await seedTestTypes();
   await seedQuestions();
   await seedSystemConfig();
+  await seedLuckyWheel();
   console.log('[seed] Seed complete!');
   await conn.end();
   process.exit(0);

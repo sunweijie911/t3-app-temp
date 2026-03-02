@@ -13,7 +13,7 @@ import { ZodError } from 'zod';
 
 import { auth } from '@/server/better-auth';
 import { db } from '@/server/db';
-import { isAdminEmail } from '@/server/services/admin-check';
+import { isAdminPhone } from '@/server/services/admin-check';
 
 /**
  * 1. CONTEXT
@@ -90,7 +90,7 @@ const timingMiddleware = t.middleware(async ({ next, path }) => {
   const start = Date.now();
 
   if (t._config.isDev) {
-    // artificial delay in dev
+    // 开发环境模拟网络延迟
     const waitMs = Math.floor(Math.random() * 400) + 100;
     await new Promise((resolve) => setTimeout(resolve, waitMs));
   }
@@ -130,30 +130,24 @@ export const protectedProcedure = t.procedure
     }
     return next({
       ctx: {
-        // infers the `session` as non-nullable
+        // 将 session 类型收窄为非空
         session: { ...ctx.session, user: ctx.session.user },
       },
     });
   });
 
 /**
- * Admin procedure - only accessible to users whose email is in the ADMIN_EMAILS whitelist
+ * 管理员专用过程 —— 仅允许手机号在 ADMIN_PHONES 白名单中的用户访问。
+ * 继承自 protectedProcedure，确保登录态校验保持一致。
  */
-export const adminProcedure = t.procedure
-  .use(timingMiddleware)
-  .use(({ ctx, next }) => {
-    if (!ctx.session?.user) {
-      throw new TRPCError({ code: 'UNAUTHORIZED' });
-    }
-    if (!isAdminEmail(ctx.session.user.email)) {
-      throw new TRPCError({
-        code: 'FORBIDDEN',
-        message: 'Admin access required',
-      });
-    }
-    return next({
-      ctx: {
-        session: { ...ctx.session, user: ctx.session.user },
-      },
+export const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
+  const phone = (ctx.session.user as { phoneNumber?: string | null })
+    .phoneNumber;
+  if (!isAdminPhone(phone)) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Admin access required',
     });
-  });
+  }
+  return next({ ctx });
+});

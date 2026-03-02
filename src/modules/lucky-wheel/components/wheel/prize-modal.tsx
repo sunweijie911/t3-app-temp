@@ -16,6 +16,8 @@ interface PrizeModalProps {
 export function PrizeModal({ open, onClose, isWin, prize }: PrizeModalProps) {
   if (!open) return null;
 
+  const isPhysical = isWin && prize?.type === 'physical';
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <div
@@ -68,12 +70,18 @@ export function PrizeModal({ open, onClose, isWin, prize }: PrizeModalProps) {
             <p className="mb-1 font-semibold text-lg text-orange-600">
               {prize.name}
             </p>
-            <p className="mb-6 text-gray-500 text-sm">
-              {prize.type === 'physical' && '实物奖品将通过邮寄发放'}
-              {prize.type === 'virtual' && '虚拟奖品将发送至您的账户'}
-              {prize.type === 'coupon' && '优惠券已发放至您的账户'}
-              {prize.type === 'points' && '积分已发放至您的账户'}
-            </p>
+
+            {isPhysical ? (
+              <p className="mb-6 text-gray-500 text-sm">
+                收货信息已登记，我们将联系您安排发货 ✅
+              </p>
+            ) : (
+              <p className="mb-6 text-gray-500 text-sm">
+                {prize.type === 'virtual' && '虚拟奖品将发送至您的账户'}
+                {prize.type === 'coupon' && '优惠券已发放至您的账户'}
+                {prize.type === 'points' && '积分已发放至您的账户'}
+              </p>
+            )}
           </>
         ) : (
           <>
@@ -86,6 +94,7 @@ export function PrizeModal({ open, onClose, isWin, prize }: PrizeModalProps) {
             </p>
           </>
         )}
+
         <button
           className="w-full rounded-full px-6 py-3 font-semibold text-white transition-transform active:scale-[0.98]"
           onClick={onClose}

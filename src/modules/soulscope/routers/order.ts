@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { simulatePayment } from '@/modules/soulscope/services/payment';
 import { createTRPCRouter, protectedProcedure } from '@/server/api/trpc';
 import { orders, testResults } from '@/server/db/schema';
-import { isAdminEmail } from '@/server/services/admin-check';
+import { isAdminPhone } from '@/server/services/admin-check';
 
 export const orderRouter = createTRPCRouter({
   create: protectedProcedure
@@ -59,10 +59,9 @@ export const orderRouter = createTRPCRouter({
   simulatePayment: protectedProcedure
     .input(z.object({ orderId: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      if (
-        process.env.NODE_ENV === 'production' &&
-        !isAdminEmail(ctx.session.user.email)
-      ) {
+      const phone = (ctx.session.user as { phoneNumber?: string | null })
+        .phoneNumber;
+      if (process.env.NODE_ENV === 'production' && !isAdminPhone(phone)) {
         throw new TRPCError({
           code: 'FORBIDDEN',
           message: 'Payment simulation is not available in production',
