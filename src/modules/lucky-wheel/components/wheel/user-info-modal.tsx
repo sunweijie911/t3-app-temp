@@ -43,6 +43,16 @@ export function UserInfoModal({
     };
   }, [open]);
 
+  // 弹窗打开时禁止页面滚动
+  useEffect(() => {
+    if (open) {
+      document.body.style.overflow = 'hidden';
+      return () => {
+        document.body.style.overflow = '';
+      };
+    }
+  }, [open]);
+
   if (!open) return null;
 
   const startCountdown = () => {

@@ -1,6 +1,6 @@
 'use client';
 
-import { forwardRef, useImperativeHandle, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useState } from 'react';
 import { RecordListContent } from '@/modules/lucky-wheel/components/record/my-records';
 import { api } from '@/trpc/react';
 
@@ -21,6 +21,16 @@ export const MyPrizesSheet = forwardRef<
   useImperativeHandle(ref, () => ({
     open: () => setOpen(true),
   }));
+
+  // 弹窗打开时禁止页面滚动
+  useEffect(() => {
+    if (open) {
+      document.body.style.overflow = 'hidden';
+      return () => {
+        document.body.style.overflow = '';
+      };
+    }
+  }, [open]);
 
   // 登录后即预加载数据，打开弹窗时直接展示缓存，避免骨架闪烁
   const { data: records, isLoading } = api.luckyWheel.record.myRecords.useQuery(

@@ -1,7 +1,6 @@
 'use client';
 
 import TextAlign from '@tiptap/extension-text-align';
-import Underline from '@tiptap/extension-underline';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import './rich-text-editor.css';
@@ -23,7 +22,6 @@ export function RichTextEditor({
   const editor = useEditor({
     extensions: [
       StarterKit,
-      Underline,
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
     ],
     content: defaultValue,

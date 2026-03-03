@@ -103,8 +103,6 @@ function toExcel(records: ExportRecord[]): Blob {
 
   // 列宽
   ws['!cols'] = colWidths.map((w) => ({ wch: w }));
-  // 冻结首行
-  ws['!freeze'] = { xSplit: 0, ySplit: 1 };
 
   const border = {
     top: { style: 'thin', color: { rgb: 'D9D9D9' } },

@@ -1,7 +1,7 @@
 'use client';
 
 import Image from 'next/image';
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 
 interface PrizeModalProps {
   open: boolean;
@@ -83,6 +83,16 @@ export function PrizeModal({
     () => ENCOURAGE_TEXTS[Math.floor(Math.random() * ENCOURAGE_TEXTS.length)],
     [],
   );
+
+  // 弹窗打开时禁止页面滚动
+  useEffect(() => {
+    if (open) {
+      document.body.style.overflow = 'hidden';
+      return () => {
+        document.body.style.overflow = '';
+      };
+    }
+  }, [open]);
 
   if (!open) return null;
 

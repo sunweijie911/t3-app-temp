@@ -1,3 +1,4 @@
+import { TRPCClientError } from '@trpc/client';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { PRIZE_TYPE_LABELS } from '@/modules/lucky-wheel/constants';
@@ -12,8 +13,12 @@ interface Props {
 async function getActivity(slug: string) {
   try {
     return await api.luckyWheel.activity.getBySlug({ slug });
-  } catch {
-    notFound();
+  } catch (err) {
+    // 仅 NOT_FOUND 返回 404，其他错误（DB 异常等）正常抛出由 error boundary 处理
+    if (err instanceof TRPCClientError && err.data?.code === 'NOT_FOUND') {
+      notFound();
+    }
+    throw err;
   }
 }
 
@@ -201,7 +206,7 @@ export default async function WheelPage({ params }: Props) {
                           className="font-semibold text-sm"
                           style={{ color: '#FF6B3D' }}
                         >
-                          {prize.value?.display as string}
+                          {prize.value?.display as string}元
                         </span>
                       )}
                       <span className="text-gray-400 text-xs">

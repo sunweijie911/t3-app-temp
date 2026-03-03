@@ -24,6 +24,9 @@ export async function resolveDrawLimit(
   userId: string,
   maxDrawsPerUser: number,
 ): Promise<number> {
+  // maxDrawsPerUser = 0 表示不限次数，无需查询额外次数
+  if (maxDrawsPerUser === 0) return 0;
+
   const userRecord = await db.query.user.findFirst({
     where: eq(user.id, userId),
     columns: { phoneNumber: true },

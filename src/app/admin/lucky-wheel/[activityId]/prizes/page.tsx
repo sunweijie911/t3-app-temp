@@ -61,7 +61,7 @@ function toPrizeRow(p: {
     type: p.type as PrizeType,
     probability: String(p.probability / 100),
     totalStock: String(p.totalStock),
-    value: (p.value?.display as string) ?? '',
+    value: ((p.value?.display as string) ?? '').replace(/[^\d.]/g, ''),
   };
 }
 
@@ -185,7 +185,7 @@ export default function AdminPrizesPage({ params }: Props) {
       {
         _key: key,
         name: '',
-        type: 'thanks',
+        type: 'physical',
         probability: '',
         totalStock: '',
         value: '',
@@ -307,12 +307,35 @@ export default function AdminPrizesPage({ params }: Props) {
       title: '价值',
       dataIndex: 'value',
       render: (_, row) => (
-        <Input
-          onChange={(e) => updateRow(row._key, { value: e.target.value })}
-          placeholder="如：88元"
-          style={{ width: 120 }}
-          value={row.value}
-        />
+        <Space.Compact style={{ width: 130 }}>
+          <InputNumber
+            min={0}
+            onChange={(val) =>
+              updateRow(row._key, {
+                value: val == null ? '' : String(val),
+              })
+            }
+            placeholder="0"
+            step={0.01}
+            style={{ flex: 1 }}
+            value={row.value === '' ? null : Number(row.value)}
+          />
+          <Typography.Text
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              padding: '0 8px',
+              background: '#fafafa',
+              border: '1px solid #d9d9d9',
+              borderLeft: 0,
+              borderRadius: '0 6px 6px 0',
+              color: '#6b7280',
+              fontSize: 13,
+            }}
+          >
+            元
+          </Typography.Text>
+        </Space.Compact>
       ),
     },
     {
@@ -391,14 +414,14 @@ export default function AdminPrizesPage({ params }: Props) {
 
           {rows.length > 0 && (
             <Alert
-              message={
+              showIcon
+              style={{ marginBottom: 16 }}
+              title={
                 <>
                   奖品概率总计：<strong>{totalPctDisplay}%</strong>
                   {isPctValid ? ' ✓' : ' — 建议调整至 100%'}
                 </>
               }
-              showIcon
-              style={{ marginBottom: 16 }}
               type={isPctValid ? 'success' : 'warning'}
             />
           )}

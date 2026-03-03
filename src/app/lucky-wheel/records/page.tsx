@@ -28,7 +28,7 @@ export default function RecordsPage() {
           <MyRecords />
         </div>
       </main>
-      <Footer />
+      <Footer subtitle="活动最终解释权归主办方所有" title="幸运大转盘" />
     </HydrateClient>
   );
 }

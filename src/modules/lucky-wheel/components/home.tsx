@@ -63,7 +63,7 @@ export default async function LuckyWheelHome() {
           </Suspense>
         </section>
       </main>
-      <Footer />
+      <Footer subtitle="活动最终解释权归主办方所有" title="幸运大转盘" />
     </HydrateClient>
   );
 }
