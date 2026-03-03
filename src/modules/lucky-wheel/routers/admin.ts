@@ -72,7 +72,7 @@ export const luckyWheelAdminRouter = createTRPCRouter({
     return ctx.db
       .select()
       .from(wheelActivities)
-      .orderBy(asc(wheelActivities.sortOrder));
+      .orderBy(desc(wheelActivities.createdAt));
   }),
 
   upsertActivity: adminProcedure
@@ -151,6 +151,38 @@ export const luckyWheelAdminRouter = createTRPCRouter({
       await ctx.db
         .update(wheelActivities)
         .set({ isActive: true })
+        .where(eq(wheelActivities.id, input.id));
+
+      return { success: true };
+    }),
+
+  removeActivity: adminProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      // 仅允许删除已下架的活动
+      const [activity] = await ctx.db
+        .select({ isActive: wheelActivities.isActive })
+        .from(wheelActivities)
+        .where(eq(wheelActivities.id, input.id));
+
+      if (!activity) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: '活动不存在' });
+      }
+      if (activity.isActive) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: '请先下架活动再删除',
+        });
+      }
+
+      // wheelDrawRecords.activityId 没有 onDelete cascade，需要手动清理
+      await ctx.db
+        .delete(wheelDrawRecords)
+        .where(eq(wheelDrawRecords.activityId, input.id));
+
+      // wheelPrizes 和 wheelExtraChances 已配置 cascade，删活动时自动级联
+      await ctx.db
+        .delete(wheelActivities)
         .where(eq(wheelActivities.id, input.id));
 
       return { success: true };

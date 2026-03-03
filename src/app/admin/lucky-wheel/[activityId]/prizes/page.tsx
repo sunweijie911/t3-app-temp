@@ -23,7 +23,6 @@ import {
   InputNumber,
   Select,
   Space,
-  Switch,
   Table,
   Typography,
 } from 'antd';
@@ -115,6 +114,10 @@ interface Props {
 
 export default function AdminPrizesPage({ params }: Props) {
   const { activityId } = use(params);
+
+  const { data: activities } = api.luckyWheel.admin.listActivities.useQuery();
+  const activityName =
+    activities?.find((a) => a.id === activityId)?.name ?? '活动';
 
   const { data: prizes, refetch } = api.luckyWheel.admin.getPrizes.useQuery({
     activityId,
@@ -311,26 +314,36 @@ export default function AdminPrizesPage({ params }: Props) {
       ),
     },
     {
-      title: '状态',
-      dataIndex: 'isActive',
-      render: (_, row) => (
-        <Switch
-          checked={row.isActive}
-          checkedChildren="上线"
-          onChange={(checked) => updateRow(row._key, { isActive: checked })}
-          unCheckedChildren="下线"
-        />
-      ),
-    },
-    {
       title: '操作',
       dataIndex: '_key',
-      render: (_, row) =>
-        !row.id ? (
-          <Button danger onClick={() => removeRow(row._key)} type="link">
-            删除
-          </Button>
-        ) : null,
+      render: (_, row) => (
+        <Space>
+          {row.isActive ? (
+            <Button
+              danger
+              onClick={() => updateRow(row._key, { isActive: false })}
+              size="small"
+              variant="outlined"
+            >
+              下架
+            </Button>
+          ) : (
+            <Button
+              onClick={() => updateRow(row._key, { isActive: true })}
+              size="small"
+              style={{ color: '#389e0d', borderColor: '#b7eb8f' }}
+              variant="outlined"
+            >
+              上架
+            </Button>
+          )}
+          {!row.id && (
+            <Button danger onClick={() => removeRow(row._key)} size="small">
+              删除
+            </Button>
+          )}
+        </Space>
+      ),
     },
   ];
 
@@ -350,8 +363,13 @@ export default function AdminPrizesPage({ params }: Props) {
             <Breadcrumb
               items={[
                 {
+                  title: <Link href="/admin/lucky-wheel">大转盘管理</Link>,
+                },
+                {
                   title: (
-                    <Link href="/admin/lucky-wheel/activities">活动管理</Link>
+                    <Link href={`/admin/lucky-wheel/${activityId}`}>
+                      {activityName}
+                    </Link>
                   ),
                 },
                 { title: '奖品配置' },
@@ -374,7 +392,7 @@ export default function AdminPrizesPage({ params }: Props) {
             <Alert
               message={
                 <>
-                  上线奖品概率总计：<strong>{totalPctDisplay}%</strong>
+                  上架奖品概率总计：<strong>{totalPctDisplay}%</strong>
                   {isPctValid ? ' ✓' : ' — 建议调整至 100%'}
                 </>
               }

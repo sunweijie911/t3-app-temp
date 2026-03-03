@@ -56,11 +56,6 @@ const modules: Record<string, ModuleDefinition> = {
     ],
     adminNavItems: [
       {
-        label: '活动管理',
-        href: '/admin/lucky-wheel/activities',
-        description: '创建、编辑和管理转盘活动',
-      },
-      {
         label: '中奖记录',
         href: '/admin/lucky-wheel/records',
         description: '查看中奖记录，更新发货状态',

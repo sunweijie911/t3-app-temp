@@ -1,6 +1,5 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { MyRecordsSheet } from '@/modules/lucky-wheel/components/record/my-records';
 import { getSession } from '@/server/better-auth/server';
 import { api, HydrateClient } from '@/trpc/server';
 import { WheelSection } from './wheel-section';
@@ -63,7 +62,13 @@ export default async function WheelPage({ params }: Props) {
         </Link>
 
         <div className="mx-auto max-w-2xl px-4 pt-16 pb-12">
-          <h1 className="mb-8 text-center font-bold text-3xl text-white">
+          <h1
+            className="mb-8 text-center font-extrabold text-3xl text-white"
+            style={{
+              textShadow:
+                '0 2px 8px rgba(0,0,0,0.15), 0 0 20px rgba(255,255,255,0.2)',
+            }}
+          >
             {activity.name}
           </h1>
 
@@ -92,7 +97,7 @@ export default async function WheelPage({ params }: Props) {
             />
           )}
 
-          {/* Rules — frosted glass card, always shown */}
+          {/* 规则区 — 毛玻璃卡片 + 装饰性标题 */}
           <div
             className="mt-10 rounded-[30px] p-6"
             style={{
@@ -102,7 +107,24 @@ export default async function WheelPage({ params }: Props) {
                 'linear-gradient(180deg, rgba(255,255,255,0.8) 0%, rgba(255,255,255,1) 56%)',
             }}
           >
-            <h3 className="mb-3 font-semibold text-gray-900">活动规则</h3>
+            {/* 装饰性标题 — 左右对称分隔线 */}
+            <div className="mb-4 flex items-center gap-3">
+              <div
+                className="h-px flex-1"
+                style={{
+                  background:
+                    'linear-gradient(90deg, transparent 0%, #FFB088 100%)',
+                }}
+              />
+              <h3 className="shrink-0 font-bold text-gray-800">活动规则</h3>
+              <div
+                className="h-px flex-1"
+                style={{
+                  background:
+                    'linear-gradient(90deg, #FFB088 0%, transparent 100%)',
+                }}
+              />
+            </div>
             {activity.rules?.html && (
               <div
                 className="rich-text text-gray-500 text-sm"
@@ -112,9 +134,6 @@ export default async function WheelPage({ params }: Props) {
             )}
           </div>
         </div>
-
-        {/* My records bottom sheet */}
-        <MyRecordsSheet />
       </main>
     </HydrateClient>
   );

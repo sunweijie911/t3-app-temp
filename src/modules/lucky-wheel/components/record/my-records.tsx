@@ -1,6 +1,5 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
 import { RECORD_STATUS_LABELS } from '@/modules/lucky-wheel/constants';
 import { api } from '@/trpc/react';
 
@@ -26,7 +25,7 @@ function StatusTag({ status }: { status: string }) {
 
 // ─── Shared record list rendering (used by both Sheet and standalone page) ───
 
-function RecordListContent({
+export function RecordListContent({
   records,
   isLoading,
 }: {
@@ -109,121 +108,4 @@ export function MyRecords() {
     api.luckyWheel.record.myRecords.useQuery();
 
   return <RecordListContent isLoading={isLoading} records={records} />;
-}
-
-// ─── Bottom sheet component (for the wheel [slug] page) ───
-
-export function MyRecordsSheet() {
-  const [open, setOpen] = useState(false);
-
-  const { data: records, isLoading } = api.luckyWheel.record.myRecords.useQuery(
-    undefined,
-    { enabled: open },
-  );
-
-  const toggle = useCallback(() => setOpen((v) => !v), []);
-
-  // Lock body scroll when open
-  useEffect(() => {
-    if (open) {
-      document.body.style.overflow = 'hidden';
-      return () => {
-        document.body.style.overflow = '';
-      };
-    }
-  }, [open]);
-
-  return (
-    <>
-      {/* Fixed right-side vertical trigger button */}
-      <button
-        className="fixed top-1/2 right-0 z-40 -translate-y-1/2 rounded-l-lg px-1.5 py-3 font-bold text-white text-xs shadow-lg"
-        onClick={toggle}
-        style={{
-          writingMode: 'vertical-rl',
-          background: 'linear-gradient(180deg, #FF8D67 0%, #F0361D 100%)',
-        }}
-        type="button"
-      >
-        我的奖品
-      </button>
-
-      {/* Backdrop + Sheet */}
-      {open && (
-        <div className="fixed inset-0 z-50">
-          {/* Backdrop */}
-          <button
-            aria-label="关闭奖品面板"
-            className="absolute inset-0 bg-black/40"
-            onClick={toggle}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') toggle();
-            }}
-            type="button"
-          />
-
-          {/* Bottom sheet */}
-          <div
-            className="lw-sheet-slide-up absolute right-0 bottom-0 left-0 flex flex-col overflow-hidden rounded-t-3xl"
-            role="dialog"
-            style={{ height: '67vh' }}
-          >
-            {/* Header */}
-            <div
-              className="flex items-center justify-between px-5 py-4"
-              style={{
-                background: 'linear-gradient(145deg, #FEDAA0, #FE957B)',
-              }}
-            >
-              <h3
-                className="font-bold text-lg"
-                style={{
-                  background:
-                    'linear-gradient(90deg, #591B00, #A64B21 47%, #5A1702)',
-                  WebkitBackgroundClip: 'text',
-                  WebkitTextFillColor: 'transparent',
-                }}
-              >
-                我的奖品
-              </h3>
-              <button
-                aria-label="关闭"
-                className="flex h-7 w-7 items-center justify-center rounded-full bg-white/30 text-white"
-                onClick={toggle}
-                type="button"
-              >
-                <svg
-                  aria-hidden="true"
-                  fill="none"
-                  height="12"
-                  viewBox="0 0 14 14"
-                  width="12"
-                >
-                  <path
-                    d="M1 1L13 13M13 1L1 13"
-                    stroke="currentColor"
-                    strokeLinecap="round"
-                    strokeWidth="2"
-                  />
-                </svg>
-              </button>
-            </div>
-
-            {/* List container — frosted glass */}
-            <div
-              className="flex-1 overflow-y-auto px-4 py-4"
-              style={{
-                backdropFilter: 'blur(30px)',
-                WebkitBackdropFilter: 'blur(30px)',
-                background:
-                  'linear-gradient(180deg, rgba(255,255,255,0.8) 0%, rgba(255,255,255,1) 56%)',
-              }}
-            >
-              <RecordListContent isLoading={isLoading} records={records} />
-            </div>
-          </div>
-        </div>
-      )}
-    </>
-  );
 }

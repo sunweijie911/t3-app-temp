@@ -1,7 +1,10 @@
 'use client';
 
+import TextAlign from '@tiptap/extension-text-align';
+import Underline from '@tiptap/extension-underline';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
+import './rich-text-editor.css';
 
 interface RichTextEditorProps {
   defaultValue?: string;
@@ -18,24 +21,28 @@ export function RichTextEditor({
   onChange,
 }: RichTextEditorProps) {
   const editor = useEditor({
-    extensions: [StarterKit],
+    extensions: [
+      StarterKit,
+      Underline,
+      TextAlign.configure({ types: ['heading', 'paragraph'] }),
+    ],
     content: defaultValue,
     onUpdate: ({ editor: ed }) => {
       onChange(ed.getHTML());
     },
     editorProps: {
       attributes: {
-        class:
-          'min-h-28 px-3 py-2 text-sm text-gray-700 focus:outline-none prose prose-sm max-w-none',
+        class: 'focus:outline-none',
       },
     },
     immediatelyRender: false,
   });
 
   return (
-    <div className="overflow-hidden rounded-lg border border-gray-200">
+    <div className="rich-text-editor overflow-hidden rounded-lg border border-gray-200">
       {/* 工具栏 */}
-      <div className="flex flex-wrap items-center gap-1 border-gray-200 border-b bg-gray-50 px-2 py-1.5">
+      <div className="flex flex-wrap items-center gap-0.5 border-gray-200 border-b bg-gray-50 px-2 py-1.5">
+        {/* 文本格式 */}
         <ToolbarButton
           active={editor?.isActive('bold')}
           className="font-bold"
@@ -51,13 +58,23 @@ export function RichTextEditor({
           title="斜体 (Ctrl+I)"
         />
         <ToolbarButton
+          active={editor?.isActive('underline')}
+          className="underline"
+          label="U"
+          onClick={() => editor?.chain().focus().toggleUnderline().run()}
+          title="下划线 (Ctrl+U)"
+        />
+        <ToolbarButton
           active={editor?.isActive('strike')}
           className="line-through"
-          label="S̶"
+          label="S"
           onClick={() => editor?.chain().focus().toggleStrike().run()}
           title="删除线"
         />
+
         <Divider />
+
+        {/* 标题 */}
         <ToolbarButton
           active={editor?.isActive('heading', { level: 2 })}
           label="H2"
@@ -74,10 +91,35 @@ export function RichTextEditor({
           }
           title="三级标题"
         />
+
         <Divider />
+
+        {/* 对齐 */}
+        <ToolbarButton
+          active={editor?.isActive({ textAlign: 'left' })}
+          label="左"
+          onClick={() => editor?.chain().focus().setTextAlign('left').run()}
+          title="左对齐"
+        />
+        <ToolbarButton
+          active={editor?.isActive({ textAlign: 'center' })}
+          label="中"
+          onClick={() => editor?.chain().focus().setTextAlign('center').run()}
+          title="居中"
+        />
+        <ToolbarButton
+          active={editor?.isActive({ textAlign: 'right' })}
+          label="右"
+          onClick={() => editor?.chain().focus().setTextAlign('right').run()}
+          title="右对齐"
+        />
+
+        <Divider />
+
+        {/* 列表 */}
         <ToolbarButton
           active={editor?.isActive('bulletList')}
-          label="• 列表"
+          label="● 列表"
           onClick={() => editor?.chain().focus().toggleBulletList().run()}
           title="无序列表"
         />
@@ -87,16 +129,14 @@ export function RichTextEditor({
           onClick={() => editor?.chain().focus().toggleOrderedList().run()}
           title="有序列表"
         />
+
         <Divider />
+
+        {/* 分割线 */}
         <ToolbarButton
-          label="撤销"
-          onClick={() => editor?.chain().focus().undo().run()}
-          title="撤销 (Ctrl+Z)"
-        />
-        <ToolbarButton
-          label="重做"
-          onClick={() => editor?.chain().focus().redo().run()}
-          title="重做 (Ctrl+Y)"
+          label="分割线"
+          onClick={() => editor?.chain().focus().setHorizontalRule().run()}
+          title="插入分割线"
         />
       </div>
 
@@ -110,7 +150,7 @@ function ToolbarButton({
   label,
   title,
   active,
-  className = '',
+  className: extraClass = '',
   onClick,
 }: {
   label: string;
@@ -121,7 +161,7 @@ function ToolbarButton({
 }) {
   return (
     <button
-      className={`rounded px-2 py-1 text-xs transition-colors ${className} ${
+      className={`rounded px-2 py-1 text-xs transition-colors ${extraClass} ${
         active
           ? 'bg-orange-100 text-orange-700'
           : 'text-gray-600 hover:bg-gray-200'

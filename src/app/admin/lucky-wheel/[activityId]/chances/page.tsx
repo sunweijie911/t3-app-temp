@@ -13,6 +13,7 @@ import {
   Tag,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import dayjs from 'dayjs';
 import Link from 'next/link';
 import { use, useState } from 'react';
 import { toast } from 'sonner';
@@ -32,6 +33,10 @@ interface Props {
 
 export default function AdminChancesPage({ params }: Props) {
   const { activityId } = use(params);
+
+  const { data: activities } = api.luckyWheel.admin.listActivities.useQuery();
+  const activityName =
+    activities?.find((a) => a.id === activityId)?.name ?? '活动';
 
   const { data: chances, refetch } =
     api.luckyWheel.admin.listExtraChances.useQuery({ activityId });
@@ -104,7 +109,7 @@ export default function AdminChancesPage({ params }: Props) {
     {
       title: '创建时间',
       dataIndex: 'createdAt',
-      render: (val: Date | string) => new Date(val).toLocaleString('zh-CN'),
+      render: (val: Date | string) => dayjs(val).format('YYYY-MM-DD HH:mm:ss'),
     },
     {
       title: '操作',
@@ -151,30 +156,34 @@ export default function AdminChancesPage({ params }: Props) {
             padding: '48px 16px',
           }}
         >
-          {/* 顶部：面包屑 + 添加按钮 */}
+          {/* 面包屑 */}
+          <Breadcrumb
+            items={[
+              {
+                title: <Link href="/admin/lucky-wheel">大转盘管理</Link>,
+              },
+              {
+                title: (
+                  <Link href={`/admin/lucky-wheel/${activityId}`}>
+                    {activityName}
+                  </Link>
+                ),
+              },
+              { title: '额外次数配置' },
+            ]}
+            style={{ marginBottom: 16 }}
+          />
           <div
             style={{
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
-              marginBottom: 32,
+              marginBottom: 24,
             }}
           >
-            <div>
-              <Breadcrumb
-                items={[
-                  {
-                    title: (
-                      <Link href="/admin/lucky-wheel/activities">活动管理</Link>
-                    ),
-                  },
-                  { title: '额外次数配置' },
-                ]}
-              />
-              <p style={{ marginTop: 8, color: '#6b7280', fontSize: 14 }}>
-                为指定手机号配置额外抽奖次数（在基础次数之上叠加）
-              </p>
-            </div>
+            <p style={{ margin: 0, color: '#6b7280', fontSize: 14 }}>
+              为指定手机号配置额外抽奖次数（在基础次数之上叠加）
+            </p>
             <Button
               onClick={() =>
                 openModal({ phone: '', extraChances: 1, note: '' })

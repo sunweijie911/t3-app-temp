@@ -1,6 +1,11 @@
 /* biome-ignore lint/suspicious/noUnknownAtRules: UnoCSS directive */
 @unocss all;
 
+/* 修复 UnoCSS reset 将 button background 设为 transparent 导致 antd 按钮闪白 */
+.ant-btn-primary:not(:disabled) {
+  background-color: var(--ant-color-primary, #ff6b3d);
+}
+
 /* Lucky Wheel animations */
 @keyframes lw-modal-slide-up {
   from {
@@ -42,6 +47,43 @@
 
 .lw-sheet-slide-up {
   animation: lw-sheet-slide-up 0.3s ease-out;
+}
+
+/* 彩带掉落动画 */
+@keyframes lw-confetti {
+  0% {
+    opacity: 1;
+    transform: translateY(-10px) rotate(0deg) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(350px) rotate(720deg) scale(0.5);
+  }
+}
+
+/* 数字翻滚效果 */
+@keyframes lw-number-pop {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.3);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.lw-confetti-piece {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  animation: lw-confetti 2.5s ease-in forwards;
+}
+
+.lw-number-pop {
+  animation: lw-number-pop 0.3s ease-out;
 }
 
 /* 富文本展示区基础样式（替代 Tailwind prose，因项目用 UnoCSS 未安装 typography preset） */

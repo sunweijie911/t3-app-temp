@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { authClient } from '@/lib/auth-client';
+import { MyPrizesSheet } from '@/modules/lucky-wheel/components/wheel/my-prizes-sheet';
 import { UserInfoModal } from '@/modules/lucky-wheel/components/wheel/user-info-modal';
 import type { Prize } from '@/modules/lucky-wheel/components/wheel/wheel-container';
 import { WheelContainer } from '@/modules/lucky-wheel/components/wheel/wheel-container';
@@ -51,8 +52,9 @@ export function WheelSection({
   prizes,
   initialLoggedIn,
 }: WheelSectionProps) {
-  const { data: session } = authClient.useSession();
-  const isLoggedIn = session !== undefined ? !!session?.user : initialLoggedIn;
+  const { data: session, isPending: isSessionLoading } =
+    authClient.useSession();
+  const isLoggedIn = isSessionLoading ? initialLoggedIn : !!session?.user;
 
   // mounted 标志：SSR/hydration 阶段不渲染 Modal，待客户端 localStorage 读取完毕后再判断
   const [mounted, setMounted] = useState(false);
@@ -82,9 +84,15 @@ export function WheelSection({
   }
 
   // mounted 前不显示 Modal（避免 SSR hydration 闪现）
+  // session 加载中不显示（避免 isPending 期间 isLoggedIn 短暂翻转导致弹窗闪现）
   // 登录用户：DB 查询期间也不显示（isLoadingUserInfo 为 true 时阻断）
   const showModal =
-    mounted && (!isLoggedIn || (!isLoadingUserInfo && !userInfo));
+    mounted &&
+    !isSessionLoading &&
+    (!isLoggedIn || (!isLoadingUserInfo && !userInfo));
+
+  // 用 ref 暴露打开"我的奖品"的方法给 WheelContainer 的回调
+  const prizesSheetRef = useRef<{ open: () => void }>(null);
 
   return (
     <>
@@ -98,8 +106,10 @@ export function WheelSection({
         address={userInfo?.address}
         isLoggedIn={isLoggedIn}
         name={userInfo?.name}
+        onViewPrizes={() => prizesSheetRef.current?.open()}
         prizes={prizes}
       />
+      <MyPrizesSheet isLoggedIn={isLoggedIn} ref={prizesSheetRef} />
     </>
   );
 }

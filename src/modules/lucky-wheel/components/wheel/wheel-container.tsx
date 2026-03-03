@@ -19,6 +19,7 @@ interface WheelContainerProps {
   isLoggedIn: boolean;
   name?: string;
   address?: string;
+  onViewPrizes?: () => void;
 }
 
 export function WheelContainer({
@@ -27,6 +28,7 @@ export function WheelContainer({
   isLoggedIn,
   name,
   address,
+  onViewPrizes,
 }: WheelContainerProps) {
   const wheelRef = useRef<{
     play: () => void;
@@ -62,7 +64,7 @@ export function WheelContainer({
     const measure = () => {
       if (spinningRef.current) return;
       const w = el.clientWidth;
-      setWheelSize(Math.min(340, Math.floor(w * 0.85)));
+      setWheelSize(Math.min(360, Math.floor(w * 0.9)));
     };
     measure();
 
@@ -71,36 +73,46 @@ export function WheelContainer({
     return () => ro.disconnect();
   }, []);
 
-  // Build lucky-canvas config from prizes — warm alternating colors
+  // 奖品扇区配置 — 深浅交替暖色
   const lcPrizes = prizes.map((p, i) => ({
-    background: i % 2 === 0 ? '#FFE5D9' : '#FFF4E6',
+    background: i % 2 === 0 ? '#ffd099' : '#fff',
     fonts: [
       {
         text: p.name,
         top: '10%',
-        fontColor: i % 2 === 0 ? '#FF6B3D' : '#FF8C42',
-        fontSize: '13px',
-        fontWeight: 'bold',
-        wordWrap: true,
-        lengthLimit: '80%',
-        lineClamp: 2,
+        fontSize: '14px',
       },
     ],
     ...(p.image ? { imgs: [{ src: p.image, top: '40%', width: '30%' }] } : {}),
   }));
 
+  // 外圈装饰 — 暖橙色带灯珠圆环图片
+  // padding 需匹配图片圆环的视觉宽度，避免内侧遮挡扇区
   const blocks = [
-    { padding: '13px', background: '#FFA04B' },
-    { padding: '5px', background: '#FFD4A8' },
+    {
+      padding: '36px',
+      imgs: [
+        {
+          src: '/lucky-wheel/wheel-frame.png',
+          width: '100%',
+          height: '100%',
+          top: '5px',
+          left: '3px',
+        },
+      ],
+    },
   ];
 
+  // 中心按钮 — 带指针的"开始抽奖"图片
   const buttons = [
     {
-      radius: '25%',
-      background: '#FF6B3D',
-      pointer: true,
-      fonts: [
-        { text: '抽奖', top: '-10px', fontColor: '#fff', fontSize: '18px' },
+      radius: '45px',
+      imgs: [
+        {
+          src: '/lucky-wheel/wheel-button.png',
+          width: '100%',
+          top: '-127%',
+        },
       ],
     },
   ];
@@ -109,7 +121,13 @@ export function WheelContainer({
     speed: 20,
     accelerationTime: 2500,
     decelerationTime: 3500,
-    offsetDegree: 30,
+    offsetDegree: prizes.length > 0 ? -(360 / prizes.length / 2) : 0,
+  };
+
+  const defaultStyle = {
+    fontColor: '#913229',
+    fontSize: '15px',
+    fontWeight: '700',
   };
 
   const handleStart = useCallback(async () => {
@@ -181,11 +199,12 @@ export function WheelContainer({
   }, []);
 
   return (
-    <div className="flex flex-col items-center gap-4" ref={containerRef}>
+    <div className="flex flex-col items-center gap-5" ref={containerRef}>
       <LuckyWheel
         blocks={blocks}
         buttons={buttons}
         defaultConfig={defaultConfig}
+        defaultStyle={defaultStyle}
         height={wheelSize}
         key={wheelSize}
         onEnd={handleEnd}
@@ -195,17 +214,30 @@ export function WheelContainer({
         width={wheelSize}
       />
 
-      {/* Remaining draws hint */}
-      {isLoggedIn && drawsData && !drawsData.isUnlimited && (
-        <p className="text-sm text-white/90">
+      {/* 胶囊样式抽奖次数展示 — 始终渲染占位，数据到达后淡入 */}
+      {isLoggedIn && (
+        <div
+          className="flex items-center gap-1.5 rounded-full px-5 py-2 text-sm text-white shadow-md transition-opacity duration-300"
+          style={{
+            opacity: drawsData && !drawsData.isUnlimited ? 1 : 0,
+            background:
+              'linear-gradient(135deg, rgba(255,255,255,0.25) 0%, rgba(255,255,255,0.1) 100%)',
+            backdropFilter: 'blur(10px)',
+            WebkitBackdropFilter: 'blur(10px)',
+            border: '1px solid rgba(255,255,255,0.3)',
+          }}
+        >
           剩余抽奖次数：
-          <span className="font-bold text-white">{drawsData.remaining}</span>
-        </p>
+          <span className="font-extrabold text-base text-yellow-200">
+            {drawsData?.remaining ?? 0}
+          </span>
+        </div>
       )}
 
       <PrizeModal
         isWin={result?.isWin ?? false}
         onClose={handleModalClose}
+        onViewPrizes={onViewPrizes}
         open={modalOpen}
         prize={result?.prize ?? null}
       />

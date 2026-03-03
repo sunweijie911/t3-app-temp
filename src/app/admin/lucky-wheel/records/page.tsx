@@ -12,6 +12,7 @@ import {
   Tag,
   Typography,
 } from 'antd';
+import dayjs from 'dayjs';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { useState } from 'react';
@@ -138,10 +139,15 @@ export default function AdminRecordsPage() {
   const { data: activities } = api.luckyWheel.admin.listActivities.useQuery();
   const utils = api.useUtils();
 
+  const hasActivity = !!filters.activityId;
   const queryInput = { ...buildFilterInput(filters), limit, offset };
 
-  const { data, refetch } =
-    api.luckyWheel.admin.getRecords.useQuery(queryInput);
+  const { data, refetch } = api.luckyWheel.admin.getRecords.useQuery(
+    queryInput,
+    {
+      enabled: hasActivity,
+    },
+  );
 
   const updateMutation = api.luckyWheel.admin.updateRecordStatus.useMutation({
     onSuccess: () => {
@@ -155,11 +161,6 @@ export default function AdminRecordsPage() {
 
   function applyFilters(patch: Partial<Filters>) {
     setFilters((prev) => ({ ...prev, ...patch }));
-    setOffset(0);
-  }
-
-  function resetFilters() {
-    setFilters(defaultFilters);
     setOffset(0);
   }
 
@@ -184,8 +185,6 @@ export default function AdminRecordsPage() {
       setExporting(false);
     }
   }
-
-  const hasActiveFilters = Object.values(filters).some(Boolean);
 
   const columns: TableProps<RecordItem>['columns'] = [
     {
@@ -279,7 +278,7 @@ export default function AdminRecordsPage() {
       key: 'createdAt',
       render: (_, record) => (
         <Typography.Text style={{ fontSize: 13 }}>
-          {new Date(record.createdAt).toLocaleString('zh-CN')}
+          {dayjs(record.createdAt).format('YYYY-MM-DD HH:mm:ss')}
         </Typography.Text>
       ),
     },
@@ -331,12 +330,31 @@ export default function AdminRecordsPage() {
                 {
                   title: <Link href="/admin/lucky-wheel">大转盘管理</Link>,
                 },
+                ...(filters.activityId
+                  ? [
+                      {
+                        title: (
+                          <Link
+                            href={`/admin/lucky-wheel/${filters.activityId}`}
+                          >
+                            {activities?.find(
+                              (a) => a.id === filters.activityId,
+                            )?.name ?? '活动'}
+                          </Link>
+                        ),
+                      },
+                    ]
+                  : []),
                 {
-                  title: '中奖记录管理',
+                  title: '中奖记录',
                 },
               ]}
             />
-            <Button loading={exporting} onClick={handleExport}>
+            <Button
+              disabled={!hasActivity}
+              loading={exporting}
+              onClick={handleExport}
+            >
               {exporting ? '导出中...' : '导出 CSV'}
             </Button>
           </div>
@@ -355,17 +373,16 @@ export default function AdminRecordsPage() {
                 />
               </Form.Item>
 
-              <Form.Item label="活动">
+              <Form.Item label="活动" required>
                 <Select
-                  allowClear
                   onChange={(v) => applyFilters({ activityId: v ?? '' })}
-                  options={[
-                    ...(activities?.map((a) => ({
+                  options={
+                    activities?.map((a) => ({
                       value: a.id,
                       label: a.name,
-                    })) ?? []),
-                  ]}
-                  placeholder="全部活动"
+                    })) ?? []
+                  }
+                  placeholder="请选择活动"
                   style={{ width: 160 }}
                   value={filters.activityId || undefined}
                 />
@@ -416,36 +433,38 @@ export default function AdminRecordsPage() {
                   value={filters.status || undefined}
                 />
               </Form.Item>
-
-              {hasActiveFilters && (
-                <Form.Item>
-                  <Button onClick={resetFilters}>重置筛选</Button>
-                </Form.Item>
-              )}
             </Form>
           </Card>
 
           {/* 数据表格 */}
-          <Card>
-            <Table<RecordItem>
-              columns={columns}
-              dataSource={data?.items ?? []}
-              loading={!data}
-              locale={{ emptyText: '暂无符合条件的记录' }}
-              pagination={{
-                current: currentPage,
-                pageSize: limit,
-                total: data?.total ?? 0,
-                showSizeChanger: false,
-                showTotal: (total) => `共 ${total} 条`,
-                onChange: (page) => {
-                  setOffset((page - 1) * limit);
-                },
-              }}
-              rowKey="id"
-              scroll={{ x: 900 }}
-            />
-          </Card>
+          {!hasActivity ? (
+            <Card style={{ textAlign: 'center', padding: '48px 0' }}>
+              <Typography.Text type="secondary">
+                请先选择一个活动查看中奖记录
+              </Typography.Text>
+            </Card>
+          ) : (
+            <Card>
+              <Table<RecordItem>
+                columns={columns}
+                dataSource={data?.items ?? []}
+                loading={!data}
+                locale={{ emptyText: '暂无符合条件的记录' }}
+                pagination={{
+                  current: currentPage,
+                  pageSize: limit,
+                  total: data?.total ?? 0,
+                  showSizeChanger: false,
+                  showTotal: (total) => `共 ${total} 条`,
+                  onChange: (page) => {
+                    setOffset((page - 1) * limit);
+                  },
+                }}
+                rowKey="id"
+                scroll={{ x: 900 }}
+              />
+            </Card>
+          )}
         </div>
       </main>
     </>

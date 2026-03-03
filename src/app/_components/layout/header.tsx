@@ -24,12 +24,16 @@ export function Header() {
   const mod = getModuleByPathname(pathname, defaultModuleId);
   const theme = mod.theme;
 
+  // 最长前缀匹配，避免 /lucky-wheel 误匹配 /lucky-wheel/records
+  const activeNavHref = [...mod.navLinks]
+    .filter((l) => pathname === l.href || pathname.startsWith(`${l.href}/`))
+    .sort((a, b) => b.href.length - a.href.length)[0]?.href;
+
   const navLinks = (
     <>
       {mod.navLinks.map((link) => {
         if (link.auth && !session?.user) return null;
-        const isActive =
-          pathname === link.href || pathname.startsWith(`${link.href}/`);
+        const isActive = link.href === activeNavHref;
         return (
           <Link
             className={`flex items-center gap-1.5 font-medium text-sm transition-colors ${
