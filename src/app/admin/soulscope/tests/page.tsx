@@ -4,11 +4,9 @@ import type { TableProps } from 'antd';
 import { Breadcrumb, Table, Tag } from 'antd';
 import Link from 'next/link';
 import { Header } from '@/app/_components/layout/header';
-import { api } from '@/trpc/react';
+import { api, type RouterOutputs } from '@/trpc/react';
 
-type TestItem = NonNullable<
-  ReturnType<typeof api.soulscope.test.list.useQuery>['data']
->[number];
+type TestItem = RouterOutputs['soulscope']['test']['list'][number];
 
 const columns: TableProps<TestItem>['columns'] = [
   {

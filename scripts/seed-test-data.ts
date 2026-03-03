@@ -2775,7 +2775,6 @@ async function seedLuckyWheel() {
       slug: 'double12',
       description: '参与转盘抽奖，赢取超值好礼！每人每天可抽 3 次。',
       maxDrawsPerUser: 0, // unlimited total
-      maxDrawsPerDay: 3,
       isActive: true,
       sortOrder: 0,
     })
@@ -2845,8 +2844,9 @@ async function seedLuckyWheel() {
     const result = await db
       .insert(wheelPrizes)
       .values({ ...prize, activityId: ACTIVITY_ID })
-      .onConflictDoNothing({ target: wheelPrizes.id });
-    if (result.rowCount === 0) skipped++;
+      .onConflictDoNothing({ target: wheelPrizes.id })
+      .returning({ id: wheelPrizes.id });
+    if (result.length === 0) skipped++;
     else inserted++;
   }
 

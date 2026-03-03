@@ -1,4 +1,5 @@
 import { TRPCError } from '@trpc/server';
+// cspell:ignore ilike
 import { and, asc, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
@@ -86,7 +87,7 @@ export const luckyWheelAdminRouter = createTRPCRouter({
         endAt: z.string().nullable().optional(),
         maxDrawsPerUser: z.number().int().optional(),
         isActive: z.boolean().optional(),
-        rules: z.record(z.string(), z.unknown()).nullable().optional(),
+        rules: z.object({ html: z.string() }).nullable().optional(),
         sortOrder: z.number().int().optional(),
       }),
     )

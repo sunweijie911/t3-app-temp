@@ -5,13 +5,12 @@ import { Breadcrumb, Table, Tag } from 'antd';
 import Link from 'next/link';
 import { useState } from 'react';
 import { Header } from '@/app/_components/layout/header';
-import { api } from '@/trpc/react';
+import { api, type RouterOutputs } from '@/trpc/react';
 
 const PAGE_SIZE = 20;
 
-type OrderItem = NonNullable<
-  ReturnType<typeof api.soulscope.admin.allOrders.useQuery>['data']
->['items'][number];
+type OrderItem =
+  RouterOutputs['soulscope']['admin']['allOrders']['items'][number];
 
 const STATUS_TAG: Record<string, { color: string; label: string }> = {
   paid: { color: 'green', label: '已付款' },

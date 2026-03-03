@@ -18,19 +18,19 @@ import { api } from '@/trpc/react';
 
 type ConfigType = 'text' | 'password' | 'number' | 'textarea';
 
-type ConfigDef = { key: string; label: string; type: ConfigType };
+type ConfigDef = { configKey: string; label: string; type: ConfigType };
 
 const LLM_CONFIGS: ConfigDef[] = [
-  { key: 'llm.base_url', label: 'API 地址', type: 'text' },
-  { key: 'llm.api_key', label: 'API 密钥', type: 'password' },
-  { key: 'llm.model', label: '模型名称', type: 'text' },
-  { key: 'llm.temperature', label: 'Temperature', type: 'number' },
-  { key: 'llm.max_tokens', label: 'Max Tokens', type: 'number' },
+  { configKey: 'llm.base_url', label: 'API 地址', type: 'text' },
+  { configKey: 'llm.api_key', label: 'API 密钥', type: 'password' },
+  { configKey: 'llm.model', label: '模型名称', type: 'text' },
+  { configKey: 'llm.temperature', label: 'Temperature', type: 'number' },
+  { configKey: 'llm.max_tokens', label: 'Max Tokens', type: 'number' },
 ];
 
 const REPORT_CONFIGS: ConfigDef[] = [
-  { key: 'report.system_prompt', label: '系统提示词', type: 'textarea' },
-  { key: 'report.price', label: '报告价格（元）', type: 'number' },
+  { configKey: 'report.system_prompt', label: '系统提示词', type: 'textarea' },
+  { configKey: 'report.price', label: '报告价格（元）', type: 'number' },
 ];
 
 function ConfigItem({ configKey, label, type }: ConfigDef) {
@@ -138,7 +138,7 @@ function ConfigSection({
     <Card style={{ marginBottom: 24 }} title={title}>
       <Form layout="vertical">
         {configs.map((config) => (
-          <ConfigItem key={config.key} {...config} />
+          <ConfigItem key={config.configKey} {...config} />
         ))}
       </Form>
     </Card>

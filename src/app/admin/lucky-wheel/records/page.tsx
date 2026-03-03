@@ -22,7 +22,7 @@ import {
   RECORD_STATUS_LABELS,
 } from '@/modules/lucky-wheel/constants';
 import type { WheelUserInfo } from '@/modules/lucky-wheel/schema';
-import { api } from '@/trpc/react';
+import { api, type RouterOutputs } from '@/trpc/react';
 
 type Filters = {
   activityId: string;
@@ -122,9 +122,8 @@ const STATUS_TAG_COLOR: Record<string, string> = {
   claimed: 'default',
 };
 
-type RecordItem = NonNullable<
-  ReturnType<typeof api.luckyWheel.admin.getRecords.useQuery>['data']
->['items'][number];
+type RecordItem =
+  RouterOutputs['luckyWheel']['admin']['getRecords']['items'][number];
 
 export default function AdminRecordsPage() {
   const searchParams = useSearchParams();
