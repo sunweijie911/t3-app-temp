@@ -18,7 +18,7 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { useState } from 'react';
 import { toast } from 'sonner';
-import * as XLSX from 'xlsx';
+import XLSX from 'xlsx-js-style';
 import { Header } from '@/app/_components/layout/header';
 import {
   PRIZE_TYPE_LABELS,
@@ -76,38 +76,65 @@ type ExportRecord = {
 
 function toExcel(records: ExportRecord[]): Blob {
   const headers = [
-    '抽奖时间',
     '用户手机',
-    '用户名',
-    '活动',
     '奖品',
-    '奖品类型',
     '状态',
     '收件人',
     '手机',
     '收货地址',
+    '活动',
+    '抽奖时间',
   ];
+  const colWidths = [16, 14, 10, 10, 14, 30, 14, 20];
   const rows = records.map((r) => {
     const info = r.userInfo;
     return [
-      new Date(r.createdAt).toLocaleString('zh-CN'),
       r.user?.phoneNumber ?? r.userId,
-      r.user?.name ?? '',
-      r.activity?.name ?? '',
       r.isWin ? (r.prize?.name ?? '') : '未中奖',
-      r.isWin ? (PRIZE_TYPE_LABELS[r.prize?.type ?? ''] ?? '') : '',
       RECORD_STATUS_LABELS[r.status] ?? r.status,
       info?.name ?? '',
       info?.phone ?? '',
       info?.address ?? '',
+      r.activity?.name ?? '',
+      dayjs(r.createdAt).format('YYYY-MM-DD HH:mm:ss'),
     ];
   });
   const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-  // 表头加粗
+
+  // 列宽
+  ws['!cols'] = colWidths.map((w) => ({ wch: w }));
+  // 冻结首行
+  ws['!freeze'] = { xSplit: 0, ySplit: 1 };
+
+  const border = {
+    top: { style: 'thin', color: { rgb: 'D9D9D9' } },
+    bottom: { style: 'thin', color: { rgb: 'D9D9D9' } },
+    left: { style: 'thin', color: { rgb: 'D9D9D9' } },
+    right: { style: 'thin', color: { rgb: 'D9D9D9' } },
+  } as const;
+  const headerStyle = {
+    font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 11 },
+    fill: { fgColor: { rgb: '4472C4' } },
+    alignment: { horizontal: 'center' as const, vertical: 'center' as const },
+    border,
+  };
+  const cellStyle = {
+    alignment: { vertical: 'center' as const, wrapText: true },
+    border,
+  };
+
+  const totalRows = rows.length + 1;
   for (let c = 0; c < headers.length; c++) {
-    const cell = ws[XLSX.utils.encode_cell({ r: 0, c })];
-    if (cell) cell.s = { font: { bold: true } };
+    // 表头样式
+    const hCell = ws[XLSX.utils.encode_cell({ r: 0, c })];
+    if (hCell) hCell.s = headerStyle;
+    // 数据行样式
+    for (let r = 1; r < totalRows; r++) {
+      const cell = ws[XLSX.utils.encode_cell({ r, c })];
+      if (cell) cell.s = cellStyle;
+    }
   }
+
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, '中奖记录');
   // cspell:ignore wbout openxmlformats officedocument spreadsheetml
@@ -190,7 +217,11 @@ export default function AdminRecordsPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `records_${Date.now()}.xlsx`;
+      const activityName =
+        activities?.find((a) => a.id === filters.activityId)?.name ??
+        '全部活动';
+      const date = new Date().toISOString().slice(0, 10);
+      a.download = `中奖记录_${activityName}_${date}.xlsx`;
       a.click();
       URL.revokeObjectURL(url);
       toast.success(`已导出 ${records.length} 条记录`);
