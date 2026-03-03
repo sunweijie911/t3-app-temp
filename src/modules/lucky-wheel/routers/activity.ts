@@ -61,6 +61,7 @@ export const activityRouter = createTRPCRouter({
           name: wheelPrizes.name,
           image: wheelPrizes.image,
           type: wheelPrizes.type,
+          value: wheelPrizes.value,
           sortOrder: wheelPrizes.sortOrder,
         })
         .from(wheelPrizes)

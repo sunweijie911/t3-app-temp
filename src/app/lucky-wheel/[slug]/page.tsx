@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { PRIZE_TYPE_LABELS } from '@/modules/lucky-wheel/constants';
 import { getSession } from '@/server/better-auth/server';
 import { api, HydrateClient } from '@/trpc/server';
 import { WheelSection } from './wheel-section';
@@ -97,7 +98,7 @@ export default async function WheelPage({ params }: Props) {
             />
           )}
 
-          {/* 规则区 — 毛玻璃卡片 + 装饰性标题 */}
+          {/* 活动规则 — 毛玻璃卡片 + 装饰性标题 */}
           <div
             className="mt-10 rounded-[30px] p-6"
             style={{
@@ -133,6 +134,85 @@ export default async function WheelPage({ params }: Props) {
               />
             )}
           </div>
+
+          {/* 奖品明细 */}
+          {(() => {
+            const displayPrizes = activity.prizes.filter(
+              (p) => p.type !== 'thanks',
+            );
+            if (displayPrizes.length === 0) return null;
+            return (
+              <div
+                className="mt-10 rounded-[30px] p-6"
+                style={{
+                  backdropFilter: 'blur(30px)',
+                  WebkitBackdropFilter: 'blur(30px)',
+                  background:
+                    'linear-gradient(180deg, rgba(255,255,255,0.8) 0%, rgba(255,255,255,1) 56%)',
+                }}
+              >
+                {/* 装饰性标题 */}
+                <div className="mb-5 flex items-center gap-3">
+                  <div
+                    className="h-px flex-1"
+                    style={{
+                      background:
+                        'linear-gradient(90deg, transparent 0%, #FFB088 100%)',
+                    }}
+                  />
+                  <h3 className="shrink-0 font-bold text-gray-800">奖品明细</h3>
+                  <div
+                    className="h-px flex-1"
+                    style={{
+                      background:
+                        'linear-gradient(90deg, #FFB088 0%, transparent 100%)',
+                    }}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                  {displayPrizes.map((prize) => (
+                    <div
+                      className="flex flex-col items-center gap-2 rounded-2xl p-3"
+                      key={prize.id}
+                      style={{ background: 'rgba(255,107,61,0.06)' }}
+                    >
+                      {prize.image ? (
+                        <img
+                          alt={prize.name}
+                          className="h-16 w-16 rounded-xl object-contain"
+                          src={prize.image}
+                        />
+                      ) : (
+                        <div className="flex h-16 w-16 items-center justify-center rounded-xl bg-gradient-to-br from-orange-100 to-orange-200 text-2xl">
+                          {prize.type === 'physical'
+                            ? '🎁'
+                            : prize.type === 'coupon'
+                              ? '🎫'
+                              : prize.type === 'points'
+                                ? '💰'
+                                : '🎯'}
+                        </div>
+                      )}
+                      <span className="text-center font-medium text-gray-700 text-sm leading-tight">
+                        {prize.name}
+                      </span>
+                      {(prize.value?.display as string) && (
+                        <span
+                          className="font-semibold text-sm"
+                          style={{ color: '#FF6B3D' }}
+                        >
+                          {prize.value?.display as string}
+                        </span>
+                      )}
+                      <span className="text-gray-400 text-xs">
+                        {PRIZE_TYPE_LABELS[prize.type] ?? prize.type}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
         </div>
       </main>
     </HydrateClient>

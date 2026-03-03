@@ -186,8 +186,9 @@ export function WheelContainer({
   const handleEnd = useCallback(() => {
     setSpinning(false);
     spinningRef.current = false;
-    // Refresh remaining draws count after each draw
+    // Refresh remaining draws count + my records after each draw
     void utils.luckyWheel.draw.getRemainingDraws.invalidate();
+    void utils.luckyWheel.record.myRecords.invalidate();
     if (result) {
       setModalOpen(true);
     }

@@ -27,6 +27,7 @@ type PrizeStat = {
   probability: number;
   totalStock: number;
   remainingStock: number;
+  value: Record<string, unknown> | null;
   drawnCount: number;
   activityId: string;
 };
@@ -48,6 +49,13 @@ const prizeColumns: TableProps<PrizeStat>['columns'] = [
     render: (prob: number) => `${prob / 100}%`,
   },
   {
+    title: '价值',
+    dataIndex: 'value',
+    render: (value: Record<string, unknown> | null) => (
+      <Typography.Text>{(value?.display as string) || '—'}</Typography.Text>
+    ),
+  },
+  {
     title: '已发放 / 总库存',
     key: 'stock',
     width: 240,
@@ -55,10 +63,9 @@ const prizeColumns: TableProps<PrizeStat>['columns'] = [
       if (record.prizeType === 'thanks') {
         return <Typography.Text type="secondary">—</Typography.Text>;
       }
-      const consumed = record.totalStock - record.remainingStock;
       const pct =
         record.totalStock > 0
-          ? Math.round((consumed / record.totalStock) * 100)
+          ? Math.round((record.drawnCount / record.totalStock) * 100)
           : 0;
       const status = pct >= 90 ? 'exception' : pct >= 60 ? 'normal' : 'success';
       return (
@@ -73,11 +80,12 @@ const prizeColumns: TableProps<PrizeStat>['columns'] = [
             <span>
               {record.drawnCount} / {record.totalStock}
             </span>
-            {record.remainingStock === 0 && (
-              <Tag color="red" style={{ margin: 0 }}>
-                已售罄
-              </Tag>
-            )}
+            {record.totalStock > 0 &&
+              record.drawnCount >= record.totalStock && (
+                <Tag color="red" style={{ margin: 0 }}>
+                  已抽完
+                </Tag>
+              )}
           </div>
           <Progress
             percent={pct}
@@ -109,9 +117,7 @@ export default function AdminActivityOverviewPage({ params }: Props) {
     stats?.prizeStats.filter((p) => p.activityId === activityId) ?? [];
 
   const totalDraws = activityDrawStat?.totalDraws ?? 0;
-  const totalWins = activityDrawStat?.totalWins ?? 0;
-  const winRate =
-    totalDraws > 0 ? Math.round((totalWins / totalDraws) * 1000) / 10 : 0;
+  const uniqueUsers = activityDrawStat?.uniqueUsers ?? 0;
 
   return (
     <>
@@ -149,10 +155,10 @@ export default function AdminActivityOverviewPage({ params }: Props) {
                 <Statistic title="总抽奖次数" value={totalDraws} />
               </Col>
               <Col span={8}>
-                <Statistic title="总中奖数" value={totalWins} />
+                <Statistic title="参与用户数" value={uniqueUsers} />
               </Col>
               <Col span={8}>
-                <Statistic suffix="%" title="中奖率" value={winRate} />
+                <Statistic title="奖品种类" value={activityPrizes.length} />
               </Col>
             </Row>
 

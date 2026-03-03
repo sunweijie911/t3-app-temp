@@ -43,7 +43,7 @@ type PrizeRow = {
   type: PrizeType;
   probability: string;
   totalStock: string;
-  isActive: boolean;
+  value: string;
 };
 
 function toPrizeRow(p: {
@@ -52,8 +52,7 @@ function toPrizeRow(p: {
   type: string;
   probability: number;
   totalStock: number;
-  sortOrder: number;
-  isActive: boolean;
+  value?: Record<string, unknown> | null;
 }): PrizeRow {
   return {
     _key: p.id,
@@ -62,7 +61,7 @@ function toPrizeRow(p: {
     type: p.type as PrizeType,
     probability: String(p.probability / 100),
     totalStock: String(p.totalStock),
-    isActive: p.isActive,
+    value: (p.value?.display as string) ?? '',
   };
 }
 
@@ -131,6 +130,13 @@ export default function AdminPrizesPage({ params }: Props) {
       },
       onError: (err) => toast.error(err.message),
     });
+  const deletePrizeMutation = api.luckyWheel.admin.deletePrize.useMutation({
+    onSuccess: () => {
+      toast.success('已删除');
+      void refetch();
+    },
+    onError: (err) => toast.error(err.message),
+  });
 
   const [rows, setRows] = useState<PrizeRow[]>([]);
   const initialized = useRef(false);
@@ -159,9 +165,10 @@ export default function AdminPrizesPage({ params }: Props) {
     });
   }
 
-  const activePct = rows
-    .filter((r) => r.isActive)
-    .reduce((sum, r) => sum + (Number(r.probability) || 0), 0);
+  const activePct = rows.reduce(
+    (sum, r) => sum + (Number(r.probability) || 0),
+    0,
+  );
   const totalPctDisplay = Math.round(activePct * 10) / 10;
   const isPctValid = Math.abs(activePct - 100) < 0.1;
 
@@ -181,13 +188,16 @@ export default function AdminPrizesPage({ params }: Props) {
         type: 'thanks',
         probability: '',
         totalStock: '',
-        isActive: true,
+        value: '',
       },
     ]);
   }
 
-  function removeRow(key: string) {
-    setRows((prev) => prev.filter((r) => r._key !== key));
+  function removeRow(row: PrizeRow) {
+    setRows((prev) => prev.filter((r) => r._key !== row._key));
+    if (row.id) {
+      deletePrizeMutation.mutate({ id: row.id });
+    }
   }
 
   function handleSaveAll() {
@@ -196,15 +206,11 @@ export default function AdminPrizesPage({ params }: Props) {
         toast.error('请填写所有奖品名称');
         return;
       }
-      if (row.isActive && (Number(row.probability) || 0) <= 0) {
+      if ((Number(row.probability) || 0) <= 0) {
         toast.error(`「${row.name || '新奖品'}」概率不能为 0`);
         return;
       }
-      if (
-        row.isActive &&
-        row.type !== 'thanks' &&
-        (Number(row.totalStock) || 0) <= 0
-      ) {
+      if (row.type !== 'thanks' && (Number(row.totalStock) || 0) <= 0) {
         toast.error(`「${row.name}」不是谢谢参与类型，库存不能为 0`);
         return;
       }
@@ -221,8 +227,9 @@ export default function AdminPrizesPage({ params }: Props) {
         type: row.type,
         probability: Math.round((Number(row.probability) || 0) * 100),
         totalStock: Number(row.totalStock) || 0,
+        value: row.value ? { display: row.value } : null,
         sortOrder: idx,
-        isActive: row.isActive,
+        isActive: true,
       })),
     );
   }
@@ -297,6 +304,18 @@ export default function AdminPrizesPage({ params }: Props) {
       ),
     },
     {
+      title: '价值',
+      dataIndex: 'value',
+      render: (_, row) => (
+        <Input
+          onChange={(e) => updateRow(row._key, { value: e.target.value })}
+          placeholder="如：88元"
+          style={{ width: 120 }}
+          value={row.value}
+        />
+      ),
+    },
+    {
       title: '总库存',
       dataIndex: 'totalStock',
       render: (_, row) => (
@@ -317,32 +336,14 @@ export default function AdminPrizesPage({ params }: Props) {
       title: '操作',
       dataIndex: '_key',
       render: (_, row) => (
-        <Space>
-          {row.isActive ? (
-            <Button
-              danger
-              onClick={() => updateRow(row._key, { isActive: false })}
-              size="small"
-              variant="outlined"
-            >
-              下架
-            </Button>
-          ) : (
-            <Button
-              onClick={() => updateRow(row._key, { isActive: true })}
-              size="small"
-              style={{ color: '#389e0d', borderColor: '#b7eb8f' }}
-              variant="outlined"
-            >
-              上架
-            </Button>
-          )}
-          {!row.id && (
-            <Button danger onClick={() => removeRow(row._key)} size="small">
-              删除
-            </Button>
-          )}
-        </Space>
+        <Button
+          danger
+          disabled={deletePrizeMutation.isPending}
+          onClick={() => removeRow(row)}
+          size="small"
+        >
+          删除
+        </Button>
       ),
     },
   ];
@@ -392,7 +393,7 @@ export default function AdminPrizesPage({ params }: Props) {
             <Alert
               message={
                 <>
-                  上架奖品概率总计：<strong>{totalPctDisplay}%</strong>
+                  奖品概率总计：<strong>{totalPctDisplay}%</strong>
                   {isPctValid ? ' ✓' : ' — 建议调整至 100%'}
                 </>
               }
@@ -413,7 +414,6 @@ export default function AdminPrizesPage({ params }: Props) {
                 dataSource={rows}
                 locale={{ emptyText: '暂无奖品，点击「添加奖品」开始配置' }}
                 pagination={false}
-                rowClassName={(row) => (row.isActive ? '' : 'opacity-50')}
                 rowKey="_key"
                 scroll={{ x: true }}
               />

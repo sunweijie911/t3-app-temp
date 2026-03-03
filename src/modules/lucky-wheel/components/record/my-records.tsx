@@ -3,21 +3,22 @@
 import { RECORD_STATUS_LABELS } from '@/modules/lucky-wheel/constants';
 import { api } from '@/trpc/react';
 
-// 状态标签颜色配置（方块标签样式，非按钮）
-const STATUS_STYLES: Record<string, { bg: string; text: string }> = {
-  pending: { bg: '#FFF7ED', text: '#C2410C' }, // 待确认 — 橙
-  confirmed: { bg: '#F0FDF4', text: '#15803D' }, // 已确认 — 绿
-  shipped: { bg: '#EFF6FF', text: '#1D4ED8' }, // 已发货 — 蓝
-  claimed: { bg: '#F3F4F6', text: '#9CA3AF' }, // 已领取 — 灰
+// 状态颜色（圆点）
+const STATUS_DOT_COLOR: Record<string, string> = {
+  pending: '#F97316', // 待确认 — 橙
+  confirmed: '#22C55E', // 已确认 — 绿
+  shipped: '#3B82F6', // 已发货 — 蓝
+  claimed: '#9CA3AF', // 已领取 — 灰
 };
 
 function StatusTag({ status }: { status: string }) {
-  const style = STATUS_STYLES[status] ?? { bg: '#F3F4F6', text: '#6B7280' };
+  const dot = STATUS_DOT_COLOR[status] ?? '#9CA3AF';
   return (
-    <span
-      className="shrink-0 select-none rounded-md px-2 py-1 font-medium text-xs"
-      style={{ backgroundColor: style.bg, color: style.text }}
-    >
+    <span className="flex shrink-0 items-center gap-1.5 text-gray-500 text-xs">
+      <span
+        className="inline-block h-1.5 w-1.5 rounded-full"
+        style={{ backgroundColor: dot }}
+      />
       {RECORD_STATUS_LABELS[status] ?? status}
     </span>
   );
@@ -91,7 +92,8 @@ export function RecordListContent({
           {record.isWin ? (
             <StatusTag status={record.status} />
           ) : (
-            <span className="shrink-0 select-none rounded-md bg-gray-100 px-2 py-1 text-gray-400 text-xs">
+            <span className="flex shrink-0 items-center gap-1.5 text-gray-400 text-xs">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-gray-300" />
               未中奖
             </span>
           )}

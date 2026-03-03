@@ -7,9 +7,10 @@ import {
   Card,
   Form,
   Input,
+  Modal,
   Select,
+  Space,
   Table,
-  Tag,
   Typography,
 } from 'antd';
 import dayjs from 'dayjs';
@@ -17,6 +18,7 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { useState } from 'react';
 import { toast } from 'sonner';
+import * as XLSX from 'xlsx';
 import { Header } from '@/app/_components/layout/header';
 import {
   PRIZE_TYPE_LABELS,
@@ -27,7 +29,6 @@ import { api, type RouterOutputs } from '@/trpc/react';
 
 type Filters = {
   activityId: string;
-  isWin: '' | 'true' | 'false';
   status: string;
   prizeType: string;
   search: string;
@@ -35,7 +36,6 @@ type Filters = {
 
 const defaultFilters: Filters = {
   activityId: '',
-  isWin: '',
   status: '',
   prizeType: '',
   search: '',
@@ -44,12 +44,6 @@ const defaultFilters: Filters = {
 function buildFilterInput(filters: Filters) {
   return {
     activityId: filters.activityId || undefined,
-    isWin:
-      filters.isWin === 'true'
-        ? true
-        : filters.isWin === 'false'
-          ? false
-          : undefined,
     status:
       (filters.status as
         | 'pending'
@@ -80,7 +74,7 @@ type ExportRecord = {
   prize?: { name?: string; type?: string } | null;
 };
 
-function toCsv(records: ExportRecord[]): string {
+function toExcel(records: ExportRecord[]): Blob {
   const headers = [
     '抽奖时间',
     '用户手机',
@@ -93,7 +87,6 @@ function toCsv(records: ExportRecord[]): string {
     '手机',
     '收货地址',
   ];
-  const csvEscape = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
   const rows = records.map((r) => {
     const info = r.userInfo;
     return [
@@ -107,21 +100,22 @@ function toCsv(records: ExportRecord[]): string {
       info?.name ?? '',
       info?.phone ?? '',
       info?.address ?? '',
-    ].map(csvEscape);
+    ];
   });
-  return (
-    '\ufeff' +
-    [headers.map(csvEscape), ...rows].map((row) => row.join(',')).join('\n')
-  );
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  // 表头加粗
+  for (let c = 0; c < headers.length; c++) {
+    const cell = ws[XLSX.utils.encode_cell({ r: 0, c })];
+    if (cell) cell.s = { font: { bold: true } };
+  }
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '中奖记录');
+  // cspell:ignore wbout openxmlformats officedocument spreadsheetml
+  const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  return new Blob([wbout], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
 }
-
-// 状态 Tag 颜色映射
-const STATUS_TAG_COLOR: Record<string, string> = {
-  pending: 'orange',
-  confirmed: 'green',
-  shipped: 'blue',
-  claimed: 'default',
-};
 
 type RecordItem =
   RouterOutputs['luckyWheel']['admin']['getRecords']['items'][number];
@@ -132,6 +126,7 @@ export default function AdminRecordsPage() {
     ...defaultFilters,
     activityId: searchParams.get('activityId') ?? '',
   });
+  const [searchInput, setSearchInput] = useState(filters.search);
   const [offset, setOffset] = useState(0);
   const limit = 20;
   const [exporting, setExporting] = useState(false);
@@ -157,11 +152,32 @@ export default function AdminRecordsPage() {
     onError: (err) => toast.error(err.message),
   });
 
+  const clearMutation = api.luckyWheel.admin.clearRecords.useMutation({
+    onSuccess: () => {
+      toast.success('已清除所有数据');
+      void refetch();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
   const currentPage = Math.floor(offset / limit) + 1;
 
   function applyFilters(patch: Partial<Filters>) {
     setFilters((prev) => ({ ...prev, ...patch }));
     setOffset(0);
+  }
+
+  function handleClearAll() {
+    if (!filters.activityId) return;
+    Modal.confirm({
+      title: '确认清除',
+      content:
+        '将删除该活动所有抽奖记录并重置奖品库存，此操作不可撤销，确定继续？',
+      okText: '确认清除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: () => clearMutation.mutate({ activityId: filters.activityId }),
+    });
   }
 
   async function handleExport() {
@@ -170,12 +186,11 @@ export default function AdminRecordsPage() {
       const records = await utils.luckyWheel.admin.exportRecords.fetch(
         buildFilterInput(filters),
       );
-      const csv = toCsv(records);
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const blob = toExcel(records);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `records_${Date.now()}.csv`;
+      a.download = `records_${Date.now()}.xlsx`;
       a.click();
       URL.revokeObjectURL(url);
       toast.success(`已导出 ${records.length} 条记录`);
@@ -200,13 +215,6 @@ export default function AdminRecordsPage() {
             {record.user?.phoneNumber ?? record.userId}
           </Typography.Text>
         </div>
-      ),
-    },
-    {
-      title: '活动',
-      key: 'activity',
-      render: (_, record) => (
-        <Typography.Text>{record.activity?.name ?? '—'}</Typography.Text>
       ),
     },
     {
@@ -263,15 +271,6 @@ export default function AdminRecordsPage() {
           </div>
         );
       },
-    },
-    {
-      title: '状态',
-      key: 'status',
-      render: (_, record) => (
-        <Tag color={STATUS_TAG_COLOR[record.status] ?? 'default'}>
-          {RECORD_STATUS_LABELS[record.status] ?? record.status}
-        </Tag>
-      ),
     },
     {
       title: '时间',
@@ -350,13 +349,23 @@ export default function AdminRecordsPage() {
                 },
               ]}
             />
-            <Button
-              disabled={!hasActivity}
-              loading={exporting}
-              onClick={handleExport}
-            >
-              {exporting ? '导出中...' : '导出 CSV'}
-            </Button>
+            <Space>
+              <Button
+                danger
+                disabled={!hasActivity || clearMutation.isPending}
+                loading={clearMutation.isPending}
+                onClick={handleClearAll}
+              >
+                清除所有数据
+              </Button>
+              <Button
+                disabled={!hasActivity}
+                loading={exporting}
+                onClick={handleExport}
+              >
+                {exporting ? '导出中...' : '导出 Excel'}
+              </Button>
+            </Space>
           </div>
 
           {/* 筛选栏 */}
@@ -365,11 +374,12 @@ export default function AdminRecordsPage() {
               <Form.Item label="搜索用户">
                 <Input.Search
                   allowClear
-                  onChange={(e) => applyFilters({ search: e.target.value })}
+                  enterButton="搜索"
+                  onChange={(e) => setSearchInput(e.target.value)}
                   onSearch={(v) => applyFilters({ search: v })}
                   placeholder="姓名 / 手机号"
-                  style={{ width: 200 }}
-                  value={filters.search}
+                  style={{ width: 260 }}
+                  value={searchInput}
                 />
               </Form.Item>
 
@@ -385,22 +395,6 @@ export default function AdminRecordsPage() {
                   placeholder="请选择活动"
                   style={{ width: 160 }}
                   value={filters.activityId || undefined}
-                />
-              </Form.Item>
-
-              <Form.Item label="结果">
-                <Select
-                  allowClear
-                  onChange={(v) =>
-                    applyFilters({ isWin: (v ?? '') as Filters['isWin'] })
-                  }
-                  options={[
-                    { value: 'true', label: '中奖' },
-                    { value: 'false', label: '未中奖' },
-                  ]}
-                  placeholder="全部"
-                  style={{ width: 110 }}
-                  value={filters.isWin || undefined}
                 />
               </Form.Item>
 

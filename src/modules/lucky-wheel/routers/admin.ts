@@ -242,8 +242,10 @@ export const luckyWheelAdminRouter = createTRPCRouter({
             type: input.type,
             probability: input.probability,
             totalStock: input.totalStock,
+            // 显式传了 remainingStock 则直接用；否则跟随 totalStock 变化量同步调整
             remainingStock:
-              input.remainingStock ?? sql`${wheelPrizes.remainingStock}`,
+              input.remainingStock ??
+              sql`GREATEST(0, ${wheelPrizes.remainingStock} + (${input.totalStock} - ${wheelPrizes.totalStock}))`,
             value: input.value ?? sql`${wheelPrizes.value}`,
             sortOrder: input.sortOrder ?? sql`${wheelPrizes.sortOrder}`,
             isActive: input.isActive ?? sql`${wheelPrizes.isActive}`,
@@ -263,6 +265,7 @@ export const luckyWheelAdminRouter = createTRPCRouter({
           type: PRIZE_TYPE_ENUM,
           probability: z.number().int().min(0),
           totalStock: z.number().int().min(0),
+          value: z.record(z.string(), z.unknown()).nullable().optional(),
           sortOrder: z.number().int().optional(),
           isActive: z.boolean().optional(),
         }),
@@ -282,6 +285,7 @@ export const luckyWheelAdminRouter = createTRPCRouter({
               probability: prize.probability,
               totalStock: prize.totalStock,
               remainingStock: prize.totalStock,
+              value: prize.value,
               sortOrder: prize.sortOrder ?? 0,
               isActive: prize.isActive ?? true,
             })
@@ -292,6 +296,9 @@ export const luckyWheelAdminRouter = createTRPCRouter({
                 type: prize.type,
                 probability: prize.probability,
                 totalStock: prize.totalStock,
+                // remainingStock 跟随 totalStock 变化量同步调整，不低于 0
+                remainingStock: sql`GREATEST(0, ${wheelPrizes.remainingStock} + (${prize.totalStock} - ${wheelPrizes.totalStock}))`,
+                value: prize.value ?? sql`${wheelPrizes.value}`,
                 sortOrder: prize.sortOrder ?? sql`${wheelPrizes.sortOrder}`,
                 isActive: prize.isActive ?? sql`${wheelPrizes.isActive}`,
               },
@@ -399,6 +406,23 @@ export const luckyWheelAdminRouter = createTRPCRouter({
       return { success: true };
     }),
 
+  clearRecords: adminProcedure
+    .input(z.object({ activityId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      await ctx.db.transaction(async (tx) => {
+        // 删除该活动所有抽奖记录
+        await tx
+          .delete(wheelDrawRecords)
+          .where(eq(wheelDrawRecords.activityId, input.activityId));
+        // 重置该活动所有奖品库存
+        await tx
+          .update(wheelPrizes)
+          .set({ remainingStock: sql`${wheelPrizes.totalStock}` })
+          .where(eq(wheelPrizes.activityId, input.activityId));
+      });
+      return { success: true };
+    }),
+
   // ── Extra Chances CRUD ─────────────────────────────────────
 
   listExtraChances: adminProcedure
@@ -463,13 +487,14 @@ export const luckyWheelAdminRouter = createTRPCRouter({
 
   stats: adminProcedure.query(async ({ ctx }) => {
     const [activityDrawStats, prizeStats] = await Promise.all([
-      // 每个活动的抽奖次数 + 中奖次数
+      // 每个活动的抽奖次数 + 中奖次数 + 独立用户数
       ctx.db
         .select({
           activityId: wheelActivities.id,
           activityName: wheelActivities.name,
           totalDraws: sql<number>`count(${wheelDrawRecords.id})::int`,
           totalWins: sql<number>`count(case when ${wheelDrawRecords.isWin} then 1 end)::int`,
+          uniqueUsers: sql<number>`count(distinct ${wheelDrawRecords.userId})::int`,
         })
         .from(wheelActivities)
         .leftJoin(
@@ -490,6 +515,7 @@ export const luckyWheelAdminRouter = createTRPCRouter({
           probability: wheelPrizes.probability,
           totalStock: wheelPrizes.totalStock,
           remainingStock: wheelPrizes.remainingStock,
+          value: wheelPrizes.value,
           drawnCount: sql<number>`count(${wheelDrawRecords.id})::int`,
         })
         .from(wheelPrizes)
