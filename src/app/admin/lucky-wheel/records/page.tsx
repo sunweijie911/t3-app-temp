@@ -5,6 +5,7 @@ import {
   Breadcrumb,
   Button,
   Card,
+  DatePicker,
   Form,
   Input,
   Modal,
@@ -32,6 +33,8 @@ type Filters = {
   status: string;
   prizeType: string;
   search: string;
+  startDate: string;
+  endDate: string;
 };
 
 const defaultFilters: Filters = {
@@ -39,6 +42,8 @@ const defaultFilters: Filters = {
   status: '',
   prizeType: '',
   search: '',
+  startDate: '',
+  endDate: '',
 };
 
 function buildFilterInput(filters: Filters) {
@@ -60,6 +65,8 @@ function buildFilterInput(filters: Filters) {
         | 'thanks'
         | undefined) || undefined,
     search: filters.search || undefined,
+    startDate: filters.startDate || undefined,
+    endDate: filters.endDate || undefined,
   };
 }
 
@@ -155,6 +162,7 @@ export default function AdminRecordsPage() {
   const [offset, setOffset] = useState(0);
   const limit = 20;
   const [exporting, setExporting] = useState(false);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
 
   const { data: activities } = api.luckyWheel.admin.listActivities.useQuery();
   const utils = api.useUtils();
@@ -177,9 +185,38 @@ export default function AdminRecordsPage() {
     onError: (err) => toast.error(err.message),
   });
 
+  const deleteRecordMutation = api.luckyWheel.admin.deleteRecord.useMutation({
+    onSuccess: () => {
+      toast.success('已删除');
+      void refetch();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const batchDeleteMutation =
+    api.luckyWheel.admin.batchDeleteRecords.useMutation({
+      onSuccess: (res) => {
+        toast.success(`已删除 ${res.count} 条记录`);
+        setSelectedRowKeys([]);
+        void refetch();
+      },
+      onError: (err) => toast.error(err.message),
+    });
+
+  const batchUpdateStatusMutation =
+    api.luckyWheel.admin.batchUpdateRecordStatus.useMutation({
+      onSuccess: (res) => {
+        toast.success(`已更新 ${res.count} 条记录状态`);
+        setSelectedRowKeys([]);
+        void refetch();
+      },
+      onError: (err) => toast.error(err.message),
+    });
+
   const clearMutation = api.luckyWheel.admin.clearRecords.useMutation({
     onSuccess: () => {
       toast.success('已清除所有数据');
+      setSelectedRowKeys([]);
       void refetch();
     },
     onError: (err) => toast.error(err.message),
@@ -190,6 +227,37 @@ export default function AdminRecordsPage() {
   function applyFilters(patch: Partial<Filters>) {
     setFilters((prev) => ({ ...prev, ...patch }));
     setOffset(0);
+    setSelectedRowKeys([]);
+  }
+
+  function handleBatchDelete() {
+    if (selectedRowKeys.length === 0) return;
+    Modal.confirm({
+      title: '确认批量删除',
+      content: `确定删除选中的 ${selectedRowKeys.length} 条记录？此操作不可撤销。`,
+      okText: '确认删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: () => batchDeleteMutation.mutate({ ids: selectedRowKeys }),
+    });
+  }
+
+  function handleBatchUpdateStatus(
+    status: 'pending' | 'confirmed' | 'shipped' | 'claimed',
+  ) {
+    if (selectedRowKeys.length === 0) return;
+    batchUpdateStatusMutation.mutate({ ids: selectedRowKeys, status });
+  }
+
+  function handleDeleteRecord(id: string) {
+    Modal.confirm({
+      title: '确认删除',
+      content: '确定删除这条记录？此操作不可撤销。',
+      okText: '确认删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: () => deleteRecordMutation.mutate({ id }),
+    });
   }
 
   function handleClearAll() {
@@ -313,29 +381,41 @@ export default function AdminRecordsPage() {
     {
       title: '操作',
       key: 'action',
-      render: (_, record) =>
-        record.isWin ? (
-          <Select
-            disabled={updateMutation.isPending}
-            onChange={(value) =>
-              updateMutation.mutate({
-                id: record.id,
-                status: value as
-                  | 'pending'
-                  | 'confirmed'
-                  | 'shipped'
-                  | 'claimed',
-              })
-            }
-            options={Object.entries(RECORD_STATUS_LABELS).map(([k, v]) => ({
-              value: k,
-              label: v,
-            }))}
+      render: (_, record) => (
+        <Space size="small">
+          {record.isWin && (
+            <Select
+              disabled={updateMutation.isPending}
+              onChange={(value) =>
+                updateMutation.mutate({
+                  id: record.id,
+                  status: value as
+                    | 'pending'
+                    | 'confirmed'
+                    | 'shipped'
+                    | 'claimed',
+                })
+              }
+              options={Object.entries(RECORD_STATUS_LABELS).map(([k, v]) => ({
+                value: k,
+                label: v,
+              }))}
+              size="small"
+              style={{ width: 100 }}
+              value={record.status}
+            />
+          )}
+          <Button
+            danger
+            disabled={deleteRecordMutation.isPending}
+            onClick={() => handleDeleteRecord(record.id)}
             size="small"
-            style={{ width: 100 }}
-            value={record.status}
-          />
-        ) : null,
+            type="link"
+          >
+            删除
+          </Button>
+        </Space>
+      ),
     },
   ];
 
@@ -456,6 +536,27 @@ export default function AdminRecordsPage() {
                   value={filters.status || undefined}
                 />
               </Form.Item>
+
+              <Form.Item label="时间范围">
+                <DatePicker.RangePicker
+                  allowClear
+                  onChange={(dates) => {
+                    if (dates?.[0] && dates?.[1]) {
+                      applyFilters({
+                        startDate: dates[0].startOf('day').toISOString(),
+                        endDate: dates[1].endOf('day').toISOString(),
+                      });
+                    } else {
+                      applyFilters({ startDate: '', endDate: '' });
+                    }
+                  }}
+                  value={
+                    filters.startDate && filters.endDate
+                      ? [dayjs(filters.startDate), dayjs(filters.endDate)]
+                      : null
+                  }
+                />
+              </Form.Item>
             </Form>
           </Card>
 
@@ -468,6 +569,49 @@ export default function AdminRecordsPage() {
             </Card>
           ) : (
             <Card>
+              {selectedRowKeys.length > 0 && (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 12,
+                    marginBottom: 16,
+                    padding: '8px 16px',
+                    background: '#f0f5ff',
+                    borderRadius: 6,
+                  }}
+                >
+                  <Typography.Text strong>
+                    已选 {selectedRowKeys.length} 条
+                  </Typography.Text>
+                  <Button
+                    danger
+                    loading={batchDeleteMutation.isPending}
+                    onClick={handleBatchDelete}
+                    size="small"
+                  >
+                    批量删除
+                  </Button>
+                  <Select
+                    disabled={batchUpdateStatusMutation.isPending}
+                    onChange={handleBatchUpdateStatus}
+                    options={Object.entries(RECORD_STATUS_LABELS).map(
+                      ([k, v]) => ({ value: k, label: v }),
+                    )}
+                    placeholder="批量更新状态"
+                    size="small"
+                    style={{ width: 140 }}
+                    value={undefined}
+                  />
+                  <Button
+                    onClick={() => setSelectedRowKeys([])}
+                    size="small"
+                    type="link"
+                  >
+                    取消选择
+                  </Button>
+                </div>
+              )}
               <Table<RecordItem>
                 columns={columns}
                 dataSource={data?.items ?? []}
@@ -481,9 +625,14 @@ export default function AdminRecordsPage() {
                   showTotal: (total) => `共 ${total} 条`,
                   onChange: (page) => {
                     setOffset((page - 1) * limit);
+                    setSelectedRowKeys([]);
                   },
                 }}
                 rowKey="id"
+                rowSelection={{
+                  selectedRowKeys,
+                  onChange: (keys) => setSelectedRowKeys(keys as string[]),
+                }}
                 scroll={{ x: 900 }}
               />
             </Card>

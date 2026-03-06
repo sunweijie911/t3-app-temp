@@ -16,8 +16,18 @@ import {
 import Link from 'next/link';
 import { use } from 'react';
 import { Header } from '@/app/_components/layout/header';
-import { PRIZE_TYPE_LABELS } from '@/modules/lucky-wheel/constants';
+import {
+  PRIZE_TYPE_LABELS,
+  RECORD_STATUS_LABELS,
+} from '@/modules/lucky-wheel/constants';
 import { api } from '@/trpc/react';
+
+const STATUS_TAG_COLORS: Record<string, string> = {
+  pending: 'orange',
+  confirmed: 'green',
+  shipped: 'blue',
+  claimed: 'default',
+};
 
 type PrizeStat = {
   prizeId: string;
@@ -37,11 +47,13 @@ function StatCard({
   label,
   value,
   color,
+  suffix,
 }: {
   icon: string;
   label: string;
   value: number;
   color: string;
+  suffix?: string;
 }) {
   return (
     <Card size="small" style={{ borderRadius: 12 }}>
@@ -69,6 +81,9 @@ function StatCard({
             style={{ fontSize: 26, fontWeight: 700, color, lineHeight: 1.2 }}
           >
             {value.toLocaleString()}
+            {suffix && (
+              <span style={{ fontSize: 16, fontWeight: 500 }}>{suffix}</span>
+            )}
           </div>
         </div>
       </div>
@@ -170,6 +185,8 @@ interface Props {
 export default function AdminActivityOverviewPage({ params }: Props) {
   const { activityId } = use(params);
   const { data: stats } = api.luckyWheel.admin.stats.useQuery();
+  const { data: recordStats } =
+    api.luckyWheel.admin.activityRecordStats.useQuery({ activityId });
 
   const activityDrawStat = stats?.activityDrawStats.find(
     (a) => a.activityId === activityId,
@@ -178,7 +195,10 @@ export default function AdminActivityOverviewPage({ params }: Props) {
     stats?.prizeStats.filter((p) => p.activityId === activityId) ?? [];
 
   const totalDraws = activityDrawStat?.totalDraws ?? 0;
+  const totalWins = activityDrawStat?.totalWins ?? 0;
   const uniqueUsers = activityDrawStat?.uniqueUsers ?? 0;
+  const winRate =
+    totalDraws > 0 ? Math.round((totalWins / totalDraws) * 100) : 0;
 
   return (
     <>
@@ -219,7 +239,7 @@ export default function AdminActivityOverviewPage({ params }: Props) {
 
           {/* 统计卡片 */}
           <Row gutter={16} style={{ marginBottom: 24 }}>
-            <Col span={8}>
+            <Col span={6}>
               <StatCard
                 color="#f97316"
                 icon="🎯"
@@ -227,7 +247,15 @@ export default function AdminActivityOverviewPage({ params }: Props) {
                 value={totalDraws}
               />
             </Col>
-            <Col span={8}>
+            <Col span={6}>
+              <StatCard
+                color="#10b981"
+                icon="🏆"
+                label="中奖次数"
+                value={totalWins}
+              />
+            </Col>
+            <Col span={6}>
               <StatCard
                 color="#3b82f6"
                 icon="👤"
@@ -235,15 +263,41 @@ export default function AdminActivityOverviewPage({ params }: Props) {
                 value={uniqueUsers}
               />
             </Col>
-            <Col span={8}>
+            <Col span={6}>
               <StatCard
                 color="#8b5cf6"
-                icon="🎁"
-                label="奖品种类"
-                value={activityPrizes.length}
+                icon="📊"
+                label="中奖率"
+                suffix="%"
+                value={winRate}
               />
             </Col>
           </Row>
+
+          {/* 中奖记录状态分布 */}
+          {recordStats && recordStats.length > 0 && (
+            <Card
+              size="small"
+              style={{ borderRadius: 12, marginBottom: 24 }}
+              title="中奖记录状态分布"
+            >
+              <Space size="middle" wrap>
+                {Object.entries(RECORD_STATUS_LABELS).map(([key, label]) => {
+                  const count =
+                    recordStats.find((s) => s.status === key)?.count ?? 0;
+                  return (
+                    <Tag
+                      color={STATUS_TAG_COLORS[key]}
+                      key={key}
+                      style={{ fontSize: 13, padding: '2px 12px' }}
+                    >
+                      {label}：{count}
+                    </Tag>
+                  );
+                })}
+              </Space>
+            </Card>
+          )}
 
           {/* 奖品库存表格 */}
           {activityPrizes.length > 0 && (

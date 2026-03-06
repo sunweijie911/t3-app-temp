@@ -56,7 +56,7 @@ export const wheelActivities = createTable(
     startAt: d.timestamp({ withTimezone: true }),
     endAt: d.timestamp({ withTimezone: true }),
     maxDrawsPerUser: d.integer().notNull().default(1),
-    isActive: d.boolean().notNull().default(true),
+    isActive: d.boolean().notNull().default(false),
     rules: jsonb().$type<{ html: string }>(),
     sortOrder: d.integer().notNull().default(0),
     createdAt: d
@@ -88,7 +88,7 @@ export const wheelPrizes = createTable(
     remainingStock: d.integer().notNull().default(0),
     value: jsonb().$type<Record<string, unknown>>(),
     sortOrder: d.integer().notNull().default(0),
-    isActive: d.boolean().notNull().default(true),
+    isActive: d.boolean().notNull().default(false),
     createdAt: d
       .timestamp({ withTimezone: true })
       .$defaultFn(() => new Date())

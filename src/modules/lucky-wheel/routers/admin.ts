@@ -1,6 +1,17 @@
 import { TRPCError } from '@trpc/server';
 // cspell:ignore ilike
-import { and, asc, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gte,
+  ilike,
+  inArray,
+  lte,
+  or,
+  sql,
+} from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import {
@@ -24,6 +35,8 @@ const recordFilterInput = z.object({
   status: RECORD_STATUS_ENUM.optional(),
   prizeType: PRIZE_TYPE_ENUM.optional(),
   search: z.string().optional(),
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
 });
 
 // 构建记录查询的 where 条件。返回 null 表示结果集一定为空（提前短路）
@@ -62,6 +75,12 @@ async function resolveRecordWhere(
     input.status ? eq(wheelDrawRecords.status, input.status) : undefined,
     userIds ? inArray(wheelDrawRecords.userId, userIds) : undefined,
     prizeIds ? inArray(wheelDrawRecords.prizeId, prizeIds) : undefined,
+    input.startDate
+      ? gte(wheelDrawRecords.createdAt, new Date(input.startDate))
+      : undefined,
+    input.endDate
+      ? lte(wheelDrawRecords.createdAt, new Date(input.endDate))
+      : undefined,
   );
 }
 
@@ -105,7 +124,7 @@ export const luckyWheelAdminRouter = createTRPCRouter({
           startAt: input.startAt ? new Date(input.startAt) : null,
           endAt: input.endAt ? new Date(input.endAt) : null,
           maxDrawsPerUser: input.maxDrawsPerUser ?? 1,
-          isActive: input.isActive ?? true,
+          isActive: input.isActive ?? false,
           rules: input.rules,
           sortOrder: input.sortOrder ?? 0,
         })
@@ -232,7 +251,7 @@ export const luckyWheelAdminRouter = createTRPCRouter({
           remainingStock: input.remainingStock ?? input.totalStock,
           value: input.value,
           sortOrder: input.sortOrder ?? 0,
-          isActive: input.isActive ?? true,
+          isActive: input.isActive ?? false,
         })
         .onConflictDoUpdate({
           target: wheelPrizes.id,
@@ -406,6 +425,49 @@ export const luckyWheelAdminRouter = createTRPCRouter({
       return { success: true };
     }),
 
+  deleteRecord: adminProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const deleted = await ctx.db
+        .delete(wheelDrawRecords)
+        .where(eq(wheelDrawRecords.id, input.id))
+        .returning({ id: wheelDrawRecords.id });
+
+      if (deleted.length === 0) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: '记录不存在' });
+      }
+
+      return { success: true };
+    }),
+
+  batchDeleteRecords: adminProcedure
+    .input(z.object({ ids: z.array(z.string()).min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      const deleted = await ctx.db
+        .delete(wheelDrawRecords)
+        .where(inArray(wheelDrawRecords.id, input.ids))
+        .returning({ id: wheelDrawRecords.id });
+
+      return { success: true, count: deleted.length };
+    }),
+
+  batchUpdateRecordStatus: adminProcedure
+    .input(
+      z.object({
+        ids: z.array(z.string()).min(1),
+        status: RECORD_STATUS_ENUM,
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const updated = await ctx.db
+        .update(wheelDrawRecords)
+        .set({ status: input.status })
+        .where(inArray(wheelDrawRecords.id, input.ids))
+        .returning({ id: wheelDrawRecords.id });
+
+      return { success: true, count: updated.length };
+    }),
+
   clearRecords: adminProcedure
     .input(z.object({ activityId: z.string() }))
     .mutation(async ({ ctx, input }) => {
@@ -483,6 +545,56 @@ export const luckyWheelAdminRouter = createTRPCRouter({
       return { success: true };
     }),
 
+  batchDeleteExtraChances: adminProcedure
+    .input(z.object({ ids: z.array(z.string()).min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      const deleted = await ctx.db
+        .delete(wheelExtraChances)
+        .where(inArray(wheelExtraChances.id, input.ids))
+        .returning({ id: wheelExtraChances.id });
+
+      return { success: true, count: deleted.length };
+    }),
+
+  batchImportExtraChances: adminProcedure
+    .input(
+      z.object({
+        activityId: z.string(),
+        items: z
+          .array(
+            z.object({
+              phone: z.string().regex(PHONE_RE, '无效手机号'),
+              extraChances: z.number().int().min(0),
+              note: z.string().optional(),
+            }),
+          )
+          .min(1),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      await Promise.all(
+        input.items.map(async (item) => {
+          await ctx.db
+            .insert(wheelExtraChances)
+            .values({
+              id: nanoid(),
+              activityId: input.activityId,
+              phone: item.phone,
+              extraChances: item.extraChances,
+              note: item.note,
+            })
+            .onConflictDoUpdate({
+              target: [wheelExtraChances.activityId, wheelExtraChances.phone],
+              set: {
+                extraChances: item.extraChances,
+                note: item.note ?? sql`${wheelExtraChances.note}`,
+              },
+            });
+        }),
+      );
+      return { success: true, count: input.items.length };
+    }),
+
   // ── Stats ──────────────────────────────────────────────────
 
   stats: adminProcedure.query(async ({ ctx }) => {
@@ -537,4 +649,24 @@ export const luckyWheelAdminRouter = createTRPCRouter({
 
     return { activityDrawStats, prizeStats };
   }),
+
+  activityRecordStats: adminProcedure
+    .input(z.object({ activityId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const statusCounts = await ctx.db
+        .select({
+          status: wheelDrawRecords.status,
+          count: sql<number>`count(*)::int`,
+        })
+        .from(wheelDrawRecords)
+        .where(
+          and(
+            eq(wheelDrawRecords.activityId, input.activityId),
+            eq(wheelDrawRecords.isWin, true),
+          ),
+        )
+        .groupBy(wheelDrawRecords.status);
+
+      return statusCounts;
+    }),
 });

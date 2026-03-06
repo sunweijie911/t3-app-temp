@@ -3,23 +3,50 @@
 import { RECORD_STATUS_LABELS } from '@/modules/lucky-wheel/constants';
 import { api } from '@/trpc/react';
 
-// 状态颜色（圆点）
-const STATUS_DOT_COLOR: Record<string, string> = {
-  pending: '#F97316', // 待确认 — 橙
-  confirmed: '#22C55E', // 已确认 — 绿
-  shipped: '#3B82F6', // 已发货 — 蓝
-  claimed: '#9CA3AF', // 已领取 — 灰
+const STATUS_CONFIG: Record<
+  string,
+  { bg: string; text: string; label: string; desc: string }
+> = {
+  pending: {
+    bg: '#FFF7ED',
+    text: '#EA580C',
+    label: '待确认',
+    desc: '工作人员将尽快处理',
+  },
+  confirmed: {
+    bg: '#F0FDF4',
+    text: '#16A34A',
+    label: '已确认',
+    desc: '奖品已确认，等待发放',
+  },
+  shipped: {
+    bg: '#EFF6FF',
+    text: '#2563EB',
+    label: '已发货',
+    desc: '奖品已发出，请注意查收',
+  },
+  claimed: {
+    bg: '#F3F4F6',
+    text: '#6B7280',
+    label: '已领取',
+    desc: '奖品已领取完成',
+  },
 };
 
 function StatusTag({ status }: { status: string }) {
-  const dot = STATUS_DOT_COLOR[status] ?? '#9CA3AF';
+  const config = STATUS_CONFIG[status] ?? {
+    bg: '#F3F4F6',
+    text: '#6B7280',
+    label: RECORD_STATUS_LABELS[status] ?? status,
+    desc: '',
+  };
   return (
-    <span className="flex shrink-0 items-center gap-1.5 text-gray-500 text-xs">
-      <span
-        className="inline-block h-1.5 w-1.5 rounded-full"
-        style={{ backgroundColor: dot }}
-      />
-      {RECORD_STATUS_LABELS[status] ?? status}
+    <span
+      className="inline-flex shrink-0 items-center rounded-full px-2 py-0.5 font-medium text-xs"
+      style={{ backgroundColor: config.bg, color: config.text }}
+      title={config.desc}
+    >
+      {config.label}
     </span>
   );
 }
@@ -92,8 +119,10 @@ export function RecordListContent({
           {record.isWin ? (
             <StatusTag status={record.status} />
           ) : (
-            <span className="flex shrink-0 items-center gap-1.5 text-gray-400 text-xs">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-gray-300" />
+            <span
+              className="inline-flex shrink-0 items-center rounded-full px-2 py-0.5 font-medium text-gray-400 text-xs"
+              style={{ backgroundColor: '#F9FAFB' }}
+            >
               未中奖
             </span>
           )}
