@@ -1,3 +1,4 @@
+import { infoCollectRouter } from '@/modules/info-collect/routers';
 import { luckyWheelRouter } from '@/modules/lucky-wheel/routers';
 import { soulscopeRouter } from '@/modules/soulscope/routers';
 import { adminRouter } from '@/server/api/routers/admin';
@@ -12,6 +13,7 @@ export const appRouter = createTRPCRouter({
   admin: adminRouter,
   soulscope: soulscopeRouter,
   luckyWheel: luckyWheelRouter,
+  infoCollect: infoCollectRouter,
 });
 
 // export type definition of API

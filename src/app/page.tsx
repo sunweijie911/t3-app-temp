@@ -7,6 +7,7 @@ const homeComponents: Record<
 > = {
   'lucky-wheel': () => import('@/modules/lucky-wheel/components/home'),
   soulscope: () => import('@/modules/soulscope/components/home'),
+  'info-collect': () => import('@/modules/info-collect/components/home'),
 };
 
 export default async function Home() {
