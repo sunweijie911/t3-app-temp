@@ -214,6 +214,7 @@ jobs:
               --name "${CONTAINER_NAME}" \
               -p "${HOST_PORT}:${APP_PORT}" \
               --add-host=host.docker.internal:host-gateway \
+              -v t3_uploads:/app/public/uploads \
               ${ENV_FILE_ARG} \
               --restart unless-stopped \
               "${IMAGE}"
