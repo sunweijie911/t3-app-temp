@@ -71,6 +71,20 @@
       "when": 1773674486599,
       "tag": "0009_past_sleepwalker",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1773853255533,
+      "tag": "0010_magenta_whiplash",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1773854217026,
+      "tag": "0011_happy_cyclops",
+      "breakpoints": true
     }
   ]
 }

@@ -1,7 +1,7 @@
 'use client';
 
-import { Footer } from '@/app/_components/layout/footer';
-import { Header } from '@/app/_components/layout/header';
+import { Footer } from '@/shared/components/layout/footer';
+import { Header } from '@/shared/components/layout/header';
 
 export default function ErrorPage({
   reset,

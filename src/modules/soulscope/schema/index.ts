@@ -276,6 +276,7 @@ export const orders = createTable(
     index('order_user_idx').on(t.userId),
     index('order_result_idx').on(t.resultId),
     index('order_status_idx').on(t.status),
+    uniqueIndex('order_result_user_idx').on(t.resultId, t.userId),
   ],
 );
 

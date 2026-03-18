@@ -21,7 +21,10 @@ export const env = createEnv({
       .default('development'),
     ADMIN_PHONES: z.string().optional(),
     LLM_API_KEY: z.string().optional(),
-    BETTER_AUTH_URL: z.string().url().optional(),
+    BETTER_AUTH_URL:
+      process.env.NODE_ENV === 'production'
+        ? z.string().url()
+        : z.string().url().optional(),
     // 阿里云短信（生产环境 OTP 发送必填）
     SMS_ACCESS_KEY_ID: z.string().optional(),
     SMS_ACCESS_KEY_SECRET: z.string().optional(),

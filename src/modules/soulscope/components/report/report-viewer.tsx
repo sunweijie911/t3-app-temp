@@ -1,7 +1,7 @@
 'use client';
 
-import { LoadingSpinner } from '@/app/_components/ui/loading-spinner';
-import { MarkdownRenderer } from '@/app/_components/ui/markdown-renderer';
+import { LoadingSpinner } from '@/shared/components/ui/loading-spinner';
+import { MarkdownRenderer } from '@/shared/components/ui/markdown-renderer';
 import { api } from '@/trpc/react';
 
 export function ReportViewer({ resultId }: { resultId: string }) {

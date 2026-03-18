@@ -3,8 +3,8 @@
 import { Select, Typography } from 'antd';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { useSetDefaultModuleId } from '@/app/_components/default-module-provider';
 import { getAllModules } from '@/modules/registry';
+import { useSetDefaultModuleId } from '@/shared/components/default-module-provider';
 import { api } from '@/trpc/react';
 
 interface Props {

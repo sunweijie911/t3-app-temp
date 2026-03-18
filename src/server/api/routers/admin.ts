@@ -5,13 +5,13 @@ import {
   createTRPCRouter,
   protectedProcedure,
 } from '@/server/api/trpc';
+import { getUserPhone } from '@/server/better-auth/types';
 import { systemConfig } from '@/server/db/schema';
 import { isAdminPhone } from '@/server/services/admin-check';
 
 export const adminRouter = createTRPCRouter({
   isAdmin: protectedProcedure.query(({ ctx }) => {
-    const phone = (ctx.session.user as { phoneNumber?: string | null })
-      .phoneNumber;
+    const phone = getUserPhone(ctx.session.user);
     return isAdminPhone(phone);
   }),
 

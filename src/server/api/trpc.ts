@@ -12,6 +12,7 @@ import superjson from 'superjson';
 import { ZodError } from 'zod';
 
 import { auth } from '@/server/better-auth';
+import { getUserPhone } from '@/server/better-auth/types';
 import { db } from '@/server/db';
 import { isAdminPhone } from '@/server/services/admin-check';
 
@@ -141,8 +142,7 @@ export const protectedProcedure = t.procedure
  * 继承自 protectedProcedure，确保登录态校验保持一致。
  */
 export const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
-  const phone = (ctx.session.user as { phoneNumber?: string | null })
-    .phoneNumber;
+  const phone = getUserPhone(ctx.session.user);
   if (!isAdminPhone(phone)) {
     throw new TRPCError({
       code: 'FORBIDDEN',

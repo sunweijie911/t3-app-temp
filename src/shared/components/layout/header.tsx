@@ -5,9 +5,9 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { toast } from 'sonner';
-import { useDefaultModuleId } from '@/app/_components/default-module-provider';
 import { authClient } from '@/lib/auth-client';
 import { getModuleByPathname } from '@/modules/registry';
+import { useDefaultModuleId } from '@/shared/components/default-module-provider';
 import { api } from '@/trpc/react';
 
 export function Header() {

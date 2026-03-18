@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "order_result_user_idx" ON "pg-drizzle_order" USING btree ("resultId","userId");

@@ -4,6 +4,9 @@ import { join } from 'node:path';
 import { nanoid } from 'nanoid';
 import { NextResponse } from 'next/server';
 
+import { auth } from '@/server/better-auth';
+import { uploadLimiter } from '@/server/services/rate-limiter';
+
 const MAX_SIZE = 5 * 1024 * 1024; // 5MB
 
 // 通过文件头魔术字节判断真实格式，不依赖客户端提供的 MIME type
@@ -39,6 +42,21 @@ function detectImageType(buffer: Buffer): { ext: string; mime: string } | null {
 
 export async function POST(request: Request) {
   try {
+    const session = await auth.api.getSession({ headers: request.headers });
+    if (!session?.user) {
+      return NextResponse.json({ error: '请先登录' }, { status: 401 });
+    }
+
+    const rateCheck = uploadLimiter.check(session.user.id);
+    if (!rateCheck.allowed) {
+      return NextResponse.json(
+        {
+          error: `上传过于频繁，请 ${Math.ceil(rateCheck.retryAfterMs / 1000)} 秒后重试`,
+        },
+        { status: 429 },
+      );
+    }
+
     const formData = await request.formData();
     const file = formData.get('file');
 

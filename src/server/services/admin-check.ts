@@ -2,13 +2,19 @@ import 'server-only';
 import { env } from '@/env';
 
 let parsedPhones: string[] | null = null;
+let cacheTimestamp = 0;
+const CACHE_TTL_MS = 5 * 60_000; // 5 minutes
 
 function getAdminPhones(): string[] {
-  if (parsedPhones) return parsedPhones;
+  const now = Date.now();
+  if (parsedPhones && now - cacheTimestamp < CACHE_TTL_MS) {
+    return parsedPhones;
+  }
   parsedPhones = (env.ADMIN_PHONES ?? '')
     .split(',')
     .map((p) => p.trim())
     .filter(Boolean);
+  cacheTimestamp = now;
   return parsedPhones;
 }
 

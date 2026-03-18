@@ -428,27 +428,78 @@ export const luckyWheelAdminRouter = createTRPCRouter({
   deleteRecord: adminProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      const deleted = await ctx.db
-        .delete(wheelDrawRecords)
-        .where(eq(wheelDrawRecords.id, input.id))
-        .returning({ id: wheelDrawRecords.id });
+      return ctx.db.transaction(async (tx) => {
+        // 先查询记录的中奖信息
+        const [record] = await tx
+          .select({
+            id: wheelDrawRecords.id,
+            isWin: wheelDrawRecords.isWin,
+            prizeId: wheelDrawRecords.prizeId,
+          })
+          .from(wheelDrawRecords)
+          .where(eq(wheelDrawRecords.id, input.id));
 
-      if (deleted.length === 0) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: '记录不存在' });
-      }
+        if (!record) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: '记录不存在' });
+        }
 
-      return { success: true };
+        await tx
+          .delete(wheelDrawRecords)
+          .where(eq(wheelDrawRecords.id, input.id));
+
+        // 中奖记录删除后恢复库存
+        if (record.isWin && record.prizeId) {
+          await tx
+            .update(wheelPrizes)
+            .set({
+              remainingStock: sql`${wheelPrizes.remainingStock} + 1`,
+            })
+            .where(eq(wheelPrizes.id, record.prizeId));
+        }
+
+        return { success: true };
+      });
     }),
 
   batchDeleteRecords: adminProcedure
     .input(z.object({ ids: z.array(z.string()).min(1) }))
     .mutation(async ({ ctx, input }) => {
-      const deleted = await ctx.db
-        .delete(wheelDrawRecords)
-        .where(inArray(wheelDrawRecords.id, input.ids))
-        .returning({ id: wheelDrawRecords.id });
+      return ctx.db.transaction(async (tx) => {
+        // 先查询所有中奖记录
+        const records = await tx
+          .select({
+            id: wheelDrawRecords.id,
+            isWin: wheelDrawRecords.isWin,
+            prizeId: wheelDrawRecords.prizeId,
+          })
+          .from(wheelDrawRecords)
+          .where(inArray(wheelDrawRecords.id, input.ids));
 
-      return { success: true, count: deleted.length };
+        const deleted = await tx
+          .delete(wheelDrawRecords)
+          .where(inArray(wheelDrawRecords.id, input.ids))
+          .returning({ id: wheelDrawRecords.id });
+
+        // 统计每个奖品需要恢复的库存数
+        const stockRestore = new Map<string, number>();
+        for (const r of records) {
+          if (r.isWin && r.prizeId) {
+            stockRestore.set(r.prizeId, (stockRestore.get(r.prizeId) ?? 0) + 1);
+          }
+        }
+
+        // 批量恢复库存
+        for (const [prizeId, count] of stockRestore) {
+          await tx
+            .update(wheelPrizes)
+            .set({
+              remainingStock: sql`${wheelPrizes.remainingStock} + ${count}`,
+            })
+            .where(eq(wheelPrizes.id, prizeId));
+        }
+
+        return { success: true, count: deleted.length };
+      });
     }),
 
   batchUpdateRecordStatus: adminProcedure

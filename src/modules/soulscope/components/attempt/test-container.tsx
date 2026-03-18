@@ -4,7 +4,7 @@ import { Check, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { LoadingSpinner } from '@/app/_components/ui/loading-spinner';
+import { LoadingSpinner } from '@/shared/components/ui/loading-spinner';
 import { api } from '@/trpc/react';
 import { ProgressBar } from './progress-bar';
 import { QuestionCard } from './question-card';

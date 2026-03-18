@@ -1,3 +1,4 @@
+// cspell:words ALIYUN aliyun
 import { createHmac, randomUUID } from 'node:crypto';
 import { env } from '@/env';
 
@@ -51,8 +52,9 @@ export async function sendSmsOtp(phone: string, code: string): Promise<void> {
   const templateCode = env.SMS_TEMPLATE_CODE;
 
   if (!keyId || !keySecret || !signName || !templateCode) {
-    console.warn('[SMS] 阿里云短信环境变量未配置，验证码（降级输出）：', code);
-    return;
+    throw new Error(
+      '[SMS] 生产环境必须配置阿里云短信变量: SMS_ACCESS_KEY_ID, SMS_ACCESS_KEY_SECRET, SMS_SIGN_NAME, SMS_TEMPLATE_CODE',
+    );
   }
 
   const params: Record<string, string> = {

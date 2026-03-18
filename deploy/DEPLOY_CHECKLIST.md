@@ -58,7 +58,7 @@ BETTER_AUTH_SECRET=openssl生成的随机字符串
 BETTER_AUTH_URL=http://<ECS公网IP>:5000
 
 # 可选
-ADMIN_EMAILS=admin@example.com
+ADMIN_PHONES=13800138000
 ```
 
 | 变量 | 必填 | 说明 |
@@ -66,7 +66,7 @@ ADMIN_EMAILS=admin@example.com
 | `DATABASE_URL` | 是 | 本机 PostgreSQL 连接串 |
 | `BETTER_AUTH_SECRET` | 生产必填 | 认证密钥，`openssl rand -base64 32` 生成 |
 | `BETTER_AUTH_URL` | 生产必填 | 应用访问地址，如 `http://<IP>:5000` 或 `https://yourdomain.com` |
-| `ADMIN_EMAILS` | 否 | 管理员邮箱，多个用逗号分隔 |
+| `ADMIN_PHONES` | 否 | 管理员手机号，多个用逗号分隔 |
 
 ## 4. 镜像分发方式
 

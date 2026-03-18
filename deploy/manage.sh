@@ -143,6 +143,7 @@ start_container() {
             -p "${PORT}:${APP_PORT}" \
             --add-host=host.docker.internal:host-gateway \
             "${env_file_args[@]}" \
+            -v t3_uploads:/app/public/uploads \
             --restart unless-stopped \
             "$IMAGE_NAME"
     fi

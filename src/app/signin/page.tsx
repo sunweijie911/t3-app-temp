@@ -3,9 +3,9 @@
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useRef, useState } from 'react';
-import { useDefaultModuleId } from '@/app/_components/default-module-provider';
 import { authClient } from '@/lib/auth-client';
 import { getModuleByPathname } from '@/modules/registry';
+import { useDefaultModuleId } from '@/shared/components/default-module-provider';
 
 function SignInForm() {
   const router = useRouter();

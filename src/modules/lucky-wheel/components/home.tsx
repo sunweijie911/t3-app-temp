@@ -1,8 +1,8 @@
 import Link from 'next/link';
 import { Suspense } from 'react';
-import { Footer } from '@/app/_components/layout/footer';
-import { Header } from '@/app/_components/layout/header';
 import { ActivityCard } from '@/modules/lucky-wheel/components/activity/activity-card';
+import { Footer } from '@/shared/components/layout/footer';
+import { Header } from '@/shared/components/layout/header';
 import { api, HydrateClient } from '@/trpc/server';
 
 async function ActiveActivities() {

@@ -1,0 +1,2 @@
+-- No-op migration: schema tracking adjustment for user table columns.
+-- The actual column definitions are managed in auth-schema.ts; no DDL changes needed.

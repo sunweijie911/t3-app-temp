@@ -1,3 +1,10 @@
+/**
+ * 基于内存的滑动窗口限流器。
+ *
+ * **部署限制**：当前实现将计数存储在进程内存中，仅适用于单实例部署。
+ * 在多实例或 Serverless 场景下，各实例的计数相互独立，无法实现全局限流。
+ * 如需支持多实例部署，应迁移到 Redis（INCR + EXPIRE）等共享存储方案。
+ */
 export class RateLimiter {
   private windows = new Map<string, number[]>();
   private readonly maxRequests: number;
@@ -43,11 +50,14 @@ export class RateLimiter {
   }
 }
 
-// 1 minute window, 3 requests — for report generation
+// 报告生成：1 分钟 3 次
 export const reportGenerateLimiter = new RateLimiter(3, 60_000);
 
-// 1 minute window, 5 requests — for question generation
+// AI 题目生成：1 分钟 5 次
 export const questionGenerateLimiter = new RateLimiter(5, 60_000);
 
-// 1 minute window, 10 requests — for lucky wheel draws
+// 大转盘抽奖：1 分钟 10 次
 export const drawLimiter = new RateLimiter(10, 60_000);
+
+// 文件上传：1 分钟 5 次
+export const uploadLimiter = new RateLimiter(5, 60_000);

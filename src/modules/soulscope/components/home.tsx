@@ -1,9 +1,9 @@
 import { MousePointerClick, PenLine, Sparkles } from 'lucide-react';
 import Link from 'next/link';
 import { Suspense } from 'react';
-import { Footer } from '@/app/_components/layout/footer';
-import { Header } from '@/app/_components/layout/header';
 import { TestGrid } from '@/modules/soulscope/components/test/test-grid';
+import { Footer } from '@/shared/components/layout/footer';
+import { Header } from '@/shared/components/layout/header';
 import { api, HydrateClient } from '@/trpc/server';
 
 async function FeaturedTests() {

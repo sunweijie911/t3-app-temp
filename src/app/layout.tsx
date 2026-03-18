@@ -5,10 +5,9 @@ import { AntdRegistry } from '@ant-design/nextjs-registry';
 import type { Metadata } from 'next';
 import { Geist } from 'next/font/google';
 import { Toaster } from 'sonner';
-
-import { DefaultModuleProvider } from '@/app/_components/default-module-provider';
 import { getModule } from '@/modules/registry';
 import { getDefaultModuleId } from '@/server/services/config';
+import { DefaultModuleProvider } from '@/shared/components/default-module-provider';
 import { TRPCReactProvider } from '@/trpc/react';
 
 export async function generateMetadata(): Promise<Metadata> {

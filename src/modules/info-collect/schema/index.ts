@@ -1,6 +1,14 @@
-import { index, jsonb } from 'drizzle-orm/pg-core';
+import { index, jsonb, pgEnum } from 'drizzle-orm/pg-core';
 
 import { createTable } from '@/server/db/table-creator';
+
+export const infoCollectStatusEnum = pgEnum('info_collect_status', [
+  'pending',
+  'approved',
+  'rejected',
+  'needs_supplement',
+  'completed',
+]);
 
 export type InfoCollectConfigFields = ('name' | 'proofImage')[];
 
@@ -23,7 +31,7 @@ export const infoCollectRecords = createTable(
     phone: d.varchar({ length: 20 }).notNull(),
     idCard: d.varchar({ length: 18 }).notNull(),
     proofImageUrl: d.text(),
-    status: d.varchar({ length: 20 }).notNull().default('pending'),
+    status: infoCollectStatusEnum().notNull().default('pending'),
     rejectReason: d.text(),
     trackingNumber: d.varchar({ length: 100 }),
     shippedAt: d.timestamp({ withTimezone: true }),

@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { AdminAntdProvider } from '@/app/admin/antd-provider';
 import { getSession } from '@/server/better-auth/server';
+import { getUserPhone } from '@/server/better-auth/types';
 import { isAdminPhone } from '@/server/services/admin-check';
 
 export default async function AdminLayout({
@@ -13,7 +14,7 @@ export default async function AdminLayout({
     redirect('/signin');
   }
 
-  const phone = (session.user as { phoneNumber?: string | null }).phoneNumber;
+  const phone = getUserPhone(session.user);
   if (!isAdminPhone(phone)) {
     redirect('/');
   }

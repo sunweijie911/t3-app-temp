@@ -11,6 +11,7 @@ import {
   resolveDrawLimit,
 } from '@/modules/lucky-wheel/services/draw-engine';
 import { createTRPCRouter, protectedProcedure } from '@/server/api/trpc';
+import { getUserPhone } from '@/server/better-auth/types';
 import { drawLimiter } from '@/server/services/rate-limiter';
 
 export const drawRouter = createTRPCRouter({
@@ -33,16 +34,10 @@ export const drawRouter = createTRPCRouter({
         });
       }
 
-      const sessionUser = ctx.session.user as {
-        id: string;
-        name: string;
-        phoneNumber?: string | null;
-      };
-
       // 构建 userInfo 快照，随抽奖记录一次性写入
       const userInfo: WheelUserInfo = {
-        name: input.name ?? sessionUser.name,
-        phone: sessionUser.phoneNumber ?? null,
+        name: input.name ?? ctx.session.user.name,
+        phone: getUserPhone(ctx.session.user),
         address: input.address ?? null,
       };
 

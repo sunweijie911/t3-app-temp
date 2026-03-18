@@ -1,0 +1,3 @@
+CREATE TYPE "public"."info_collect_status" AS ENUM('pending', 'approved', 'rejected', 'needs_supplement', 'completed');--> statement-breakpoint
+ALTER TABLE "pg-drizzle_info_collect_record" ALTER COLUMN "status" SET DEFAULT 'pending'::"public"."info_collect_status";--> statement-breakpoint
+ALTER TABLE "pg-drizzle_info_collect_record" ALTER COLUMN "status" SET DATA TYPE "public"."info_collect_status" USING "status"::"public"."info_collect_status";
