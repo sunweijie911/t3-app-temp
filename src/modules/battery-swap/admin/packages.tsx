@@ -446,7 +446,11 @@ export default function AdminBatterySwapPage() {
             </Button>
           </div>
 
-          <DndContext onDragEnd={handleDragEnd} sensors={sensors}>
+          <DndContext
+            id="battery-swap-packages"
+            onDragEnd={handleDragEnd}
+            sensors={sensors}
+          >
             <SortableContext
               items={sortableIds}
               strategy={verticalListSortingStrategy}

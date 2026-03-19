@@ -423,7 +423,11 @@ export default function AdminPrizesPage({ params }: Props) {
           />
         )}
 
-        <DndContext onDragEnd={handleDragEnd} sensors={sensors}>
+        <DndContext
+          id="lucky-wheel-prizes"
+          onDragEnd={handleDragEnd}
+          sensors={sensors}
+        >
           <SortableContext
             items={rows.map((r) => r._key)}
             strategy={verticalListSortingStrategy}

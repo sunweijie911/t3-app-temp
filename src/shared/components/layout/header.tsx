@@ -52,7 +52,7 @@ export function Header() {
           className={`flex items-center gap-1.5 font-medium text-sm transition-colors ${
             pathname.startsWith('/admin') ? theme.active : 'text-gray-600'
           }`}
-          href="/admin"
+          href={`/admin/${mod.id}`}
           onClick={() => setMenuOpen(false)}
         >
           管理后台
@@ -65,7 +65,10 @@ export function Header() {
     <header className="sticky top-0 z-50 w-full border-gray-200 border-b bg-white/80 backdrop-blur-sm">
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
         <div className="flex items-center gap-8">
-          <Link className={`font-bold text-xl ${theme.brand}`} href="/">
+          <Link
+            className={`font-bold text-xl ${theme.brand}`}
+            href={mod.basePath}
+          >
             {mod.name}
           </Link>
           <nav className="hidden items-center gap-6 md:flex">{navLinks}</nav>
