@@ -20,7 +20,6 @@ import { use, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import XLSX from 'xlsx-js-style';
 import { PHONE_RE } from '@/modules/lucky-wheel/constants';
-import { Header } from '@/shared/components/layout/header';
 import { api } from '@/trpc/react';
 
 interface EditingChance {
@@ -261,155 +260,152 @@ export default function AdminChancesPage({ params }: Props) {
   ];
 
   return (
-    <>
-      <Header />
-      <main style={{ minHeight: '100vh', background: '#f9fafb' }}>
+    <main style={{ minHeight: '100vh', background: '#f9fafb' }}>
+      <div
+        style={{
+          maxWidth: 896,
+          margin: '0 auto',
+          padding: '48px 16px',
+        }}
+      >
+        {/* 面包屑 */}
+        <Breadcrumb
+          items={[
+            {
+              title: <Link href="/admin/lucky-wheel">大转盘管理</Link>,
+            },
+            {
+              title: (
+                <Link href={`/admin/lucky-wheel/${activityId}`}>
+                  {activityName}
+                </Link>
+              ),
+            },
+            { title: '额外次数配置' },
+          ]}
+          style={{ marginBottom: 16 }}
+        />
         <div
           style={{
-            maxWidth: 896,
-            margin: '0 auto',
-            padding: '48px 16px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginBottom: 24,
           }}
         >
-          {/* 面包屑 */}
-          <Breadcrumb
-            items={[
-              {
-                title: <Link href="/admin/lucky-wheel">大转盘管理</Link>,
-              },
-              {
-                title: (
-                  <Link href={`/admin/lucky-wheel/${activityId}`}>
-                    {activityName}
-                  </Link>
-                ),
-              },
-              { title: '额外次数配置' },
-            ]}
-            style={{ marginBottom: 16 }}
-          />
+          <p style={{ margin: 0, color: '#6b7280', fontSize: 14 }}>
+            为指定手机号配置额外抽奖次数（在基础次数之上叠加）
+          </p>
+          <Space>
+            <Button onClick={downloadTemplate}>下载模板</Button>
+            <Button
+              loading={batchImportMutation.isPending}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              批量导入
+            </Button>
+            <Button
+              onClick={() =>
+                openModal({ phone: '', extraChances: 1, note: '' })
+              }
+              type="primary"
+            >
+              添加配置
+            </Button>
+          </Space>
+        </div>
+
+        {/* 批量操作栏 */}
+        {selectedRowKeys.length > 0 && (
           <div
             style={{
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'space-between',
-              marginBottom: 24,
+              gap: 12,
+              marginBottom: 16,
+              padding: '8px 16px',
+              background: '#f0f5ff',
+              borderRadius: 6,
             }}
           >
-            <p style={{ margin: 0, color: '#6b7280', fontSize: 14 }}>
-              为指定手机号配置额外抽奖次数（在基础次数之上叠加）
-            </p>
-            <Space>
-              <Button onClick={downloadTemplate}>下载模板</Button>
-              <Button
-                loading={batchImportMutation.isPending}
-                onClick={() => fileInputRef.current?.click()}
-              >
-                批量导入
-              </Button>
-              <Button
-                onClick={() =>
-                  openModal({ phone: '', extraChances: 1, note: '' })
-                }
-                type="primary"
-              >
-                添加配置
-              </Button>
-            </Space>
+            <Typography.Text strong>
+              已选 {selectedRowKeys.length} 条
+            </Typography.Text>
+            <Button
+              danger
+              loading={batchDeleteMutation.isPending}
+              onClick={handleBatchDelete}
+              size="small"
+            >
+              批量删除
+            </Button>
+            <Button
+              onClick={() => setSelectedRowKeys([])}
+              size="small"
+              type="link"
+            >
+              取消选择
+            </Button>
           </div>
+        )}
 
-          {/* 批量操作栏 */}
-          {selectedRowKeys.length > 0 && (
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 12,
-                marginBottom: 16,
-                padding: '8px 16px',
-                background: '#f0f5ff',
-                borderRadius: 6,
-              }}
-            >
-              <Typography.Text strong>
-                已选 {selectedRowKeys.length} 条
-              </Typography.Text>
-              <Button
-                danger
-                loading={batchDeleteMutation.isPending}
-                onClick={handleBatchDelete}
-                size="small"
-              >
-                批量删除
-              </Button>
-              <Button
-                onClick={() => setSelectedRowKeys([])}
-                size="small"
-                type="link"
-              >
-                取消选择
-              </Button>
-            </div>
-          )}
-
-          {/* 额外次数表格 */}
-          <Table
-            columns={columns}
-            dataSource={chances ?? []}
-            locale={{ emptyText: '暂无配置，点击「添加配置」开始' }}
-            pagination={false}
-            rowKey="id"
-            rowSelection={{
-              selectedRowKeys,
-              onChange: (keys) => setSelectedRowKeys(keys as string[]),
-            }}
-          />
-        </div>
-
-        {/* 新增/编辑 Modal */}
-        <Modal
-          confirmLoading={upsertMutation.isPending}
-          okText="保存"
-          onCancel={() => setEditing(null)}
-          onOk={handleModalOk}
-          open={!!editing}
-          title={editing?.id ? '编辑配置' : '新增配置'}
-        >
-          <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
-            <Form.Item
-              label="手机号"
-              name="phone"
-              rules={[{ required: true, message: '请输入手机号' }]}
-            >
-              <Input
-                disabled={!!editing?.id}
-                inputMode="numeric"
-                maxLength={11}
-                placeholder="1xxxxxxxxxx"
-              />
-            </Form.Item>
-            <Form.Item
-              label="额外次数"
-              name="extraChances"
-              rules={[{ required: true, message: '请输入额外次数' }]}
-            >
-              <InputNumber min={0} placeholder="1" style={{ width: '100%' }} />
-            </Form.Item>
-            <Form.Item label="备注（可选）" name="note">
-              <Input placeholder="如：VIP用户" />
-            </Form.Item>
-          </Form>
-        </Modal>
-
-        {/* 隐藏文件上传 */}
-        <input
-          accept=".xlsx,.xls"
-          onChange={handleFileChange}
-          ref={fileInputRef}
-          style={{ display: 'none' }}
-          type="file"
+        {/* 额外次数表格 */}
+        <Table
+          columns={columns}
+          dataSource={chances ?? []}
+          locale={{ emptyText: '暂无配置，点击「添加配置」开始' }}
+          pagination={false}
+          rowKey="id"
+          rowSelection={{
+            selectedRowKeys,
+            onChange: (keys) => setSelectedRowKeys(keys as string[]),
+          }}
         />
-      </main>
-    </>
+      </div>
+
+      {/* 新增/编辑 Modal */}
+      <Modal
+        confirmLoading={upsertMutation.isPending}
+        okText="保存"
+        onCancel={() => setEditing(null)}
+        onOk={handleModalOk}
+        open={!!editing}
+        title={editing?.id ? '编辑配置' : '新增配置'}
+      >
+        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
+          <Form.Item
+            label="手机号"
+            name="phone"
+            rules={[{ required: true, message: '请输入手机号' }]}
+          >
+            <Input
+              disabled={!!editing?.id}
+              inputMode="numeric"
+              maxLength={11}
+              placeholder="1xxxxxxxxxx"
+            />
+          </Form.Item>
+          <Form.Item
+            label="额外次数"
+            name="extraChances"
+            rules={[{ required: true, message: '请输入额外次数' }]}
+          >
+            <InputNumber min={0} placeholder="1" style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item label="备注（可选）" name="note">
+            <Input placeholder="如：VIP用户" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* 隐藏文件上传 */}
+      <input
+        accept=".xlsx,.xls"
+        onChange={handleFileChange}
+        ref={fileInputRef}
+        style={{ display: 'none' }}
+        type="file"
+      />
+    </main>
   );
 }

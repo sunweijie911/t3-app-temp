@@ -3,7 +3,6 @@
 import type { TableProps } from 'antd';
 import { Breadcrumb, Table, Tag } from 'antd';
 import Link from 'next/link';
-import { Header } from '@/shared/components/layout/header';
 import { api, type RouterOutputs } from '@/trpc/react';
 
 type TestItem = RouterOutputs['soulscope']['test']['list'][number];
@@ -46,38 +45,35 @@ export default function AdminTestsPage() {
   const { data: tests, isLoading } = api.soulscope.test.list.useQuery();
 
   return (
-    <>
-      <Header />
-      <main style={{ minHeight: '100vh', background: '#f5f5f5' }}>
-        <div style={{ maxWidth: 1152, margin: '0 auto', padding: '48px 24px' }}>
-          <Breadcrumb
-            items={[
-              { title: <Link href="/admin/soulscope">SoulScope 管理</Link> },
-              { title: '测试管理' },
-            ]}
-            style={{ marginBottom: 24 }}
-          />
-          <h1
-            style={{
-              fontSize: 28,
-              fontWeight: 700,
-              color: '#111827',
-              marginBottom: 24,
-            }}
-          >
-            测试管理
-          </h1>
+    <main style={{ minHeight: '100vh', background: '#f5f5f5' }}>
+      <div style={{ maxWidth: 1152, margin: '0 auto', padding: '48px 24px' }}>
+        <Breadcrumb
+          items={[
+            { title: <Link href="/admin/soulscope">SoulScope 管理</Link> },
+            { title: '测试管理' },
+          ]}
+          style={{ marginBottom: 24 }}
+        />
+        <h1
+          style={{
+            fontSize: 28,
+            fontWeight: 700,
+            color: '#111827',
+            marginBottom: 24,
+          }}
+        >
+          测试管理
+        </h1>
 
-          <Table<TestItem>
-            columns={columns}
-            dataSource={tests ?? []}
-            loading={isLoading}
-            pagination={false}
-            rowKey="id"
-            style={{ background: '#fff', borderRadius: 12 }}
-          />
-        </div>
-      </main>
-    </>
+        <Table<TestItem>
+          columns={columns}
+          dataSource={tests ?? []}
+          loading={isLoading}
+          pagination={false}
+          rowKey="id"
+          style={{ background: '#fff', borderRadius: 12 }}
+        />
+      </div>
+    </main>
   );
 }

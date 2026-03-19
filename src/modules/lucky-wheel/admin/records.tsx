@@ -25,7 +25,6 @@ import {
   RECORD_STATUS_LABELS,
 } from '@/modules/lucky-wheel/constants';
 import type { WheelUserInfo } from '@/modules/lucky-wheel/schema';
-import { Header } from '@/shared/components/layout/header';
 import { api, type RouterOutputs } from '@/trpc/react';
 
 type Filters = {
@@ -420,225 +419,217 @@ export default function AdminRecordsPage() {
   ];
 
   return (
-    <>
-      <Header />
-      <main style={{ minHeight: '100vh', background: '#f5f5f5' }}>
-        <div style={{ maxWidth: 1200, margin: '0 auto', padding: '48px 24px' }}>
-          {/* 面包屑 + 操作区 */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              marginBottom: 24,
-            }}
-          >
-            <Breadcrumb
-              items={[
-                {
-                  title: <Link href="/admin/lucky-wheel">大转盘管理</Link>,
-                },
-                ...(filters.activityId
-                  ? [
-                      {
-                        title: (
-                          <Link
-                            href={`/admin/lucky-wheel/${filters.activityId}`}
-                          >
-                            {activities?.find(
-                              (a) => a.id === filters.activityId,
-                            )?.name ?? '活动'}
-                          </Link>
-                        ),
-                      },
-                    ]
-                  : []),
-                {
-                  title: '中奖记录',
-                },
-              ]}
-            />
-            <Space>
-              <Button
-                danger
-                disabled={!hasActivity || clearMutation.isPending}
-                loading={clearMutation.isPending}
-                onClick={handleClearAll}
-              >
-                清除所有数据
-              </Button>
-              <Button
-                disabled={!hasActivity}
-                loading={exporting}
-                onClick={handleExport}
-              >
-                {exporting ? '导出中...' : '导出 Excel'}
-              </Button>
-            </Space>
-          </div>
-
-          {/* 筛选栏 */}
-          <Card style={{ marginBottom: 16 }}>
-            <Form layout="inline" style={{ rowGap: 8 }}>
-              <Form.Item label="搜索用户">
-                <Input.Search
-                  allowClear
-                  enterButton="搜索"
-                  onChange={(e) => setSearchInput(e.target.value)}
-                  onSearch={(v) => applyFilters({ search: v })}
-                  placeholder="姓名 / 手机号"
-                  style={{ width: 260 }}
-                  value={searchInput}
-                />
-              </Form.Item>
-
-              <Form.Item label="活动" required>
-                <Select
-                  onChange={(v) => applyFilters({ activityId: v ?? '' })}
-                  options={
-                    activities?.map((a) => ({
-                      value: a.id,
-                      label: a.name,
-                    })) ?? []
-                  }
-                  placeholder="请选择活动"
-                  style={{ width: 160 }}
-                  value={filters.activityId || undefined}
-                />
-              </Form.Item>
-
-              <Form.Item label="奖品类型">
-                <Select
-                  allowClear
-                  onChange={(v) => applyFilters({ prizeType: v ?? '' })}
-                  options={Object.entries(PRIZE_TYPE_LABELS).map(([k, v]) => ({
-                    value: k,
-                    label: v,
-                  }))}
-                  placeholder="全部类型"
-                  style={{ width: 120 }}
-                  value={filters.prizeType || undefined}
-                />
-              </Form.Item>
-
-              <Form.Item label="状态">
-                <Select
-                  allowClear
-                  onChange={(v) => applyFilters({ status: v ?? '' })}
-                  options={Object.entries(RECORD_STATUS_LABELS).map(
-                    ([k, v]) => ({
-                      value: k,
-                      label: v,
-                    }),
-                  )}
-                  placeholder="全部状态"
-                  style={{ width: 120 }}
-                  value={filters.status || undefined}
-                />
-              </Form.Item>
-
-              <Form.Item label="时间范围">
-                <DatePicker.RangePicker
-                  allowClear
-                  onChange={(dates) => {
-                    if (dates?.[0] && dates?.[1]) {
-                      applyFilters({
-                        startDate: dates[0].startOf('day').toISOString(),
-                        endDate: dates[1].endOf('day').toISOString(),
-                      });
-                    } else {
-                      applyFilters({ startDate: '', endDate: '' });
-                    }
-                  }}
-                  value={
-                    filters.startDate && filters.endDate
-                      ? [dayjs(filters.startDate), dayjs(filters.endDate)]
-                      : null
-                  }
-                />
-              </Form.Item>
-            </Form>
-          </Card>
-
-          {/* 数据表格 */}
-          {!hasActivity ? (
-            <Card style={{ textAlign: 'center', padding: '48px 0' }}>
-              <Typography.Text type="secondary">
-                请先选择一个活动查看中奖记录
-              </Typography.Text>
-            </Card>
-          ) : (
-            <Card>
-              {selectedRowKeys.length > 0 && (
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 12,
-                    marginBottom: 16,
-                    padding: '8px 16px',
-                    background: '#f0f5ff',
-                    borderRadius: 6,
-                  }}
-                >
-                  <Typography.Text strong>
-                    已选 {selectedRowKeys.length} 条
-                  </Typography.Text>
-                  <Button
-                    danger
-                    loading={batchDeleteMutation.isPending}
-                    onClick={handleBatchDelete}
-                    size="small"
-                  >
-                    批量删除
-                  </Button>
-                  <Select
-                    disabled={batchUpdateStatusMutation.isPending}
-                    onChange={handleBatchUpdateStatus}
-                    options={Object.entries(RECORD_STATUS_LABELS).map(
-                      ([k, v]) => ({ value: k, label: v }),
-                    )}
-                    placeholder="批量更新状态"
-                    size="small"
-                    style={{ width: 140 }}
-                    value={undefined}
-                  />
-                  <Button
-                    onClick={() => setSelectedRowKeys([])}
-                    size="small"
-                    type="link"
-                  >
-                    取消选择
-                  </Button>
-                </div>
-              )}
-              <Table<RecordItem>
-                columns={columns}
-                dataSource={data?.items ?? []}
-                loading={!data}
-                locale={{ emptyText: '暂无符合条件的记录' }}
-                pagination={{
-                  current: currentPage,
-                  pageSize: limit,
-                  total: data?.total ?? 0,
-                  showSizeChanger: false,
-                  showTotal: (total) => `共 ${total} 条`,
-                  onChange: (page) => {
-                    setOffset((page - 1) * limit);
-                    setSelectedRowKeys([]);
-                  },
-                }}
-                rowKey="id"
-                rowSelection={{
-                  selectedRowKeys,
-                  onChange: (keys) => setSelectedRowKeys(keys as string[]),
-                }}
-                scroll={{ x: 900 }}
-              />
-            </Card>
-          )}
+    <main style={{ minHeight: '100vh', background: '#f5f5f5' }}>
+      <div style={{ maxWidth: 1200, margin: '0 auto', padding: '48px 24px' }}>
+        {/* 面包屑 + 操作区 */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginBottom: 24,
+          }}
+        >
+          <Breadcrumb
+            items={[
+              {
+                title: <Link href="/admin/lucky-wheel">大转盘管理</Link>,
+              },
+              ...(filters.activityId
+                ? [
+                    {
+                      title: (
+                        <Link href={`/admin/lucky-wheel/${filters.activityId}`}>
+                          {activities?.find((a) => a.id === filters.activityId)
+                            ?.name ?? '活动'}
+                        </Link>
+                      ),
+                    },
+                  ]
+                : []),
+              {
+                title: '中奖记录',
+              },
+            ]}
+          />
+          <Space>
+            <Button
+              danger
+              disabled={!hasActivity || clearMutation.isPending}
+              loading={clearMutation.isPending}
+              onClick={handleClearAll}
+            >
+              清除所有数据
+            </Button>
+            <Button
+              disabled={!hasActivity}
+              loading={exporting}
+              onClick={handleExport}
+            >
+              {exporting ? '导出中...' : '导出 Excel'}
+            </Button>
+          </Space>
         </div>
-      </main>
-    </>
+
+        {/* 筛选栏 */}
+        <Card style={{ marginBottom: 16 }}>
+          <Form layout="inline" style={{ rowGap: 8 }}>
+            <Form.Item label="搜索用户">
+              <Input.Search
+                allowClear
+                enterButton="搜索"
+                onChange={(e) => setSearchInput(e.target.value)}
+                onSearch={(v) => applyFilters({ search: v })}
+                placeholder="姓名 / 手机号"
+                style={{ width: 260 }}
+                value={searchInput}
+              />
+            </Form.Item>
+
+            <Form.Item label="活动" required>
+              <Select
+                onChange={(v) => applyFilters({ activityId: v ?? '' })}
+                options={
+                  activities?.map((a) => ({
+                    value: a.id,
+                    label: a.name,
+                  })) ?? []
+                }
+                placeholder="请选择活动"
+                style={{ width: 160 }}
+                value={filters.activityId || undefined}
+              />
+            </Form.Item>
+
+            <Form.Item label="奖品类型">
+              <Select
+                allowClear
+                onChange={(v) => applyFilters({ prizeType: v ?? '' })}
+                options={Object.entries(PRIZE_TYPE_LABELS).map(([k, v]) => ({
+                  value: k,
+                  label: v,
+                }))}
+                placeholder="全部类型"
+                style={{ width: 120 }}
+                value={filters.prizeType || undefined}
+              />
+            </Form.Item>
+
+            <Form.Item label="状态">
+              <Select
+                allowClear
+                onChange={(v) => applyFilters({ status: v ?? '' })}
+                options={Object.entries(RECORD_STATUS_LABELS).map(([k, v]) => ({
+                  value: k,
+                  label: v,
+                }))}
+                placeholder="全部状态"
+                style={{ width: 120 }}
+                value={filters.status || undefined}
+              />
+            </Form.Item>
+
+            <Form.Item label="时间范围">
+              <DatePicker.RangePicker
+                allowClear
+                onChange={(dates) => {
+                  if (dates?.[0] && dates?.[1]) {
+                    applyFilters({
+                      startDate: dates[0].startOf('day').toISOString(),
+                      endDate: dates[1].endOf('day').toISOString(),
+                    });
+                  } else {
+                    applyFilters({ startDate: '', endDate: '' });
+                  }
+                }}
+                value={
+                  filters.startDate && filters.endDate
+                    ? [dayjs(filters.startDate), dayjs(filters.endDate)]
+                    : null
+                }
+              />
+            </Form.Item>
+          </Form>
+        </Card>
+
+        {/* 数据表格 */}
+        {!hasActivity ? (
+          <Card style={{ textAlign: 'center', padding: '48px 0' }}>
+            <Typography.Text type="secondary">
+              请先选择一个活动查看中奖记录
+            </Typography.Text>
+          </Card>
+        ) : (
+          <Card>
+            {selectedRowKeys.length > 0 && (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 12,
+                  marginBottom: 16,
+                  padding: '8px 16px',
+                  background: '#f0f5ff',
+                  borderRadius: 6,
+                }}
+              >
+                <Typography.Text strong>
+                  已选 {selectedRowKeys.length} 条
+                </Typography.Text>
+                <Button
+                  danger
+                  loading={batchDeleteMutation.isPending}
+                  onClick={handleBatchDelete}
+                  size="small"
+                >
+                  批量删除
+                </Button>
+                <Select
+                  disabled={batchUpdateStatusMutation.isPending}
+                  onChange={handleBatchUpdateStatus}
+                  options={Object.entries(RECORD_STATUS_LABELS).map(
+                    ([k, v]) => ({ value: k, label: v }),
+                  )}
+                  placeholder="批量更新状态"
+                  size="small"
+                  style={{ width: 140 }}
+                  value={undefined}
+                />
+                <Button
+                  onClick={() => setSelectedRowKeys([])}
+                  size="small"
+                  type="link"
+                >
+                  取消选择
+                </Button>
+              </div>
+            )}
+            <Table<RecordItem>
+              columns={columns}
+              dataSource={data?.items ?? []}
+              loading={!data}
+              locale={{ emptyText: '暂无符合条件的记录' }}
+              pagination={{
+                current: currentPage,
+                pageSize: limit,
+                total: data?.total ?? 0,
+                showSizeChanger: false,
+                showTotal: (total) => `共 ${total} 条`,
+                onChange: (page) => {
+                  setOffset((page - 1) * limit);
+                  setSelectedRowKeys([]);
+                },
+              }}
+              rowKey="id"
+              rowSelection={{
+                selectedRowKeys,
+                onChange: (keys) => setSelectedRowKeys(keys as string[]),
+              }}
+              scroll={{ x: 900 }}
+            />
+          </Card>
+        )}
+      </div>
+    </main>
   );
 }

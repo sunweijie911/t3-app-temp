@@ -17,9 +17,7 @@ import dayjs from 'dayjs';
 import Link from 'next/link';
 import { useState } from 'react';
 import { toast } from 'sonner';
-import { ModuleSwitcher } from '@/shared/components/admin/module-switcher';
 import { RichTextEditor } from '@/shared/components/form/rich-text-editor';
-import { Header } from '@/shared/components/layout/header';
 import { api } from '@/trpc/react';
 
 type EditingActivity = {
@@ -203,28 +201,24 @@ export default function AdminLuckyWheelPage() {
 
   return (
     <>
-      <Header />
       <main className="min-h-screen bg-gray-50">
         <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:px-8">
           <div className="mb-6 flex items-center justify-between">
             <h1 className="font-bold text-2xl text-gray-900">大转盘管理</h1>
-            <div className="flex items-center gap-4">
-              <ModuleSwitcher currentModuleId="lucky-wheel" />
-              <Button
-                onClick={() =>
-                  setEditing({
-                    name: '',
-                    slug: '',
-                    rulesHtml: '',
-                    timeRange: null,
-                    maxDrawsPerUser: 1,
-                  })
-                }
-                type="primary"
-              >
-                新建活动
-              </Button>
-            </div>
+            <Button
+              onClick={() =>
+                setEditing({
+                  name: '',
+                  slug: '',
+                  rulesHtml: '',
+                  timeRange: null,
+                  maxDrawsPerUser: 1,
+                })
+              }
+              type="primary"
+            >
+              新建活动
+            </Button>
           </div>
 
           <Table

@@ -23,8 +23,6 @@ import {
   REVIEW_STATUS_COLORS,
   REVIEW_STATUS_LABELS,
 } from '@/modules/info-collect/constants';
-import { ModuleSwitcher } from '@/shared/components/admin/module-switcher';
-import { Header } from '@/shared/components/layout/header';
 import { api, type RouterOutputs } from '@/trpc/react';
 
 type ReviewStatus =
@@ -441,7 +439,6 @@ export default function AdminInfoCollectPage() {
 
   return (
     <>
-      <Header />
       <main style={{ minHeight: '100vh', background: '#f5f5f5' }}>
         <div style={{ maxWidth: 1200, margin: '0 auto', padding: '48px 24px' }}>
           <div
@@ -456,7 +453,6 @@ export default function AdminInfoCollectPage() {
               信息采集记录
             </Typography.Title>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <ModuleSwitcher currentModuleId="info-collect" />
               <Link href="/admin/info-collect/config">
                 <Button>采集配置</Button>
               </Link>

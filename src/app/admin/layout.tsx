@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation';
+import { AdminShell } from '@/app/admin/admin-shell';
 import { AdminAntdProvider } from '@/app/admin/antd-provider';
 import { getSession } from '@/server/better-auth/server';
 import { getUserPhone } from '@/server/better-auth/types';
@@ -19,5 +20,9 @@ export default async function AdminLayout({
     redirect('/');
   }
 
-  return <AdminAntdProvider>{children}</AdminAntdProvider>;
+  return (
+    <AdminAntdProvider>
+      <AdminShell>{children}</AdminShell>
+    </AdminAntdProvider>
+  );
 }

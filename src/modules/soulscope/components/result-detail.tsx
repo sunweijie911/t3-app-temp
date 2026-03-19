@@ -5,8 +5,6 @@ import { ResultSummary } from '@/modules/soulscope/components/result/result-summ
 import { ShareButtons } from '@/modules/soulscope/components/result/share-buttons';
 import { UnlockReportCta } from '@/modules/soulscope/components/result/unlock-report-cta';
 import { getSession } from '@/server/better-auth/server';
-import { Footer } from '@/shared/components/layout/footer';
-import { Header } from '@/shared/components/layout/header';
 import { api, HydrateClient } from '@/trpc/server';
 
 export default async function ResultDetailPage({
@@ -32,7 +30,6 @@ export default async function ResultDetailPage({
 
   return (
     <HydrateClient>
-      <Header />
       <main className="min-h-screen bg-white">
         <div className="mx-auto max-w-3xl px-4 py-12 sm:px-6 lg:px-8">
           <Link
@@ -66,7 +63,6 @@ export default async function ResultDetailPage({
           </div>
         </div>
       </main>
-      <Footer />
     </HydrateClient>
   );
 }

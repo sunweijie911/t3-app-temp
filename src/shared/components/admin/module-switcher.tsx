@@ -34,7 +34,7 @@ export function ModuleSwitcher({ currentModuleId }: Props) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
       <Typography.Text style={{ fontSize: 13, color: '#6b7280' }}>
-        切换模块
+        默认首页
       </Typography.Text>
       <Select
         loading={setConfig.isPending}

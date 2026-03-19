@@ -31,7 +31,6 @@ import Link from 'next/link';
 import { use, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { PRIZE_TYPE_LABELS } from '@/modules/lucky-wheel/constants';
-import { Header } from '@/shared/components/layout/header';
 import { api } from '@/trpc/react';
 
 type PrizeType = 'physical' | 'virtual' | 'coupon' | 'points' | 'thanks';
@@ -372,78 +371,75 @@ export default function AdminPrizesPage({ params }: Props) {
   ];
 
   return (
-    <>
-      <Header />
-      <main style={{ minHeight: '100vh', background: '#f9fafb' }}>
-        <div style={{ maxWidth: 1152, margin: '0 auto', padding: '48px 16px' }}>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              marginBottom: 32,
-            }}
-          >
-            <Breadcrumb
-              items={[
-                {
-                  title: <Link href="/admin/lucky-wheel">大转盘管理</Link>,
-                },
-                {
-                  title: (
-                    <Link href={`/admin/lucky-wheel/${activityId}`}>
-                      {activityName}
-                    </Link>
-                  ),
-                },
-                { title: '奖品配置' },
-              ]}
-            />
-            <Space>
-              <Button onClick={addRow}>+ 添加奖品</Button>
-              <Button
-                disabled={batchUpsertMutation.isPending}
-                loading={batchUpsertMutation.isPending}
-                onClick={handleSaveAll}
-                type="primary"
-              >
-                保存全部
-              </Button>
-            </Space>
-          </div>
-
-          {rows.length > 0 && (
-            <Alert
-              showIcon
-              style={{ marginBottom: 16 }}
-              title={
-                <>
-                  奖品概率总计：<strong>{totalPctDisplay}%</strong>
-                  {isPctValid ? ' ✓' : ' — 建议调整至 100%'}
-                </>
-              }
-              type={isPctValid ? 'success' : 'warning'}
-            />
-          )}
-
-          <DndContext onDragEnd={handleDragEnd} sensors={sensors}>
-            <SortableContext
-              items={rows.map((r) => r._key)}
-              strategy={verticalListSortingStrategy}
+    <main style={{ minHeight: '100vh', background: '#f9fafb' }}>
+      <div style={{ maxWidth: 1152, margin: '0 auto', padding: '48px 16px' }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginBottom: 32,
+          }}
+        >
+          <Breadcrumb
+            items={[
+              {
+                title: <Link href="/admin/lucky-wheel">大转盘管理</Link>,
+              },
+              {
+                title: (
+                  <Link href={`/admin/lucky-wheel/${activityId}`}>
+                    {activityName}
+                  </Link>
+                ),
+              },
+              { title: '奖品配置' },
+            ]}
+          />
+          <Space>
+            <Button onClick={addRow}>+ 添加奖品</Button>
+            <Button
+              disabled={batchUpsertMutation.isPending}
+              loading={batchUpsertMutation.isPending}
+              onClick={handleSaveAll}
+              type="primary"
             >
-              <Table
-                columns={columns}
-                components={{ body: { row: SortableRow } }}
-                dataSource={rows}
-                locale={{ emptyText: '暂无奖品，点击「添加奖品」开始配置' }}
-                pagination={false}
-                rowKey="_key"
-                scroll={{ x: true }}
-              />
-            </SortableContext>
-          </DndContext>
+              保存全部
+            </Button>
+          </Space>
         </div>
-      </main>
-    </>
+
+        {rows.length > 0 && (
+          <Alert
+            showIcon
+            style={{ marginBottom: 16 }}
+            title={
+              <>
+                奖品概率总计：<strong>{totalPctDisplay}%</strong>
+                {isPctValid ? ' ✓' : ' — 建议调整至 100%'}
+              </>
+            }
+            type={isPctValid ? 'success' : 'warning'}
+          />
+        )}
+
+        <DndContext onDragEnd={handleDragEnd} sensors={sensors}>
+          <SortableContext
+            items={rows.map((r) => r._key)}
+            strategy={verticalListSortingStrategy}
+          >
+            <Table
+              columns={columns}
+              components={{ body: { row: SortableRow } }}
+              dataSource={rows}
+              locale={{ emptyText: '暂无奖品，点击「添加奖品」开始配置' }}
+              pagination={false}
+              rowKey="_key"
+              scroll={{ x: true }}
+            />
+          </SortableContext>
+        </DndContext>
+      </div>
+    </main>
   );
 }

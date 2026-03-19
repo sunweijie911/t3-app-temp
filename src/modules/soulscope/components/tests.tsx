@@ -1,7 +1,5 @@
 import { Suspense } from 'react';
 import { TestGrid } from '@/modules/soulscope/components/test/test-grid';
-import { Footer } from '@/shared/components/layout/footer';
-import { Header } from '@/shared/components/layout/header';
 import { api, HydrateClient } from '@/trpc/server';
 
 async function AllTests() {
@@ -17,7 +15,6 @@ export const metadata = {
 export default function TestsPage() {
   return (
     <HydrateClient>
-      <Header />
       <main className="min-h-screen bg-white">
         <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
           <div className="mb-8">
@@ -42,7 +39,6 @@ export default function TestsPage() {
           </Suspense>
         </div>
       </main>
-      <Footer />
     </HydrateClient>
   );
 }

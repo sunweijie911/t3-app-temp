@@ -2,8 +2,6 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { ReportViewer } from '@/modules/soulscope/components/report/report-viewer';
 import { getSession } from '@/server/better-auth/server';
-import { Footer } from '@/shared/components/layout/footer';
-import { Header } from '@/shared/components/layout/header';
 import { HydrateClient } from '@/trpc/server';
 
 export const metadata = {
@@ -24,7 +22,6 @@ export default async function ReportPage({
 
   return (
     <HydrateClient>
-      <Header />
       <main className="min-h-screen bg-gray-50">
         <div className="mx-auto max-w-4xl px-4 py-12 sm:px-6 lg:px-8">
           <Link
@@ -36,7 +33,6 @@ export default async function ReportPage({
           <ReportViewer resultId={resultId} />
         </div>
       </main>
-      <Footer />
     </HydrateClient>
   );
 }

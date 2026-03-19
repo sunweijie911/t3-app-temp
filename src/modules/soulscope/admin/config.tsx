@@ -13,7 +13,6 @@ import {
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { Header } from '@/shared/components/layout/header';
 import { api } from '@/trpc/react';
 
 type ConfigType = 'text' | 'password' | 'number' | 'textarea';
@@ -147,32 +146,29 @@ function ConfigSection({
 
 export default function AdminConfigPage() {
   return (
-    <>
-      <Header />
-      <main style={{ minHeight: '100vh', background: '#f5f5f5' }}>
-        <div style={{ maxWidth: 896, margin: '0 auto', padding: '48px 24px' }}>
-          <Breadcrumb
-            items={[
-              { title: <Link href="/admin/soulscope">SoulScope 管理</Link> },
-              { title: '系统配置' },
-            ]}
-            style={{ marginBottom: 8 }}
-          />
-          <h1
-            style={{
-              fontSize: 28,
-              fontWeight: 700,
-              color: '#111827',
-              marginBottom: 32,
-            }}
-          >
-            系统配置
-          </h1>
+    <main style={{ minHeight: '100vh', background: '#f5f5f5' }}>
+      <div style={{ maxWidth: 896, margin: '0 auto', padding: '48px 24px' }}>
+        <Breadcrumb
+          items={[
+            { title: <Link href="/admin/soulscope">SoulScope 管理</Link> },
+            { title: '系统配置' },
+          ]}
+          style={{ marginBottom: 8 }}
+        />
+        <h1
+          style={{
+            fontSize: 28,
+            fontWeight: 700,
+            color: '#111827',
+            marginBottom: 32,
+          }}
+        >
+          系统配置
+        </h1>
 
-          <ConfigSection configs={LLM_CONFIGS} title="LLM 配置" />
-          <ConfigSection configs={REPORT_CONFIGS} title="报告配置" />
-        </div>
-      </main>
-    </>
+        <ConfigSection configs={LLM_CONFIGS} title="LLM 配置" />
+        <ConfigSection configs={REPORT_CONFIGS} title="报告配置" />
+      </div>
+    </main>
   );
 }

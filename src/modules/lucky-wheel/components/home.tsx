@@ -1,8 +1,6 @@
 import Link from 'next/link';
 import { Suspense } from 'react';
 import { ActivityCard } from '@/modules/lucky-wheel/components/activity/activity-card';
-import { Footer } from '@/shared/components/layout/footer';
-import { Header } from '@/shared/components/layout/header';
 import { api, HydrateClient } from '@/trpc/server';
 
 async function ActiveActivities() {
@@ -22,7 +20,6 @@ async function ActiveActivities() {
 export default async function LuckyWheelHome() {
   return (
     <HydrateClient>
-      <Header />
       <main className="min-h-screen bg-white">
         {/* Hero */}
         <section className="bg-gradient-to-br from-orange-500 via-red-500 to-pink-500 px-4 py-20 text-white">
@@ -63,7 +60,6 @@ export default async function LuckyWheelHome() {
           </Suspense>
         </section>
       </main>
-      <Footer subtitle="活动最终解释权归主办方所有" title="幸运大转盘" />
     </HydrateClient>
   );
 }

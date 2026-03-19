@@ -4,7 +4,6 @@ import type { TableProps } from 'antd';
 import { Breadcrumb, Table, Tag } from 'antd';
 import Link from 'next/link';
 import { useState } from 'react';
-import { Header } from '@/shared/components/layout/header';
 import { api, type RouterOutputs } from '@/trpc/react';
 
 const PAGE_SIZE = 20;
@@ -56,45 +55,42 @@ export default function AdminOrdersPage() {
   });
 
   return (
-    <>
-      <Header />
-      <main style={{ minHeight: '100vh', background: '#f5f5f5' }}>
-        <div style={{ maxWidth: 1152, margin: '0 auto', padding: '48px 24px' }}>
-          <Breadcrumb
-            items={[
-              { title: <Link href="/admin/soulscope">SoulScope 管理</Link> },
-              { title: '订单管理' },
-            ]}
-            style={{ marginBottom: 24 }}
-          />
-          <h1
-            style={{
-              fontSize: 28,
-              fontWeight: 700,
-              color: '#111827',
-              marginBottom: 24,
-            }}
-          >
-            订单管理
-          </h1>
+    <main style={{ minHeight: '100vh', background: '#f5f5f5' }}>
+      <div style={{ maxWidth: 1152, margin: '0 auto', padding: '48px 24px' }}>
+        <Breadcrumb
+          items={[
+            { title: <Link href="/admin/soulscope">SoulScope 管理</Link> },
+            { title: '订单管理' },
+          ]}
+          style={{ marginBottom: 24 }}
+        />
+        <h1
+          style={{
+            fontSize: 28,
+            fontWeight: 700,
+            color: '#111827',
+            marginBottom: 24,
+          }}
+        >
+          订单管理
+        </h1>
 
-          <Table<OrderItem>
-            columns={columns}
-            dataSource={data?.items ?? []}
-            loading={isLoading}
-            pagination={{
-              current: page,
-              pageSize: PAGE_SIZE,
-              total: data?.total ?? 0,
-              showSizeChanger: false,
-              showTotal: (total) => `共 ${total} 条`,
-              onChange: (p) => setPage(p),
-            }}
-            rowKey="id"
-            style={{ background: '#fff', borderRadius: 12 }}
-          />
-        </div>
-      </main>
-    </>
+        <Table<OrderItem>
+          columns={columns}
+          dataSource={data?.items ?? []}
+          loading={isLoading}
+          pagination={{
+            current: page,
+            pageSize: PAGE_SIZE,
+            total: data?.total ?? 0,
+            showSizeChanger: false,
+            showTotal: (total) => `共 ${total} 条`,
+            onChange: (p) => setPage(p),
+          }}
+          rowKey="id"
+          style={{ background: '#fff', borderRadius: 12 }}
+        />
+      </div>
+    </main>
   );
 }

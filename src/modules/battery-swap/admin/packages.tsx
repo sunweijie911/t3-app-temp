@@ -41,8 +41,6 @@ import { useState } from 'react';
 import { toast } from 'sonner';
 
 import type { PackageSpec } from '@/modules/battery-swap/schema';
-import { ModuleSwitcher } from '@/shared/components/admin/module-switcher';
-import { Header } from '@/shared/components/layout/header';
 import { api } from '@/trpc/react';
 
 // 价格：分 → 元
@@ -436,20 +434,16 @@ export default function AdminBatterySwapPage() {
 
   return (
     <>
-      <Header />
       <main className="min-h-screen bg-gray-50">
         <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:px-8">
           <div className="mb-6 flex items-center justify-between">
             <h1 className="font-bold text-2xl text-gray-900">换电套餐管理</h1>
-            <div className="flex items-center gap-4">
-              <ModuleSwitcher currentModuleId="battery-swap" />
-              <Button
-                onClick={() => setEditing({ ...DEFAULT_EDITING })}
-                type="primary"
-              >
-                新建套餐
-              </Button>
-            </div>
+            <Button
+              onClick={() => setEditing({ ...DEFAULT_EDITING })}
+              type="primary"
+            >
+              新建套餐
+            </Button>
           </div>
 
           <DndContext onDragEnd={handleDragEnd} sensors={sensors}>

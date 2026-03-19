@@ -1,8 +1,6 @@
 import { TRPCError } from '@trpc/server';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { Footer } from '@/shared/components/layout/footer';
-import { Header } from '@/shared/components/layout/header';
 import { api, HydrateClient } from '@/trpc/server';
 import { StartTestButton } from './start-test-button';
 
@@ -24,7 +22,6 @@ export default async function TestDetailPage({
 
   return (
     <HydrateClient>
-      <Header />
       <main className="min-h-screen bg-white">
         <div className="mx-auto max-w-3xl px-4 py-12 sm:px-6 lg:px-8">
           <Link
@@ -56,7 +53,6 @@ export default async function TestDetailPage({
           <StartTestButton testSlug={testType.slug} testTypeId={testType.id} />
         </div>
       </main>
-      <Footer />
     </HydrateClient>
   );
 }

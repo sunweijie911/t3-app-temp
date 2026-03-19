@@ -1,7 +1,5 @@
 import Link from 'next/link';
 import { MyRecords } from '@/modules/lucky-wheel/components/record/my-records';
-import { Footer } from '@/shared/components/layout/footer';
-import { Header } from '@/shared/components/layout/header';
 import { HydrateClient } from '@/trpc/server';
 
 export const metadata = {
@@ -11,7 +9,6 @@ export const metadata = {
 export default function RecordsPage() {
   return (
     <HydrateClient>
-      <Header />
       <main className="min-h-screen bg-gray-50">
         <div className="mx-auto max-w-2xl px-4 py-12">
           <div className="mb-8">
@@ -28,7 +25,6 @@ export default function RecordsPage() {
           <MyRecords />
         </div>
       </main>
-      <Footer subtitle="活动最终解释权归主办方所有" title="幸运大转盘" />
     </HydrateClient>
   );
 }

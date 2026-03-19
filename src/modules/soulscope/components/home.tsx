@@ -2,8 +2,6 @@ import { MousePointerClick, PenLine, Sparkles } from 'lucide-react';
 import Link from 'next/link';
 import { Suspense } from 'react';
 import { TestGrid } from '@/modules/soulscope/components/test/test-grid';
-import { Footer } from '@/shared/components/layout/footer';
-import { Header } from '@/shared/components/layout/header';
 import { api, HydrateClient } from '@/trpc/server';
 
 async function FeaturedTests() {
@@ -14,7 +12,6 @@ async function FeaturedTests() {
 export default async function SoulscopeHome() {
   return (
     <HydrateClient>
-      <Header />
       <main className="min-h-screen bg-white">
         {/* Hero Section */}
         <section className="bg-gradient-to-br from-purple-600 via-purple-700 to-pink-600 px-4 py-20 text-white">
@@ -101,7 +98,6 @@ export default async function SoulscopeHome() {
           </div>
         </section>
       </main>
-      <Footer />
     </HydrateClient>
   );
 }

@@ -1,8 +1,6 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getSession } from '@/server/better-auth/server';
-import { Footer } from '@/shared/components/layout/footer';
-import { Header } from '@/shared/components/layout/header';
 import { api, HydrateClient } from '@/trpc/server';
 
 export const metadata = {
@@ -19,7 +17,6 @@ export default async function ResultsPage() {
 
   return (
     <HydrateClient>
-      <Header />
       <main className="min-h-screen bg-white">
         <div className="mx-auto max-w-4xl px-4 py-12 sm:px-6 lg:px-8">
           <h1 className="mb-8 font-bold text-3xl text-gray-900">
@@ -68,7 +65,6 @@ export default async function ResultsPage() {
           )}
         </div>
       </main>
-      <Footer />
     </HydrateClient>
   );
 }

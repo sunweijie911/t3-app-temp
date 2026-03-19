@@ -5,20 +5,15 @@ import { AntdRegistry } from '@ant-design/nextjs-registry';
 import type { Metadata } from 'next';
 import { Geist } from 'next/font/google';
 import { Toaster } from 'sonner';
-import { getModule } from '@/modules/registry';
 import { getDefaultModuleId } from '@/server/services/config';
 import { DefaultModuleProvider } from '@/shared/components/default-module-provider';
 import { TRPCReactProvider } from '@/trpc/react';
 
-export async function generateMetadata(): Promise<Metadata> {
-  const moduleId = await getDefaultModuleId();
-  const mod = getModule(moduleId);
-  return {
-    title: `${mod.name} - ${mod.description}`,
-    description: mod.description,
-    icons: [{ rel: 'icon', url: '/favicon.ico' }],
-  };
-}
+export const metadata: Metadata = {
+  title: '管理平台',
+  description: '多模块管理平台',
+  icons: [{ rel: 'icon', url: '/favicon.ico' }],
+};
 
 const geist = Geist({
   subsets: ['latin'],

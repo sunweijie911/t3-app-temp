@@ -17,8 +17,6 @@ import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { OPTIONAL_FIELDS } from '@/modules/info-collect/constants';
 import type { InfoCollectConfigFields } from '@/modules/info-collect/schema';
-import { ModuleSwitcher } from '@/shared/components/admin/module-switcher';
-import { Header } from '@/shared/components/layout/header';
 import { api } from '@/trpc/react';
 
 export default function AdminInfoCollectConfigPage() {
@@ -83,153 +81,138 @@ export default function AdminInfoCollectConfigPage() {
 
   if (isLoading) {
     return (
-      <>
-        <Header />
-        <main style={{ minHeight: '100vh', background: '#f5f5f5' }}>
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'center',
-              paddingTop: 120,
-            }}
-          >
-            <Spin size="large" />
-          </div>
-        </main>
-      </>
+      <main style={{ minHeight: '100vh', background: '#f5f5f5' }}>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'center',
+            paddingTop: 120,
+          }}
+        >
+          <Spin size="large" />
+        </div>
+      </main>
     );
   }
 
   return (
-    <>
-      <Header />
-      <main style={{ minHeight: '100vh', background: '#f5f5f5' }}>
-        <div style={{ maxWidth: 896, margin: '0 auto', padding: '48px 24px' }}>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              marginBottom: 8,
-            }}
-          >
-            <Breadcrumb
-              items={[
-                {
-                  title: <Link href="/admin/info-collect">信息采集管理</Link>,
-                },
-                { title: '采集配置' },
-              ]}
-            />
-            <ModuleSwitcher currentModuleId="info-collect" />
-          </div>
-          <h1
-            style={{
-              fontSize: 28,
-              fontWeight: 700,
-              color: '#111827',
-              marginBottom: 32,
-            }}
-          >
-            采集配置
-          </h1>
+    <main style={{ minHeight: '100vh', background: '#f5f5f5' }}>
+      <div style={{ maxWidth: 896, margin: '0 auto', padding: '48px 24px' }}>
+        <Breadcrumb
+          items={[
+            {
+              title: <Link href="/admin/info-collect">信息采集管理</Link>,
+            },
+            { title: '采集配置' },
+          ]}
+          style={{ marginBottom: 8 }}
+        />
+        <h1
+          style={{
+            fontSize: 28,
+            fontWeight: 700,
+            color: '#111827',
+            marginBottom: 32,
+          }}
+        >
+          采集配置
+        </h1>
 
-          {/* Banner 配置 */}
-          <Card style={{ marginBottom: 24 }} title="Banner 配置">
-            <Form layout="vertical">
-              <Form.Item label="顶部 Banner 图">
-                {bannerUrl ? (
-                  <div style={{ marginBottom: 12 }}>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <Image
-                      alt="Banner 预览"
-                      src={bannerUrl}
-                      style={{
-                        maxWidth: '100%',
-                        maxHeight: 200,
-                        borderRadius: 8,
-                        objectFit: 'cover',
-                      }}
-                    />
-                    <div style={{ marginTop: 8 }}>
-                      <Button
-                        danger
-                        icon={<DeleteOutlined />}
-                        onClick={() => setBannerUrl(null)}
-                        size="small"
-                      >
-                        清除 Banner
-                      </Button>
-                    </div>
-                  </div>
-                ) : (
-                  <Upload
-                    accept="image/jpeg,image/png,image/webp"
-                    beforeUpload={(file) => {
-                      void handleBannerUpload(file);
-                      return false;
+        {/* Banner 配置 */}
+        <Card style={{ marginBottom: 24 }} title="Banner 配置">
+          <Form layout="vertical">
+            <Form.Item label="顶部 Banner 图">
+              {bannerUrl ? (
+                <div style={{ marginBottom: 12 }}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <Image
+                    alt="Banner 预览"
+                    src={bannerUrl}
+                    style={{
+                      maxWidth: '100%',
+                      maxHeight: 200,
+                      borderRadius: 8,
+                      objectFit: 'cover',
                     }}
-                    showUploadList={false}
-                  >
-                    <Button icon={<UploadOutlined />} loading={uploading}>
-                      {uploading ? '上传中...' : '点击上传 Banner 图'}
-                    </Button>
-                  </Upload>
-                )}
-                <Typography.Text
-                  style={{ display: 'block', marginTop: 4 }}
-                  type="secondary"
-                >
-                  建议尺寸 750×300，支持 jpg/png/webp，最大 5MB。留空则不显示
-                  Banner。
-                </Typography.Text>
-              </Form.Item>
-            </Form>
-          </Card>
-
-          {/* 采集字段配置 */}
-          <Card style={{ marginBottom: 24 }} title="采集字段配置">
-            <Form layout="vertical">
-              <Form.Item>
-                <div
-                  style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
-                >
-                  {/* 固定字段 */}
-                  <Checkbox checked disabled>
-                    手机号（必填，不可关闭）
-                  </Checkbox>
-                  <Checkbox checked disabled>
-                    身份证号（必填，不可关闭）
-                  </Checkbox>
-
-                  {/* 可选字段 */}
-                  {OPTIONAL_FIELDS.map((field) => (
-                    <Checkbox
-                      checked={enabledFields.includes(field.key)}
-                      key={field.key}
-                      onChange={() => toggleField(field.key)}
+                  />
+                  <div style={{ marginTop: 8 }}>
+                    <Button
+                      danger
+                      icon={<DeleteOutlined />}
+                      onClick={() => setBannerUrl(null)}
+                      size="small"
                     >
-                      {field.label}
-                    </Checkbox>
-                  ))}
+                      清除 Banner
+                    </Button>
+                  </div>
                 </div>
-              </Form.Item>
-            </Form>
-          </Card>
+              ) : (
+                <Upload
+                  accept="image/jpeg,image/png,image/webp"
+                  beforeUpload={(file) => {
+                    void handleBannerUpload(file);
+                    return false;
+                  }}
+                  showUploadList={false}
+                >
+                  <Button icon={<UploadOutlined />} loading={uploading}>
+                    {uploading ? '上传中...' : '点击上传 Banner 图'}
+                  </Button>
+                </Upload>
+              )}
+              <Typography.Text
+                style={{ display: 'block', marginTop: 4 }}
+                type="secondary"
+              >
+                建议尺寸 750×300，支持 jpg/png/webp，最大 5MB。留空则不显示
+                Banner。
+              </Typography.Text>
+            </Form.Item>
+          </Form>
+        </Card>
 
-          {/* 保存按钮 */}
-          <div style={{ textAlign: 'right' }}>
-            <Button
-              loading={saveMutation.isPending}
-              onClick={handleSave}
-              size="large"
-              type="primary"
-            >
-              保存配置
-            </Button>
-          </div>
+        {/* 采集字段配置 */}
+        <Card style={{ marginBottom: 24 }} title="采集字段配置">
+          <Form layout="vertical">
+            <Form.Item>
+              <div
+                style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
+              >
+                {/* 固定字段 */}
+                <Checkbox checked disabled>
+                  手机号（必填，不可关闭）
+                </Checkbox>
+                <Checkbox checked disabled>
+                  身份证号（必填，不可关闭）
+                </Checkbox>
+
+                {/* 可选字段 */}
+                {OPTIONAL_FIELDS.map((field) => (
+                  <Checkbox
+                    checked={enabledFields.includes(field.key)}
+                    key={field.key}
+                    onChange={() => toggleField(field.key)}
+                  >
+                    {field.label}
+                  </Checkbox>
+                ))}
+              </div>
+            </Form.Item>
+          </Form>
+        </Card>
+
+        {/* 保存按钮 */}
+        <div style={{ textAlign: 'right' }}>
+          <Button
+            loading={saveMutation.isPending}
+            onClick={handleSave}
+            size="large"
+            type="primary"
+          >
+            保存配置
+          </Button>
         </div>
-      </main>
-    </>
+      </div>
+    </main>
   );
 }

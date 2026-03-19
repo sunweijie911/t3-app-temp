@@ -19,7 +19,6 @@ import {
   PRIZE_TYPE_LABELS,
   RECORD_STATUS_LABELS,
 } from '@/modules/lucky-wheel/constants';
-import { Header } from '@/shared/components/layout/header';
 import { api } from '@/trpc/react';
 
 const STATUS_TAG_COLORS: Record<string, string> = {
@@ -201,118 +200,113 @@ export default function AdminActivityOverviewPage({ params }: Props) {
     totalDraws > 0 ? Math.round((totalWins / totalDraws) * 100) : 0;
 
   return (
-    <>
-      <Header />
-      <main style={{ minHeight: '100vh', background: '#f5f5f5' }}>
-        <div style={{ maxWidth: 1152, margin: '0 auto', padding: '48px 24px' }}>
-          {/* 面包屑 + 操作按钮 */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              marginBottom: 24,
-            }}
-          >
-            <Breadcrumb
-              items={[
-                { title: <Link href="/admin/lucky-wheel">大转盘管理</Link> },
-                { title: activityDrawStat?.activityName ?? '活动概览' },
-              ]}
-            />
-            <Space>
-              <Link
-                href={`/admin/lucky-wheel/records?activityId=${activityId}`}
-              >
-                <Button size="small">中奖记录</Button>
-              </Link>
-              <Link href={`/admin/lucky-wheel/${activityId}/prizes`}>
-                <Button size="small" type="primary">
-                  奖品配置
-                </Button>
-              </Link>
-              <Link href={`/admin/lucky-wheel/${activityId}/chances`}>
-                <Button size="small">额外次数</Button>
-              </Link>
-            </Space>
-          </div>
-
-          {/* 统计卡片 */}
-          <Row gutter={16} style={{ marginBottom: 24 }}>
-            <Col span={6}>
-              <StatCard
-                color="#f97316"
-                icon="🎯"
-                label="总抽奖次数"
-                value={totalDraws}
-              />
-            </Col>
-            <Col span={6}>
-              <StatCard
-                color="#10b981"
-                icon="🏆"
-                label="中奖次数"
-                value={totalWins}
-              />
-            </Col>
-            <Col span={6}>
-              <StatCard
-                color="#3b82f6"
-                icon="👤"
-                label="参与用户数"
-                value={uniqueUsers}
-              />
-            </Col>
-            <Col span={6}>
-              <StatCard
-                color="#8b5cf6"
-                icon="📊"
-                label="中奖率"
-                suffix="%"
-                value={winRate}
-              />
-            </Col>
-          </Row>
-
-          {/* 中奖记录状态分布 */}
-          {recordStats && recordStats.length > 0 && (
-            <Card
-              size="small"
-              style={{ borderRadius: 12, marginBottom: 24 }}
-              title="中奖记录状态分布"
-            >
-              <Space size="middle" wrap>
-                {Object.entries(RECORD_STATUS_LABELS).map(([key, label]) => {
-                  const count =
-                    recordStats.find((s) => s.status === key)?.count ?? 0;
-                  return (
-                    <Tag
-                      color={STATUS_TAG_COLORS[key]}
-                      key={key}
-                      style={{ fontSize: 13, padding: '2px 12px' }}
-                    >
-                      {label}：{count}
-                    </Tag>
-                  );
-                })}
-              </Space>
-            </Card>
-          )}
-
-          {/* 奖品库存表格 */}
-          {activityPrizes.length > 0 && (
-            <Card style={{ borderRadius: 12 }} title="中奖明细">
-              <Table<PrizeStat>
-                columns={prizeColumns}
-                dataSource={activityPrizes as PrizeStat[]}
-                pagination={false}
-                rowKey="prizeId"
-                size="small"
-              />
-            </Card>
-          )}
+    <main style={{ minHeight: '100vh', background: '#f5f5f5' }}>
+      <div style={{ maxWidth: 1152, margin: '0 auto', padding: '48px 24px' }}>
+        {/* 面包屑 + 操作按钮 */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginBottom: 24,
+          }}
+        >
+          <Breadcrumb
+            items={[
+              { title: <Link href="/admin/lucky-wheel">大转盘管理</Link> },
+              { title: activityDrawStat?.activityName ?? '活动概览' },
+            ]}
+          />
+          <Space>
+            <Link href={`/admin/lucky-wheel/records?activityId=${activityId}`}>
+              <Button size="small">中奖记录</Button>
+            </Link>
+            <Link href={`/admin/lucky-wheel/${activityId}/prizes`}>
+              <Button size="small" type="primary">
+                奖品配置
+              </Button>
+            </Link>
+            <Link href={`/admin/lucky-wheel/${activityId}/chances`}>
+              <Button size="small">额外次数</Button>
+            </Link>
+          </Space>
         </div>
-      </main>
-    </>
+
+        {/* 统计卡片 */}
+        <Row gutter={16} style={{ marginBottom: 24 }}>
+          <Col span={6}>
+            <StatCard
+              color="#f97316"
+              icon="🎯"
+              label="总抽奖次数"
+              value={totalDraws}
+            />
+          </Col>
+          <Col span={6}>
+            <StatCard
+              color="#10b981"
+              icon="🏆"
+              label="中奖次数"
+              value={totalWins}
+            />
+          </Col>
+          <Col span={6}>
+            <StatCard
+              color="#3b82f6"
+              icon="👤"
+              label="参与用户数"
+              value={uniqueUsers}
+            />
+          </Col>
+          <Col span={6}>
+            <StatCard
+              color="#8b5cf6"
+              icon="📊"
+              label="中奖率"
+              suffix="%"
+              value={winRate}
+            />
+          </Col>
+        </Row>
+
+        {/* 中奖记录状态分布 */}
+        {recordStats && recordStats.length > 0 && (
+          <Card
+            size="small"
+            style={{ borderRadius: 12, marginBottom: 24 }}
+            title="中奖记录状态分布"
+          >
+            <Space size="middle" wrap>
+              {Object.entries(RECORD_STATUS_LABELS).map(([key, label]) => {
+                const count =
+                  recordStats.find((s) => s.status === key)?.count ?? 0;
+                return (
+                  <Tag
+                    color={STATUS_TAG_COLORS[key]}
+                    key={key}
+                    style={{ fontSize: 13, padding: '2px 12px' }}
+                  >
+                    {label}：{count}
+                  </Tag>
+                );
+              })}
+            </Space>
+          </Card>
+        )}
+
+        {/* 奖品库存表格 */}
+        {activityPrizes.length > 0 && (
+          <Card style={{ borderRadius: 12 }} title="中奖明细">
+            <Table<PrizeStat>
+              columns={prizeColumns}
+              dataSource={activityPrizes as PrizeStat[]}
+              pagination={false}
+              rowKey="prizeId"
+              size="small"
+            />
+          </Card>
+        )}
+      </div>
+    </main>
   );
 }
