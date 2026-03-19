@@ -28,7 +28,20 @@ RUN pnpm exec esbuild scripts/seed-test-data.ts \
     --external:postgres \
     --tsconfig=tsconfig.json
 
-##### RUNNER
+##### NGINX - serve 静态文件 + 反代 Next.js
+FROM nginx:alpine AS nginx
+
+# 构建产物 _next/static
+COPY --from=builder /app/.next/static /usr/share/nginx/static
+
+# public 目录静态资源（favicon.ico、lucky-wheel/ 等，排除 uploads）
+COPY --from=builder /app/public /usr/share/nginx/public
+RUN rm -rf /usr/share/nginx/public/uploads
+
+# uploads 目录由卷挂载，预创建空目录
+RUN mkdir -p /usr/share/nginx/uploads
+
+##### RUNNER（默认构建目标）
 FROM node:22-alpine AS runner
 WORKDIR /app
 
@@ -57,16 +70,3 @@ ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 
 CMD ["sh", "-c", "node migrate.mjs && if [ \"$RUN_SEEDS\" = 'true' ]; then node seed.mjs; fi && node server.js"]
-
-##### NGINX - serve 静态文件 + 反代 Next.js
-FROM nginx:alpine AS nginx
-
-# 构建产物 _next/static
-COPY --from=builder /app/.next/static /usr/share/nginx/static
-
-# public 目录静态资源（favicon.ico、lucky-wheel/ 等，排除 uploads）
-COPY --from=builder /app/public /usr/share/nginx/public
-RUN rm -rf /usr/share/nginx/public/uploads
-
-# uploads 目录由卷挂载，预创建空目录
-RUN mkdir -p /usr/share/nginx/uploads

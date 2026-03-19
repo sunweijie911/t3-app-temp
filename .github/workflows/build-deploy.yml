@@ -37,7 +37,6 @@ concurrency:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  APP_PORT: 3000
 
 # github.repository may contain uppercase letters (e.g. sunweijieMJ/t3-app-temp)
 # but Docker requires lowercase image names, so we normalize it in the prepare step.
@@ -95,13 +94,32 @@ jobs:
             type=semver,pattern={{version}}
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build and push
+      - name: Build and push (app)
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
+          target: runner
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Extract nginx metadata
+        id: nginx-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.image_name }}-nginx
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push (nginx)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          target: nginx
+          tags: ${{ steps.nginx-meta.outputs.tags }}
+          labels: ${{ steps.nginx-meta.outputs.labels }}
 
   # ==================== 部署到服务器 ====================
   deploy:
@@ -148,13 +166,13 @@ jobs:
           DEPLOY_SERVER_PATH: ${{ secrets.DEPLOY_SERVER_PATH }}
           DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
 
-      - name: Sync deploy scripts
+      - name: Sync deploy files
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.DEPLOY_SERVER_HOST }}
           username: ${{ secrets.DEPLOY_SERVER_USER }}
           key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
-          source: "deploy/*"
+          source: "deploy/*,docker-compose.yml,nginx.conf"
           target: ${{ secrets.DEPLOY_SERVER_PATH }}
           overwrite: true
 
@@ -169,61 +187,38 @@ jobs:
 
             DEPLOY_PATH="${{ secrets.DEPLOY_SERVER_PATH }}"
             REGISTRY="${{ env.REGISTRY }}"
-            IMAGE="${{ env.REGISTRY }}/${{ steps.repo.outputs.image_name }}:${{ needs.build.outputs.git_hash }}"
+            IMAGE_APP="${{ env.REGISTRY }}/${{ steps.repo.outputs.image_name }}:${{ needs.build.outputs.git_hash }}"
+            IMAGE_NGINX="${{ env.REGISTRY }}/${{ steps.repo.outputs.image_name }}-nginx:${{ needs.build.outputs.git_hash }}"
+            HOST_PORT=5000
 
             echo "=========================================="
             echo "部署信息:"
-            echo "  镜像: ${IMAGE}"
+            echo "  App 镜像:   ${IMAGE_APP}"
+            echo "  Nginx 镜像: ${IMAGE_NGINX}"
             echo "  路径: ${DEPLOY_PATH}"
             echo "=========================================="
+
+            cd "${DEPLOY_PATH}"
 
             # 登录 GHCR
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${REGISTRY} -u "${{ github.actor }}" --password-stdin
 
-            # 拉取镜像（3 次重试，间隔 10s）
-            for i in 1 2 3; do
-              echo "Pull attempt ${i}/3..."
-              if docker pull "${IMAGE}"; then
-                echo "Pull succeeded"
-                break
-              fi
-              if [ $i -eq 3 ]; then
-                echo "::error::镜像拉取失败，已重试 3 次"
-                exit 1
-              fi
-              sleep 10
-            done
+            # 停止旧的单容器部署（首次迁移时清理）
+            docker stop t3-app 2>/dev/null && docker rm t3-app 2>/dev/null || true
 
-            CONTAINER_NAME="t3-app"
-            HOST_PORT=5000
-            APP_PORT=3000
+            # 通过环境变量注入镜像 tag，拉取并启动
+            export APP_IMAGE="${IMAGE_APP}"
+            export NGINX_IMAGE="${IMAGE_NGINX}"
+            export HOST_PORT="${HOST_PORT}"
 
-            # 停止并移除旧容器
-            echo "停止旧容器..."
-            docker stop "${CONTAINER_NAME}" 2>/dev/null || true
-            docker rm "${CONTAINER_NAME}" 2>/dev/null || true
-
-            # 启动新容器
-            echo "启动新容器..."
-            ENV_FILE_ARG=""
-            if [ -f "${DEPLOY_PATH}/.env" ]; then
-              ENV_FILE_ARG="--env-file ${DEPLOY_PATH}/.env"
-            fi
-
-            docker run -d \
-              --name "${CONTAINER_NAME}" \
-              -p "${HOST_PORT}:${APP_PORT}" \
-              --add-host=host.docker.internal:host-gateway \
-              -v t3_uploads:/app/public/uploads \
-              ${ENV_FILE_ARG} \
-              --restart unless-stopped \
-              "${IMAGE}"
+            docker compose pull
+            docker compose up -d --remove-orphans
 
             echo "容器已启动"
-            docker ps --filter "name=${CONTAINER_NAME}" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+            docker compose ps
 
-            # 健康检查（在服务器本地执行，无需公网暴露端口）
-            echo "等待服务启动..."
+            # 健康检查
+            echo "等待服务就绪..."
             for i in $(seq 1 30); do
               STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${HOST_PORT}/api/health" 2>/dev/null || true)
               if [ "$STATUS" = "200" ]; then
@@ -233,14 +228,14 @@ jobs:
               echo "Waiting... (attempt ${i}/30, status=${STATUS})"
               if [ $i -eq 30 ]; then
                 echo "健康检查超时（150s），服务可能未正常启动"
-                docker logs --tail 50 "${CONTAINER_NAME}" 2>/dev/null || true
+                docker compose logs --tail 50
                 exit 1
               fi
               sleep 5
             done
 
-            # 清理旧 Docker 镜像（保留最近 3 个）
-            docker images "${{ env.REGISTRY }}/${{ steps.repo.outputs.image_name }}" -q | tail -n +4 | xargs -r docker rmi 2>/dev/null || true
+            # 清理旧 Docker 镜像
+            docker image prune -f 2>/dev/null || true
 
   # ==================== 通知 ====================
   notify:
