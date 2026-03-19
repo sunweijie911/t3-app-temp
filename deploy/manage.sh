@@ -12,13 +12,17 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# 配置变量
-PORT="${HOST_PORT:-5000}"
-
 # 切换到 docker-compose.yml 所在目录
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 COMPOSE_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$COMPOSE_DIR"
+
+# 加载 CI 部署写入的镜像配置
+if [ -f ".deploy.env" ]; then
+    set -a; source .deploy.env; set +a
+fi
+
+PORT="${HOST_PORT:-5000}"
 
 # 日志函数
 log_info() { echo -e "${GREEN}[INFO]${NC} $*"; }
@@ -82,7 +86,7 @@ show_logs() {
 # 拉取镜像
 pull_images() {
     if [ -z "${APP_IMAGE:-}" ] || [ -z "${NGINX_IMAGE:-}" ]; then
-        log_error "APP_IMAGE and NGINX_IMAGE must be set"
+        log_error "镜像未配置。请先通过 CI 部署，或手动设置环境变量"
         log_info "Usage: APP_IMAGE=ghcr.io/... NGINX_IMAGE=ghcr.io/... $0 pull"
         exit 1
     fi

@@ -1,9 +1,6 @@
 services:
   t3-app:
-    image: ${APP_IMAGE:-t3-app:local}
-    build:
-      context: .
-      target: runner
+    image: ${APP_IMAGE:?APP_IMAGE is required}
     restart: unless-stopped
     expose:
       - "3000"
@@ -16,10 +13,7 @@ services:
       - uploads_data:/app/public/uploads
 
   t3-nginx:
-    image: ${NGINX_IMAGE:-t3-nginx:local}
-    build:
-      context: .
-      target: nginx
+    image: ${NGINX_IMAGE:?NGINX_IMAGE is required}
     restart: unless-stopped
     ports:
       - "${HOST_PORT:-5000}:80"

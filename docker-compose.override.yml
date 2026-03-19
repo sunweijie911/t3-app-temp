@@ -1,0 +1,14 @@
+# 本地开发覆盖配置（docker compose 自动加载）
+# 提供 build 配置和默认镜像名，服务器上不存在此文件
+services:
+  t3-app:
+    image: t3-app:local
+    build:
+      context: .
+      target: runner
+
+  t3-nginx:
+    image: t3-nginx:local
+    build:
+      context: .
+      target: nginx
