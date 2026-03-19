@@ -30,7 +30,7 @@ export const orderRouter = createTRPCRouter({
         });
       }
 
-      // Check for existing pending or paid order
+      // Check for existing order
       const existingOrder = await ctx.db.query.orders.findFirst({
         where: and(
           eq(orders.resultId, input.resultId),
@@ -38,11 +38,18 @@ export const orderRouter = createTRPCRouter({
         ),
       });
 
-      if (existingOrder?.status === 'paid') {
-        return { id: existingOrder.id };
-      }
-
-      if (existingOrder?.status === 'pending') {
+      if (existingOrder) {
+        if (existingOrder.status === 'paid') {
+          return { id: existingOrder.id };
+        }
+        if (existingOrder.status === 'pending') {
+          return { id: existingOrder.id };
+        }
+        // failed / refunded：重置为 pending 允许重试
+        await ctx.db
+          .update(orders)
+          .set({ status: 'pending', paymentId: null, paidAt: null })
+          .where(eq(orders.id, existingOrder.id));
         return { id: existingOrder.id };
       }
 

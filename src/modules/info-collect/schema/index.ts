@@ -29,7 +29,10 @@ export const infoCollectRecords = createTable(
     id: d.varchar({ length: 36 }).primaryKey(),
     name: d.varchar({ length: 50 }),
     phone: d.varchar({ length: 20 }).notNull(),
-    idCard: d.varchar({ length: 18 }).notNull(),
+    // 身份证号 AES-256-GCM 加密存储，解密后方可阅读
+    idCard: d.text().notNull(),
+    // 身份证号 HMAC-SHA256 哈希，用于去重和索引查找
+    idCardHash: d.varchar({ length: 64 }).notNull(),
     proofImageUrl: d.text(),
     status: infoCollectStatusEnum().notNull().default('pending'),
     rejectReason: d.text(),
@@ -45,6 +48,6 @@ export const infoCollectRecords = createTable(
   (t) => [
     index('info_collect_phone_idx').on(t.phone),
     index('info_collect_status_idx').on(t.status),
-    index('info_collect_id_card_idx').on(t.idCard),
+    index('info_collect_id_card_hash_idx').on(t.idCardHash),
   ],
 );

@@ -46,6 +46,8 @@ export function WheelContainer({
     prize: Prize | null;
     recordId: string | null;
   } | null>(null);
+  // API 出错时记录错误信息，轮盘停转后弹 Modal 展示
+  const [drawError, setDrawError] = useState<string | null>(null);
 
   const drawMutation = api.luckyWheel.draw.execute.useMutation();
   const utils = api.useUtils();
@@ -140,6 +142,7 @@ export function WheelContainer({
 
     setSpinning(true);
     spinningRef.current = true;
+    setDrawError(null);
     wheelRef.current?.play();
 
     try {
@@ -173,8 +176,8 @@ export function WheelContainer({
     } catch (err) {
       const message =
         err instanceof Error ? err.message : '抽奖失败，请稍后重试';
-      toast.error(message);
-      // Stop at thanks slot if available to avoid misleading visual
+      // 记录错误，轮盘停转后在 handleEnd 中弹 Modal 展示
+      setDrawError(message);
       const thanksIdx = prizes.findIndex((p) => p.type === 'thanks');
       wheelRef.current?.stop(
         thanksIdx >= 0 ? thanksIdx : Math.floor(Math.random() * prizes.length),
@@ -189,10 +192,13 @@ export function WheelContainer({
     // Refresh remaining draws count + my records after each draw
     void utils.luckyWheel.draw.getRemainingDraws.invalidate();
     void utils.luckyWheel.record.myRecords.invalidate();
-    if (result) {
+    if (drawError) {
+      toast.error(drawError);
+      setDrawError(null);
+    } else if (result) {
       setModalOpen(true);
     }
-  }, [result, utils]);
+  }, [result, drawError, utils]);
 
   const handleModalClose = useCallback(() => {
     setModalOpen(false);

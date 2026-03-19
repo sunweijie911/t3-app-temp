@@ -9,6 +9,12 @@ import { uploadLimiter } from '@/server/services/rate-limiter';
 
 const MAX_SIZE = 5 * 1024 * 1024; // 5MB
 
+function getClientIp(request: Request): string {
+  const forwarded = request.headers.get('x-forwarded-for');
+  if (forwarded) return forwarded.split(',')[0]?.trim() ?? 'unknown';
+  return request.headers.get('x-real-ip') ?? 'unknown';
+}
+
 // 通过文件头魔术字节判断真实格式，不依赖客户端提供的 MIME type
 function detectImageType(buffer: Buffer): { ext: string; mime: string } | null {
   // JPEG: FF D8 FF
@@ -42,12 +48,12 @@ function detectImageType(buffer: Buffer): { ext: string; mime: string } | null {
 
 export async function POST(request: Request) {
   try {
+    // 优先使用 session userId 限流；未登录时降级为 IP 限流
+    // 信息采集表单是公开页面，不要求登录
     const session = await auth.api.getSession({ headers: request.headers });
-    if (!session?.user) {
-      return NextResponse.json({ error: '请先登录' }, { status: 401 });
-    }
+    const rateLimitKey = session?.user?.id ?? `ip:${getClientIp(request)}`;
 
-    const rateCheck = uploadLimiter.check(session.user.id);
+    const rateCheck = uploadLimiter.check(rateLimitKey);
     if (!rateCheck.allowed) {
       return NextResponse.json(
         {

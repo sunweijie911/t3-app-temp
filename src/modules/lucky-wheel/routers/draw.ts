@@ -51,8 +51,16 @@ export const drawRouter = createTRPCRouter({
       } catch (err) {
         const message =
           err instanceof Error ? err.message : '抽奖失败，请稍后重试';
+        // 根据错误信息映射语义化 tRPC 错误码
+        const codeMap: Record<string, typeof TRPCError.prototype.code> = {
+          活动不存在或已下线: 'NOT_FOUND',
+          活动尚未开始: 'PRECONDITION_FAILED',
+          活动已结束: 'PRECONDITION_FAILED',
+          已达到最大抽奖次数: 'FORBIDDEN',
+          活动暂无可用奖品: 'PRECONDITION_FAILED',
+        };
         throw new TRPCError({
-          code: 'BAD_REQUEST',
+          code: codeMap[message] ?? 'BAD_REQUEST',
           message,
         });
       }

@@ -6,8 +6,19 @@ import { z } from 'zod';
 import { REVIEW_STATUS_ENUM } from '@/modules/info-collect/constants';
 import { adminProcedure, createTRPCRouter } from '@/server/api/trpc';
 import { infoCollectConfig, infoCollectRecords } from '@/server/db/schema';
+import { decrypt } from '@/server/services/crypto';
 
 import { fetchInfoCollectConfig } from './shared';
+
+/** 安全解密：失败时返回掩码，避免历史明文数据导致页面报错 */
+function safeDecrypt(value: string): string {
+  try {
+    return decrypt(value);
+  } catch {
+    // 可能是加密前的历史明文数据，直接返回
+    return value;
+  }
+}
 
 const filterInput = z.object({
   status: REVIEW_STATUS_ENUM.optional(),
@@ -93,7 +104,13 @@ export const infoCollectAdminRouter = createTRPCRouter({
           .where(where),
       ]);
 
-      return { items, total: countResult?.count ?? 0 };
+      // 解密身份证号再返回给管理员
+      const decryptedItems = items.map((item) => ({
+        ...item,
+        idCard: safeDecrypt(item.idCard),
+      }));
+
+      return { items: decryptedItems, total: countResult?.count ?? 0 };
     }),
 
   review: adminProcedure
@@ -250,11 +267,17 @@ export const infoCollectAdminRouter = createTRPCRouter({
     .query(async ({ ctx, input }) => {
       const where = resolveWhere(input);
 
-      return ctx.db
+      const records = await ctx.db
         .select()
         .from(infoCollectRecords)
         .where(where)
         .orderBy(desc(infoCollectRecords.createdAt))
         .limit(10000);
+
+      // 解密身份证号再返回（导出场景）
+      return records.map((r) => ({
+        ...r,
+        idCard: safeDecrypt(r.idCard),
+      }));
     }),
 });

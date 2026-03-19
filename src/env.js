@@ -30,6 +30,8 @@ export const env = createEnv({
     SMS_ACCESS_KEY_SECRET: z.string().optional(),
     SMS_SIGN_NAME: z.string().optional(),
     SMS_TEMPLATE_CODE: z.string().optional(),
+    // 身份证号加密密钥（生产部署时必须配置，本地 build 可省略）
+    ID_CARD_ENCRYPTION_KEY: z.string().optional(),
   },
 
   /**
@@ -59,6 +61,7 @@ export const env = createEnv({
     SMS_ACCESS_KEY_SECRET: stripQuotes(process.env.SMS_ACCESS_KEY_SECRET),
     SMS_SIGN_NAME: stripQuotes(process.env.SMS_SIGN_NAME),
     SMS_TEMPLATE_CODE: stripQuotes(process.env.SMS_TEMPLATE_CODE),
+    ID_CARD_ENCRYPTION_KEY: stripQuotes(process.env.ID_CARD_ENCRYPTION_KEY),
   },
   /**
    * Run `build` or `dev` with `SKIP_ENV_VALIDATION` to skip env validation. This is especially

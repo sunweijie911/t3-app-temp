@@ -153,11 +153,12 @@ export async function ensureReportRecord(
 /**
  * Run the LLM generation for a report that already has a DB record.
  * This is meant to be called fire-and-forget after ensureReportRecord().
+ * All errors are caught internally and stored in the DB (status: 'failed').
  */
-export async function* generateReport(
+export async function generateReport(
   reportId: string,
   resultId: string,
-): AsyncGenerator<string, string> {
+): Promise<void> {
   const startTime = Date.now();
   let fullContent = '';
 
@@ -174,7 +175,6 @@ export async function* generateReport(
       const content = chunk.choices[0]?.delta?.content;
       if (content) {
         fullContent += content;
-        yield content;
       }
     }
 
@@ -200,8 +200,6 @@ export async function* generateReport(
         errorMessage,
       })
       .where(eq(aiReports.id, reportId));
-    throw error;
+    // Error already handled: report marked as failed in DB
   }
-
-  return fullContent;
 }

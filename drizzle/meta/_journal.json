@@ -85,6 +85,20 @@
       "when": 1773854217026,
       "tag": "0011_happy_cyclops",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1773882689182,
+      "tag": "0012_loud_silhouette",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1773885962168,
+      "tag": "0013_free_apocalypse",
+      "breakpoints": true
     }
   ]
 }

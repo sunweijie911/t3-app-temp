@@ -150,29 +150,12 @@ export const attemptRouter = createTRPCRouter({
         });
       }
 
-      const answerValues = uniqueAnswers.map((answer) => {
-        // questionMap.get is guaranteed to succeed since we validated above
-        const question = questionMap.get(answer.questionId);
-        const scoreContribution: Record<string, number> = {};
-        if (question) {
-          const selectedOption = question.options.find(
-            (o) => o.value === answer.selectedValue,
-          );
-          if (selectedOption) {
-            const dim =
-              selectedOption.dimension ?? question.dimension ?? 'default';
-            scoreContribution[dim] = selectedOption.score ?? 0;
-          }
-        }
-
-        return {
-          id: nanoid(),
-          attemptId: input.attemptId,
-          questionId: answer.questionId,
-          selectedValue: answer.selectedValue,
-          scoreContribution,
-        };
-      });
+      const answerValues = uniqueAnswers.map((answer) => ({
+        id: nanoid(),
+        attemptId: input.attemptId,
+        questionId: answer.questionId,
+        selectedValue: answer.selectedValue,
+      }));
 
       if (answerValues.length > 0) {
         await ctx.db
@@ -182,7 +165,6 @@ export const attemptRouter = createTRPCRouter({
             target: [testAnswers.attemptId, testAnswers.questionId],
             set: {
               selectedValue: sql`excluded."selectedValue"`,
-              scoreContribution: sql`excluded."scoreContribution"`,
             },
           });
       }
@@ -240,13 +222,6 @@ export const attemptRouter = createTRPCRouter({
         });
       }
 
-      if (attempt.answers.length === 0) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: '请至少回答一道题目后再提交',
-        });
-      }
-
       // Fetch full question data for scoring
       const questionList = await ctx.db
         .select()
@@ -257,6 +232,14 @@ export const attemptRouter = createTRPCRouter({
             eq(questions.isActive, true),
           ),
         );
+
+      if (attempt.answers.length < questionList.length) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `请完成所有题目后再提交（已答 ${attempt.answers.length}/${questionList.length}）`,
+        });
+      }
+
       const questionMap = new Map(questionList.map((q) => [q.id, q]));
 
       // Build scoring input
@@ -278,14 +261,32 @@ export const attemptRouter = createTRPCRouter({
       // Calculate scores
       const scoreResult = calculateScore(scoringInput);
 
-      // Use transaction to ensure attempt status and result are saved atomically
       const resultId = nanoid();
       const shareToken = nanoid();
+      let raceResultId: string | undefined;
+
+      // 原子操作：在事务内先抢占 attempt（WHERE status='in_progress'），
+      // 若抢占成功才插入结果，否则说明并发请求已完成，直接返回其结果
       await ctx.db.transaction(async (tx) => {
-        await tx
+        const [claimed] = await tx
           .update(testAttempts)
           .set({ status: 'completed', completedAt: new Date() })
-          .where(eq(testAttempts.id, input.attemptId));
+          .where(
+            and(
+              eq(testAttempts.id, input.attemptId),
+              eq(testAttempts.status, 'in_progress'),
+            ),
+          )
+          .returning({ id: testAttempts.id });
+
+        if (!claimed) {
+          // 并发请求已完成，查找其插入的结果
+          const existing = await tx.query.testResults.findFirst({
+            where: eq(testResults.attemptId, input.attemptId),
+          });
+          raceResultId = existing?.id;
+          return;
+        }
 
         await tx.insert(testResults).values({
           id: resultId,
@@ -299,6 +300,10 @@ export const attemptRouter = createTRPCRouter({
           shareToken,
         });
       });
+
+      if (raceResultId !== undefined) {
+        return { resultId: raceResultId };
+      }
 
       return { resultId };
     }),

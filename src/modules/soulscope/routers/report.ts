@@ -7,7 +7,9 @@ import {
   generateReport,
 } from '@/modules/soulscope/services/report-generator';
 import { createTRPCRouter, protectedProcedure } from '@/server/api/trpc';
+import { getUserPhone } from '@/server/better-auth/types';
 import { aiReports, testResults } from '@/server/db/schema';
+import { isAdminPhone } from '@/server/services/admin-check';
 import { reportGenerateLimiter } from '@/server/services/rate-limiter';
 
 export const reportRouter = createTRPCRouter({
@@ -38,6 +40,22 @@ export const reportRouter = createTRPCRouter({
           code: 'NOT_FOUND',
           message: 'Report not found',
         });
+      }
+
+      // 付款校验：退款后不可再读取完整报告（管理员豁免）
+      const phone = getUserPhone(ctx.session.user);
+      if (!isAdminPhone(phone)) {
+        const hasPaid = await hasPaidOrder(
+          ctx.db,
+          ctx.session.user.id,
+          input.resultId,
+        );
+        if (!hasPaid) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: '需要付费后才能查看报告',
+          });
+        }
       }
 
       // Only return content fields, hide model/token internals
@@ -116,18 +134,8 @@ export const reportRouter = createTRPCRouter({
         return { reportId: record.reportId, status: 'completed' as const };
       }
 
-      // Fire-and-forget: the DB record already exists, generator only updates it
-      const generator = generateReport(record.reportId, input.resultId);
-      void (async () => {
-        try {
-          let chunk = await generator.next();
-          while (!chunk.done) {
-            chunk = await generator.next();
-          }
-        } catch (_error) {
-          // generateReport already marks the report as failed in the DB
-        }
-      })();
+      // Fire-and-forget: generateReport handles its own error state in the DB
+      void generateReport(record.reportId, input.resultId);
 
       return {
         reportId: record.reportId,

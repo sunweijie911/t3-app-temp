@@ -61,3 +61,6 @@ export const drawLimiter = new RateLimiter(10, 60_000);
 
 // 文件上传：1 分钟 5 次
 export const uploadLimiter = new RateLimiter(5, 60_000);
+
+// 信息采集提交：同一手机号 1 分钟 3 次
+export const infoCollectSubmitLimiter = new RateLimiter(3, 60_000);

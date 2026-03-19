@@ -355,7 +355,13 @@ export const soulscopeAdminRouter = createTRPCRouter({
         input.topic,
       );
 
-      // Insert generated questions
+      // 查询当前最大 sortOrder，新题目从 max+1 开始递增
+      const [maxRow] = await ctx.db
+        .select({ max: sql<number>`coalesce(max(${questions.sortOrder}), -1)` })
+        .from(questions)
+        .where(eq(questions.testTypeId, input.testTypeId));
+      const startOrder = (maxRow?.max ?? -1) + 1;
+
       const values = generated.map((q, idx) => ({
         id: nanoid(),
         testTypeId: input.testTypeId,
@@ -365,7 +371,7 @@ export const soulscopeAdminRouter = createTRPCRouter({
         dimension: q.dimension ?? null,
         weight: '1.00',
         source: 'ai_generated' as const,
-        sortOrder: idx,
+        sortOrder: startOrder + idx,
         isActive: true,
       }));
 

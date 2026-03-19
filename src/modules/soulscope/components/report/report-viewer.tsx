@@ -5,7 +5,12 @@ import { MarkdownRenderer } from '@/shared/components/ui/markdown-renderer';
 import { api } from '@/trpc/react';
 
 export function ReportViewer({ resultId }: { resultId: string }) {
-  const { data: report, isLoading } = api.soulscope.report.get.useQuery({
+  const {
+    data: report,
+    isLoading,
+    isError,
+    error,
+  } = api.soulscope.report.get.useQuery({
     resultId,
   });
 
@@ -14,6 +19,19 @@ export function ReportViewer({ resultId }: { resultId: string }) {
       <div className="flex min-h-[400px] flex-col items-center justify-center gap-4">
         <LoadingSpinner size="lg" />
         <p className="text-gray-500">加载报告中...</p>
+      </div>
+    );
+  }
+
+  if (isError) {
+    const isForbidden = error?.data?.code === 'FORBIDDEN';
+    return (
+      <div className="flex min-h-[400px] flex-col items-center justify-center gap-4">
+        <p className="text-gray-500">
+          {isForbidden
+            ? '暂无权限查看该报告，请确认已完成支付'
+            : '加载报告失败，请稍后重试'}
+        </p>
       </div>
     );
   }

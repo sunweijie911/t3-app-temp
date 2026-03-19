@@ -1,6 +1,23 @@
 import 'server-only';
 import { nanoid } from 'nanoid';
+import { z } from 'zod';
 import { completion } from '@/server/services/llm';
+
+const generatedQuestionSchema = z.object({
+  text: z.string().min(1),
+  description: z.string().nullable().optional(),
+  options: z
+    .array(
+      z.object({
+        value: z.string().min(1),
+        label: z.string().min(1),
+        score: z.number().optional(),
+        dimension: z.string().optional(),
+      }),
+    )
+    .min(2),
+  dimension: z.string().nullable().optional(),
+});
 
 interface GeneratedQuestion {
   id: string;
@@ -53,22 +70,17 @@ Respond ONLY with the JSON array, no other text.`,
 
   const content = response.choices[0]?.message?.content ?? '[]';
 
-  let parsed: Array<{
-    text: string;
-    description?: string | null;
-    options: Array<{
-      value: string;
-      label: string;
-      score?: number;
-      dimension?: string;
-    }>;
-    dimension?: string | null;
-  }>;
+  type GeneratedQuestionInput = z.infer<typeof generatedQuestionSchema>;
+  let parsed: GeneratedQuestionInput[] = [];
 
   try {
-    // Try to extract JSON from the response
     const jsonMatch = content.match(/\[[\s\S]*\]/);
-    parsed = JSON.parse(jsonMatch?.[0] ?? '[]') as typeof parsed;
+    const raw = JSON.parse(jsonMatch?.[0] ?? '[]') as unknown[];
+    // 逐条校验，过滤掉不合法的条目
+    parsed = raw.flatMap((item) => {
+      const result = generatedQuestionSchema.safeParse(item);
+      return result.success ? [result.data] : [];
+    });
   } catch {
     parsed = [];
   }

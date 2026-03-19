@@ -1,0 +1,1 @@
+ALTER TABLE "pg-drizzle_test_answer" DROP COLUMN "scoreContribution";

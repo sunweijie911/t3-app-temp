@@ -166,7 +166,6 @@ export const testAnswers = createTable(
       .notNull()
       .references(() => questions.id),
     selectedValue: d.text().notNull(),
-    scoreContribution: jsonb().$type<Record<string, number>>(),
     answeredAt: d
       .timestamp({ withTimezone: true })
       .$defaultFn(() => new Date())

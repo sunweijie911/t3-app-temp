@@ -6,6 +6,8 @@ import { z } from 'zod';
 import { ID_CARD_RE, PHONE_RE } from '@/modules/info-collect/constants';
 import { createTRPCRouter, publicProcedure } from '@/server/api/trpc';
 import { infoCollectRecords } from '@/server/db/schema';
+import { encrypt, hashForLookup } from '@/server/services/crypto';
+import { infoCollectSubmitLimiter } from '@/server/services/rate-limiter';
 
 import { infoCollectAdminRouter } from './admin';
 import { fetchInfoCollectConfig } from './shared';
@@ -29,6 +31,16 @@ export const infoCollectRouter = createTRPCRouter({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      // 限流：基于 IP（从 headers 提取）或 phone 号，防批量提交
+      const rateLimitKey = `info-submit:${input.phone}`;
+      const rateCheck = infoCollectSubmitLimiter.check(rateLimitKey);
+      if (!rateCheck.allowed) {
+        throw new TRPCError({
+          code: 'TOO_MANY_REQUESTS',
+          message: `提交过于频繁，请 ${Math.ceil(rateCheck.retryAfterMs / 1000)} 秒后重试`,
+        });
+      }
+
       const { enabledFields } = await fetchInfoCollectConfig(ctx.db);
 
       // Validate enabled fields
@@ -53,8 +65,12 @@ export const infoCollectRouter = createTRPCRouter({
         }
       }
 
+      // 加密身份证号，哈希用于去重查询
+      const encryptedIdCard = encrypt(input.idCard);
+      const idCardHash = hashForLookup(input.idCard);
+
       return ctx.db.transaction(async (tx) => {
-        // FOR UPDATE 防止并发提交竞态
+        // FOR UPDATE 防止并发提交竞态（使用哈希查找代替明文比对）
         const existing = await tx
           .select({
             id: infoCollectRecords.id,
@@ -64,7 +80,7 @@ export const infoCollectRouter = createTRPCRouter({
           .where(
             and(
               eq(infoCollectRecords.phone, input.phone),
-              eq(infoCollectRecords.idCard, input.idCard),
+              eq(infoCollectRecords.idCardHash, idCardHash),
             ),
           )
           .for('update');
@@ -94,7 +110,8 @@ export const infoCollectRouter = createTRPCRouter({
           id,
           name: enabledFields.includes('name') ? (input.name ?? null) : null,
           phone: input.phone,
-          idCard: input.idCard,
+          idCard: encryptedIdCard,
+          idCardHash,
           proofImageUrl: enabledFields.includes('proofImage')
             ? (input.proofImageUrl ?? null)
             : null,
