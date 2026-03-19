@@ -88,13 +88,22 @@ export async function POST(request: Request) {
       );
     }
 
+    const ALLOWED_MODULES = ['info-collect', 'battery-swap'] as const;
+    const url = new URL(request.url);
+    const moduleParam = url.searchParams.get('module') ?? 'info-collect';
+    const module = ALLOWED_MODULES.includes(
+      moduleParam as (typeof ALLOWED_MODULES)[number],
+    )
+      ? moduleParam
+      : 'info-collect';
+
     const fileName = `${Date.now()}-${nanoid()}.${detected.ext}`;
-    const uploadDir = join(process.cwd(), 'public', 'uploads', 'info-collect');
+    const uploadDir = join(process.cwd(), 'public', 'uploads', module);
 
     await mkdir(uploadDir, { recursive: true });
     await writeFile(join(uploadDir, fileName), buffer);
 
-    return NextResponse.json({ url: `/uploads/info-collect/${fileName}` });
+    return NextResponse.json({ url: `/uploads/${module}/${fileName}` });
   } catch {
     return NextResponse.json({ error: '上传失败，请重试' }, { status: 500 });
   }

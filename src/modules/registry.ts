@@ -91,6 +91,27 @@ const modules: Record<string, ModuleDefinition> = {
       },
     ],
   },
+  'battery-swap': {
+    id: 'battery-swap',
+    name: '换电套餐',
+    description: '换电套餐展示与购买平台',
+    basePath: '/battery-swap',
+    theme: {
+      brand: 'text-green-600',
+      active: 'text-green-600',
+      btn: 'bg-green-500 hover:bg-green-600',
+      link: 'text-green-600 hover:text-green-700',
+      cardHover: 'group-hover:text-green-600',
+    },
+    navLinks: [{ label: '换电套餐', href: '/battery-swap' }],
+    adminNavItems: [
+      {
+        label: '套餐管理',
+        href: '/admin/battery-swap',
+        description: '管理换电套餐内容与上下架',
+      },
+    ],
+  },
   soulscope: {
     id: 'soulscope',
     name: 'SoulScope',

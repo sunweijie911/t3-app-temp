@@ -1,3 +1,4 @@
+import { batterySwapRouter } from '@/modules/battery-swap/routers';
 import { infoCollectRouter } from '@/modules/info-collect/routers';
 import { luckyWheelRouter } from '@/modules/lucky-wheel/routers';
 import { soulscopeRouter } from '@/modules/soulscope/routers';
@@ -14,6 +15,7 @@ export const appRouter = createTRPCRouter({
   soulscope: soulscopeRouter,
   luckyWheel: luckyWheelRouter,
   infoCollect: infoCollectRouter,
+  batterySwap: batterySwapRouter,
 });
 
 // export type definition of API

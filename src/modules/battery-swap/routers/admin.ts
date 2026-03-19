@@ -1,0 +1,128 @@
+import { TRPCError } from '@trpc/server';
+import { asc, desc, eq } from 'drizzle-orm';
+import { nanoid } from 'nanoid';
+import { z } from 'zod';
+
+import { adminProcedure, createTRPCRouter } from '@/server/api/trpc';
+import { batterySwapPackages } from '@/server/db/schema';
+
+const specSchema = z.object({
+  model: z.string().min(1),
+  price: z.number().int().min(0),
+});
+
+const upsertInput = z.object({
+  id: z.string().optional(),
+  company: z.string().min(1),
+  title: z.string().min(1),
+  imageUrl: z.string().nullable().optional(),
+  originalPrice: z.number().int().min(0),
+  salePrice: z.number().int().min(0),
+  specs: z.array(specSchema).min(1),
+  depositMethod: z.string().nullable().optional(),
+  regionLimit: z.string().nullable().optional(),
+  purchaseNotes: z.string().nullable().optional(),
+  validFrom: z.string().nullable().optional(),
+  validTo: z.string().nullable().optional(),
+  purchaseLink: z.string().nullable().optional(),
+});
+
+export const batterySwapAdminRouter = createTRPCRouter({
+  list: adminProcedure.query(async ({ ctx }) => {
+    return ctx.db
+      .select()
+      .from(batterySwapPackages)
+      .orderBy(
+        asc(batterySwapPackages.sortOrder),
+        desc(batterySwapPackages.createdAt),
+      );
+  }),
+
+  upsert: adminProcedure.input(upsertInput).mutation(async ({ ctx, input }) => {
+    const id = input.id ?? nanoid();
+
+    await ctx.db
+      .insert(batterySwapPackages)
+      .values({
+        id,
+        company: input.company,
+        title: input.title,
+        imageUrl: input.imageUrl,
+        originalPrice: input.originalPrice,
+        salePrice: input.salePrice,
+        specs: input.specs,
+        depositMethod: input.depositMethod ?? '芝麻信用抵押金',
+        regionLimit: input.regionLimit,
+        purchaseNotes: input.purchaseNotes,
+        validFrom: input.validFrom ? new Date(input.validFrom) : null,
+        validTo: input.validTo ? new Date(input.validTo) : null,
+        purchaseLink: input.purchaseLink,
+        sortOrder: 0,
+        isActive: false,
+      })
+      .onConflictDoUpdate({
+        target: batterySwapPackages.id,
+        set: {
+          company: input.company,
+          title: input.title,
+          imageUrl: input.imageUrl,
+          originalPrice: input.originalPrice,
+          salePrice: input.salePrice,
+          specs: input.specs,
+          depositMethod: input.depositMethod ?? '芝麻信用抵押金',
+          regionLimit: input.regionLimit,
+          purchaseNotes: input.purchaseNotes,
+          validFrom: input.validFrom ? new Date(input.validFrom) : null,
+          validTo: input.validTo ? new Date(input.validTo) : null,
+          purchaseLink: input.purchaseLink,
+        },
+      });
+
+    return { id };
+  }),
+
+  reorder: adminProcedure
+    .input(z.object({ ids: z.array(z.string()).min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      await Promise.all(
+        input.ids.map((id, index) =>
+          ctx.db
+            .update(batterySwapPackages)
+            .set({ sortOrder: index })
+            .where(eq(batterySwapPackages.id, id)),
+        ),
+      );
+      return { success: true };
+    }),
+
+  toggleActive: adminProcedure
+    .input(z.object({ id: z.string(), isActive: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const updated = await ctx.db
+        .update(batterySwapPackages)
+        .set({ isActive: input.isActive })
+        .where(eq(batterySwapPackages.id, input.id))
+        .returning({ id: batterySwapPackages.id });
+
+      if (updated.length === 0) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: '套餐不存在' });
+      }
+
+      return { success: true };
+    }),
+
+  delete: adminProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const deleted = await ctx.db
+        .delete(batterySwapPackages)
+        .where(eq(batterySwapPackages.id, input.id))
+        .returning({ id: batterySwapPackages.id });
+
+      if (deleted.length === 0) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: '套餐不存在' });
+      }
+
+      return { success: true };
+    }),
+});
