@@ -1,6 +1,6 @@
 import dayjs from 'dayjs';
-
 import type { PackageSpec } from '@/modules/battery-swap/schema';
+import { formatPrice } from '@/modules/battery-swap/schema';
 
 type PackageCardProps = {
   title: string;
@@ -17,10 +17,6 @@ type PackageCardProps = {
   purchaseLink: string | null;
   onBuy: (link: string) => void;
 };
-
-function formatPrice(fen: number) {
-  return (fen / 100).toFixed(2);
-}
 
 export function PackageCard({
   title,
@@ -66,10 +62,10 @@ export function PackageCard({
         {/* 规格标签 */}
         {specs.length > 0 && (
           <div className="mb-2 flex gap-1.5">
-            {specs.map((s) => (
+            {specs.map((s, idx) => (
               <div
                 className="flex-1 rounded-lg border border-green-100 bg-green-50/50 px-2 py-1.5"
-                key={s.model}
+                key={idx}
               >
                 <div className="text-center font-medium text-gray-700 text-xs">
                   {s.model}

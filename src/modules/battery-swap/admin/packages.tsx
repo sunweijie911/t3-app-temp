@@ -37,16 +37,11 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import type { Dayjs } from 'dayjs';
 import dayjs from 'dayjs';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-
 import type { PackageSpec } from '@/modules/battery-swap/schema';
+import { formatPrice } from '@/modules/battery-swap/schema';
 import { api } from '@/trpc/react';
-
-// 价格：分 → 元
-function fen2yuan(fen: number) {
-  return (fen / 100).toFixed(2);
-}
 
 // ── 拖拽行组件 ──────────────────────────────────────────
 
@@ -75,9 +70,9 @@ function SortableRow({
 
   return (
     <tr
+      {...props}
       ref={setNodeRef}
       style={style}
-      {...props}
       {...attributes}
       {...listeners}
     >
@@ -188,13 +183,25 @@ export default function AdminBatterySwapPage() {
 
   const reorderMutation = api.batterySwap.admin.reorder.useMutation({
     onSuccess: () => void refetch(),
-    onError: (err) => toast.error(err.message),
+    onError: (err) => {
+      toast.error(err.message);
+      // 回滚：用服务端数据恢复本地状态
+      void refetch();
+    },
   });
 
   const [editing, setEditing] = useState<EditingPackage | null>(null);
   const [uploading, setUploading] = useState(false);
 
-  // ── 拖拽排序 ──────────────────────────────────────────
+  // ── 拖拽排序（乐观更新，先更新 UI 再提交服务器）──────
+  const [localPackages, setLocalPackages] = useState<typeof packages>();
+
+  // 服务端数据变更时同步到本地（首次加载 + 增删改后 refetch）
+  useEffect(() => {
+    if (packages) setLocalPackages(packages);
+  }, [packages]);
+
+  const displayPackages = localPackages ?? packages;
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -202,14 +209,14 @@ export default function AdminBatterySwapPage() {
 
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
-    if (!over || active.id === over.id || !packages) return;
+    if (!over || active.id === over.id || !displayPackages) return;
 
-    const fromIdx = packages.findIndex((p) => p.id === active.id);
-    const toIdx = packages.findIndex((p) => p.id === over.id);
+    const fromIdx = displayPackages.findIndex((p) => p.id === active.id);
+    const toIdx = displayPackages.findIndex((p) => p.id === over.id);
     if (fromIdx === -1 || toIdx === -1) return;
 
-    const reordered = arrayMove([...packages], fromIdx, toIdx);
-    // 提交新排序，refetch 在 onSuccess 中触发
+    const reordered = arrayMove([...displayPackages], fromIdx, toIdx);
+    setLocalPackages(reordered);
     reorderMutation.mutate({ ids: reordered.map((p) => p.id) });
   }
 
@@ -347,11 +354,11 @@ export default function AdminBatterySwapPage() {
       render: (_, r) => (
         <span>
           <span className="font-bold text-red-500">
-            ¥{fen2yuan(r.salePrice)}
+            ¥{formatPrice(r.salePrice)}
           </span>
           <br />
           <span className="text-gray-400 text-xs line-through">
-            ¥{fen2yuan(r.originalPrice)}
+            ¥{formatPrice(r.originalPrice)}
           </span>
         </span>
       ),
@@ -430,7 +437,7 @@ export default function AdminBatterySwapPage() {
     },
   ];
 
-  const sortableIds = packages?.map((p) => p.id) ?? [];
+  const sortableIds = displayPackages?.map((p) => p.id) ?? [];
 
   return (
     <>
@@ -458,7 +465,7 @@ export default function AdminBatterySwapPage() {
               <Table
                 columns={columns}
                 components={{ body: { row: SortableRow } }}
-                dataSource={packages as PackageRow[] | undefined}
+                dataSource={displayPackages as PackageRow[] | undefined}
                 pagination={false}
                 rowKey="id"
                 style={{ background: '#fff', borderRadius: 12 }}

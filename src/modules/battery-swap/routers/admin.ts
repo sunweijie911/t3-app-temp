@@ -84,14 +84,14 @@ export const batterySwapAdminRouter = createTRPCRouter({
   reorder: adminProcedure
     .input(z.object({ ids: z.array(z.string()).min(1) }))
     .mutation(async ({ ctx, input }) => {
-      await Promise.all(
-        input.ids.map((id, index) =>
-          ctx.db
+      await ctx.db.transaction(async (tx) => {
+        for (let i = 0; i < input.ids.length; i++) {
+          await tx
             .update(batterySwapPackages)
-            .set({ sortOrder: index })
-            .where(eq(batterySwapPackages.id, id)),
-        ),
-      );
+            .set({ sortOrder: i })
+            .where(eq(batterySwapPackages.id, input.ids[i]!));
+        }
+      });
       return { success: true };
     }),
 

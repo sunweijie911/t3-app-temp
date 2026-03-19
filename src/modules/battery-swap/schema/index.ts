@@ -8,6 +8,11 @@ export type PackageSpec = {
   price: number; // 该规格价格（分）
 };
 
+// 价格：分 → 元（展示用）
+export function formatPrice(fen: number) {
+  return (fen / 100).toFixed(2);
+}
+
 // batterySwapPackages — 换电套餐
 export const batterySwapPackages = createTable(
   'battery_swap_package',
