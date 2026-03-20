@@ -1,3 +1,5 @@
+import { MODULE_NAME as BATTERY_SWAP_NAME } from '@/modules/battery-swap/constants';
+
 export interface AdminNavItem {
   label: string;
   href: string;
@@ -93,8 +95,8 @@ const modules: Record<string, ModuleDefinition> = {
   },
   'battery-swap': {
     id: 'battery-swap',
-    name: '换电套餐',
-    description: '换电套餐展示与购买平台',
+    name: BATTERY_SWAP_NAME,
+    description: `${BATTERY_SWAP_NAME}展示与购买平台`,
     basePath: '/battery-swap',
     theme: {
       brand: 'text-green-600',
@@ -103,12 +105,12 @@ const modules: Record<string, ModuleDefinition> = {
       link: 'text-green-600 hover:text-green-700',
       cardHover: 'group-hover:text-green-600',
     },
-    navLinks: [{ label: '换电套餐', href: '/battery-swap' }],
+    navLinks: [{ label: BATTERY_SWAP_NAME, href: '/battery-swap' }],
     adminNavItems: [
       {
         label: '套餐管理',
         href: '/admin/battery-swap',
-        description: '管理换电套餐内容与上下架',
+        description: `管理${BATTERY_SWAP_NAME}内容与上下架`,
       },
     ],
   },

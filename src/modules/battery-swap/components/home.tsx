@@ -1,8 +1,10 @@
 'use client';
 
 import { Spin } from 'antd';
+import Image from 'next/image';
 
 import { PackageCard } from '@/modules/battery-swap/components/package-card';
+import { MODULE_NAME } from '@/modules/battery-swap/constants';
 import { api } from '@/trpc/react';
 
 // 检测是否在钉钉环境中
@@ -13,7 +15,6 @@ function isDingTalk() {
 
 function handleBuy(link: string) {
   if (isDingTalk() && typeof window !== 'undefined') {
-    // 钉钉环境使用 dd.openLink
     const dd = (window as unknown as Record<string, unknown>).dd as
       | { openLink?: (opts: { url: string }) => void }
       | undefined;
@@ -22,25 +23,28 @@ function handleBuy(link: string) {
       return;
     }
   }
-  // 普通浏览器用 window.open
   window.open(link, '_blank', 'noopener,noreferrer');
 }
 
 export default function BatterySwapHome() {
   const { data: packages, isLoading } = api.batterySwap.list.useQuery();
+  const { data: bannerUrl } = api.batterySwap.bannerUrl.useQuery();
 
   return (
     <div className="min-h-screen bg-gray-100">
-      {/* 页头 — 固定高度，不被卡片遮挡 */}
-      <div className="bg-gradient-to-r from-green-500 to-green-600 px-4 pt-12 pb-8 text-white">
-        <h1 className="font-bold text-xl">换电套餐</h1>
-        <p className="mt-0.5 text-green-100 text-xs">
-          多家品牌换电方案，一站对比选购
-        </p>
-      </div>
+      {/* Banner */}
+      {bannerUrl && (
+        <Image
+          alt={MODULE_NAME}
+          className="w-full"
+          height={400}
+          src={bannerUrl}
+          width={750}
+        />
+      )}
 
-      {/* 卡片列表 — 圆角上移与页头衔接 */}
-      <div className="-mt-4 rounded-t-2xl bg-gray-100 px-3 pt-4 pb-8">
+      {/* 卡片列表 */}
+      <div className="bg-gray-100 px-3 pt-4 pb-8">
         {isLoading && (
           <div className="flex justify-center py-20">
             <Spin size="large" />
@@ -53,8 +57,10 @@ export default function BatterySwapHome() {
 
         {packages?.map((pkg) => (
           <PackageCard
+            cardBgColor={pkg.cardBgColor}
             company={pkg.company}
             depositMethod={pkg.depositMethod}
+            detailImageUrl={pkg.detailImageUrl}
             imageUrl={pkg.imageUrl}
             key={pkg.id}
             onBuy={handleBuy}
@@ -65,8 +71,6 @@ export default function BatterySwapHome() {
             salePrice={pkg.salePrice}
             specs={pkg.specs}
             title={pkg.title}
-            validFrom={pkg.validFrom}
-            validTo={pkg.validTo}
           />
         ))}
       </div>

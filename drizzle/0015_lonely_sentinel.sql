@@ -1,0 +1,2 @@
+ALTER TABLE "pg-drizzle_battery_swap_package" ADD COLUMN "detailImageUrl" text;--> statement-breakpoint
+ALTER TABLE "pg-drizzle_battery_swap_package" ADD COLUMN "cardBgColor" varchar(32) DEFAULT '#ffffff';

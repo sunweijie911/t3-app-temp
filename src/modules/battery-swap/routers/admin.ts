@@ -16,6 +16,8 @@ const upsertInput = z.object({
   company: z.string().min(1),
   title: z.string().min(1),
   imageUrl: z.string().nullable().optional(),
+  detailImageUrl: z.string().nullable().optional(),
+  cardBgColor: z.string().nullable().optional(),
   originalPrice: z.number().int().min(0),
   salePrice: z.number().int().min(0),
   specs: z.array(specSchema).min(1),
@@ -41,42 +43,46 @@ export const batterySwapAdminRouter = createTRPCRouter({
   upsert: adminProcedure.input(upsertInput).mutation(async ({ ctx, input }) => {
     const id = input.id ?? nanoid();
 
-    await ctx.db
-      .insert(batterySwapPackages)
-      .values({
-        id,
-        company: input.company,
-        title: input.title,
-        imageUrl: input.imageUrl,
-        originalPrice: input.originalPrice,
-        salePrice: input.salePrice,
-        specs: input.specs,
-        depositMethod: input.depositMethod ?? '芝麻信用抵押金',
-        regionLimit: input.regionLimit,
-        purchaseNotes: input.purchaseNotes,
-        validFrom: input.validFrom ? new Date(input.validFrom) : null,
-        validTo: input.validTo ? new Date(input.validTo) : null,
-        purchaseLink: input.purchaseLink,
-        sortOrder: 0,
-        isActive: false,
-      })
-      .onConflictDoUpdate({
-        target: batterySwapPackages.id,
-        set: {
-          company: input.company,
-          title: input.title,
-          imageUrl: input.imageUrl,
-          originalPrice: input.originalPrice,
-          salePrice: input.salePrice,
-          specs: input.specs,
-          depositMethod: input.depositMethod ?? '芝麻信用抵押金',
-          regionLimit: input.regionLimit,
-          purchaseNotes: input.purchaseNotes,
-          validFrom: input.validFrom ? new Date(input.validFrom) : null,
-          validTo: input.validTo ? new Date(input.validTo) : null,
-          purchaseLink: input.purchaseLink,
-        },
-      });
+    const shared = {
+      company: input.company,
+      title: input.title,
+      imageUrl: input.imageUrl ?? null,
+      detailImageUrl: input.detailImageUrl ?? null,
+      cardBgColor: input.cardBgColor ?? '#ffffff',
+      originalPrice: input.originalPrice,
+      salePrice: input.salePrice,
+      specs: input.specs,
+      depositMethod: input.depositMethod ?? '芝麻信用抵押金',
+      regionLimit: input.regionLimit ?? null,
+      purchaseNotes: input.purchaseNotes ?? null,
+      validFrom: input.validFrom ? new Date(input.validFrom) : null,
+      validTo: input.validTo ? new Date(input.validTo) : null,
+      purchaseLink: input.purchaseLink ?? null,
+    };
+
+    // 使用显式 insert/update 代替 onConflictDoUpdate，避免 Drizzle hook 冲突
+    if (input.id) {
+      const existing = await ctx.db
+        .select({ id: batterySwapPackages.id })
+        .from(batterySwapPackages)
+        .where(eq(batterySwapPackages.id, input.id))
+        .limit(1);
+
+      if (existing.length > 0) {
+        await ctx.db
+          .update(batterySwapPackages)
+          .set(shared)
+          .where(eq(batterySwapPackages.id, input.id));
+        return { id: input.id };
+      }
+    }
+
+    await ctx.db.insert(batterySwapPackages).values({
+      id,
+      ...shared,
+      sortOrder: 0,
+      isActive: false,
+    });
 
     return { id };
   }),
@@ -85,11 +91,11 @@ export const batterySwapAdminRouter = createTRPCRouter({
     .input(z.object({ ids: z.array(z.string()).min(1) }))
     .mutation(async ({ ctx, input }) => {
       await ctx.db.transaction(async (tx) => {
-        for (let i = 0; i < input.ids.length; i++) {
+        for (const [i, id] of input.ids.entries()) {
           await tx
             .update(batterySwapPackages)
             .set({ sortOrder: i })
-            .where(eq(batterySwapPackages.id, input.ids[i]!));
+            .where(eq(batterySwapPackages.id, id));
         }
       });
       return { success: true };

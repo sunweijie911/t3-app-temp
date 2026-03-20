@@ -22,6 +22,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import {
   Button,
+  ColorPicker,
   DatePicker,
   Form,
   Image,
@@ -39,6 +40,10 @@ import type { Dayjs } from 'dayjs';
 import dayjs from 'dayjs';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
+import {
+  BANNER_CONFIG_KEY,
+  MODULE_NAME,
+} from '@/modules/battery-swap/constants';
 import type { PackageSpec } from '@/modules/battery-swap/schema';
 import { formatPrice } from '@/modules/battery-swap/schema';
 import { api } from '@/trpc/react';
@@ -88,6 +93,8 @@ type EditingPackage = {
   company: string;
   title: string;
   imageUrl: string | null;
+  detailImageUrl: string | null;
+  cardBgColor: string;
   originalPrice: number; // 元
   salePrice: number; // 元
   specs: { model: string; price: number }[]; // price 是元
@@ -103,6 +110,8 @@ type PackageRow = {
   company: string;
   title: string;
   imageUrl: string | null;
+  detailImageUrl: string | null;
+  cardBgColor: string | null;
   originalPrice: number;
   salePrice: number;
   specs: PackageSpec[];
@@ -122,6 +131,8 @@ function rowToEditing(r: PackageRow): EditingPackage {
     company: r.company,
     title: r.title,
     imageUrl: r.imageUrl,
+    detailImageUrl: r.detailImageUrl,
+    cardBgColor: r.cardBgColor ?? '#ffffff',
     originalPrice: r.originalPrice / 100,
     salePrice: r.salePrice / 100,
     specs: r.specs.map((s) => ({ model: s.model, price: s.price / 100 })),
@@ -138,6 +149,8 @@ const DEFAULT_EDITING: EditingPackage = {
   company: '',
   title: '',
   imageUrl: null,
+  detailImageUrl: null,
+  cardBgColor: '#ffffff',
   originalPrice: 0,
   salePrice: 0,
   specs: [
@@ -190,8 +203,53 @@ export default function AdminBatterySwapPage() {
     },
   });
 
+  // ── Banner 配置 ──────────────────────────────────────
+  const utils = api.useUtils();
+  const { data: bannerConfig } = api.admin.getConfig.useQuery({
+    key: BANNER_CONFIG_KEY,
+  });
+  const setConfigMutation = api.admin.setConfig.useMutation({
+    onSuccess: () => {
+      toast.success('Banner 已更新');
+      void utils.admin.getConfig.invalidate({ key: BANNER_CONFIG_KEY });
+    },
+    onError: (err) => toast.error(err.message),
+  });
+  const [uploadingBanner, setUploadingBanner] = useState(false);
+
+  async function handleBannerUpload(file: File) {
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error('Banner 图片不能超过 5MB');
+      return;
+    }
+    setUploadingBanner(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch('/api/upload?module=battery-swap', {
+        method: 'POST',
+        body: fd,
+      });
+      const data = (await res.json()) as { url?: string; error?: string };
+      if (!res.ok || !data.url) {
+        toast.error(data.error ?? '上传失败');
+        return;
+      }
+      setConfigMutation.mutate({
+        key: BANNER_CONFIG_KEY,
+        value: data.url,
+        description: `${MODULE_NAME}页面顶部 Banner 图`,
+      });
+    } catch {
+      toast.error('上传失败，请重试');
+    } finally {
+      setUploadingBanner(false);
+    }
+  }
+
   const [editing, setEditing] = useState<EditingPackage | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadingDetail, setUploadingDetail] = useState(false);
 
   // ── 拖拽排序（乐观更新，先更新 UI 再提交服务器）──────
   const [localPackages, setLocalPackages] = useState<typeof packages>();
@@ -240,11 +298,43 @@ export default function AdminBatterySwapPage() {
         toast.error(data.error ?? '上传失败');
         return;
       }
-      setEditing((prev) => (prev ? { ...prev, imageUrl: data.url! } : prev));
+      setEditing((prev) =>
+        prev ? { ...prev, imageUrl: data.url ?? null } : prev,
+      );
     } catch {
       toast.error('上传失败，请重试');
     } finally {
       setUploading(false);
+    }
+  }
+
+  // ── 详情长图上传 ──────────────────────────────────────
+
+  async function handleDetailImageUpload(file: File) {
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error('详情长图大小不能超过 10MB');
+      return;
+    }
+    setUploadingDetail(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch('/api/upload?module=battery-swap', {
+        method: 'POST',
+        body: fd,
+      });
+      const data = (await res.json()) as { url?: string; error?: string };
+      if (!res.ok || !data.url) {
+        toast.error(data.error ?? '上传失败');
+        return;
+      }
+      setEditing((prev) =>
+        prev ? { ...prev, detailImageUrl: data.url ?? null } : prev,
+      );
+    } catch {
+      toast.error('上传失败，请重试');
+    } finally {
+      setUploadingDetail(false);
     }
   }
 
@@ -265,6 +355,8 @@ export default function AdminBatterySwapPage() {
       company: editing.company,
       title: editing.title,
       imageUrl: editing.imageUrl,
+      detailImageUrl: editing.detailImageUrl,
+      cardBgColor: editing.cardBgColor || '#ffffff',
       originalPrice: Math.round(editing.originalPrice * 100),
       salePrice: Math.round(editing.salePrice * 100),
       specs: editing.specs.map((s) => ({
@@ -292,7 +384,8 @@ export default function AdminBatterySwapPage() {
     setEditing((prev) => {
       if (!prev) return prev;
       const specs = [...prev.specs];
-      specs[index] = { ...specs[index]!, [field]: value };
+      const current = specs[index];
+      if (current) specs[index] = { ...current, [field]: value };
       return { ...prev, specs };
     });
   }
@@ -339,18 +432,25 @@ export default function AdminBatterySwapPage() {
           <span className="text-gray-400">无图</span>
         ),
     },
-    { title: '商品标题', dataIndex: 'title', key: 'title', ellipsis: true },
     {
-      title: '换电公司',
+      title: '标题',
+      dataIndex: 'title',
+      key: 'title',
+      width: 150,
+      ellipsis: true,
+    },
+    {
+      title: '公司',
       dataIndex: 'company',
       key: 'company',
-      width: 110,
+      width: 90,
+      ellipsis: true,
       render: (v: string) => <Tag color="blue">{v}</Tag>,
     },
     {
       title: '售价',
       key: 'price',
-      width: 110,
+      width: 100,
       render: (_, r) => (
         <span>
           <span className="font-bold text-red-500">
@@ -361,6 +461,41 @@ export default function AdminBatterySwapPage() {
             ¥{formatPrice(r.originalPrice)}
           </span>
         </span>
+      ),
+    },
+    {
+      title: '详情',
+      dataIndex: 'detailImageUrl',
+      key: 'detailImageUrl',
+      width: 56,
+      render: (url: string | null) =>
+        url ? (
+          <Image
+            alt="详情图"
+            height={36}
+            src={url}
+            style={{ borderRadius: 4, objectFit: 'cover' }}
+            width={36}
+          />
+        ) : (
+          <span className="text-gray-400">—</span>
+        ),
+    },
+    {
+      title: '底色',
+      dataIndex: 'cardBgColor',
+      key: 'cardBgColor',
+      width: 48,
+      render: (color: string | null) => (
+        <div
+          style={{
+            width: 20,
+            height: 20,
+            borderRadius: 4,
+            backgroundColor: color ?? '#ffffff',
+            border: '1px solid #d9d9d9',
+          }}
+        />
       ),
     },
     {
@@ -444,13 +579,47 @@ export default function AdminBatterySwapPage() {
       <main className="min-h-screen bg-gray-50">
         <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:px-8">
           <div className="mb-6 flex items-center justify-between">
-            <h1 className="font-bold text-2xl text-gray-900">换电套餐管理</h1>
+            <h1 className="font-bold text-2xl text-gray-900">
+              {MODULE_NAME}管理
+            </h1>
             <Button
               onClick={() => setEditing({ ...DEFAULT_EDITING })}
               type="primary"
             >
               新建套餐
             </Button>
+          </div>
+
+          {/* Banner 配置 */}
+          <div className="mb-6 rounded-xl bg-white p-4">
+            <h2 className="mb-3 font-semibold text-gray-700">页面 Banner</h2>
+            <div className="flex items-center gap-4">
+              {bannerConfig?.value && typeof bannerConfig.value === 'string' ? (
+                <Image
+                  alt="Banner"
+                  height={80}
+                  src={bannerConfig.value}
+                  style={{ borderRadius: 8, objectFit: 'cover' }}
+                  width={240}
+                />
+              ) : (
+                <div className="flex h-20 w-60 items-center justify-center rounded-lg border border-gray-300 border-dashed text-gray-400 text-sm">
+                  未设置 Banner
+                </div>
+              )}
+              <Upload
+                accept="image/*"
+                beforeUpload={(file) => {
+                  void handleBannerUpload(file);
+                  return false;
+                }}
+                showUploadList={false}
+              >
+                <Button icon={<UploadOutlined />} loading={uploadingBanner}>
+                  {bannerConfig?.value ? '更换 Banner' : '上传 Banner'}
+                </Button>
+              </Upload>
+            </div>
           </div>
 
           <DndContext
@@ -468,6 +637,7 @@ export default function AdminBatterySwapPage() {
                 dataSource={displayPackages as PackageRow[] | undefined}
                 pagination={false}
                 rowKey="id"
+                scroll={{ x: 900 }}
                 style={{ background: '#fff', borderRadius: 12 }}
               />
             </SortableContext>
@@ -519,6 +689,63 @@ export default function AdminBatterySwapPage() {
                   </Button>
                 </Upload>
               </div>
+            </Form.Item>
+
+            {/* 详情长图 */}
+            <Form.Item label="详情长图（前台可查看）">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {editing.detailImageUrl && (
+                  <div
+                    style={{ position: 'relative', display: 'inline-block' }}
+                  >
+                    <Image
+                      alt="详情长图"
+                      src={editing.detailImageUrl}
+                      style={{ borderRadius: 8, objectFit: 'cover' }}
+                      width={200}
+                    />
+                    <Button
+                      danger
+                      onClick={() => updateEditing({ detailImageUrl: null })}
+                      size="small"
+                      style={{ marginLeft: 8 }}
+                      type="text"
+                    >
+                      移除
+                    </Button>
+                  </div>
+                )}
+                <Upload
+                  accept="image/*"
+                  beforeUpload={(file) => {
+                    void handleDetailImageUpload(file);
+                    return false;
+                  }}
+                  showUploadList={false}
+                >
+                  <Button icon={<UploadOutlined />} loading={uploadingDetail}>
+                    {editing.detailImageUrl ? '更换详情图' : '上传详情图'}
+                  </Button>
+                </Upload>
+              </div>
+            </Form.Item>
+
+            {/* 卡片背景色 */}
+            <Form.Item label="卡片背景色">
+              <Space>
+                <ColorPicker
+                  onChange={(_, hex) => updateEditing({ cardBgColor: hex })}
+                  showText
+                  value={editing.cardBgColor}
+                />
+                <Button
+                  onClick={() => updateEditing({ cardBgColor: '#ffffff' })}
+                  size="small"
+                  type="link"
+                >
+                  重置为白色
+                </Button>
+              </Space>
             </Form.Item>
 
             {/* 换电公司 */}

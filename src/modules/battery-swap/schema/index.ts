@@ -21,6 +21,8 @@ export const batterySwapPackages = createTable(
     company: d.varchar({ length: 128 }).notNull(),
     title: d.varchar({ length: 256 }).notNull(),
     imageUrl: d.text(),
+    detailImageUrl: d.text(), // 详情长图
+    cardBgColor: d.varchar({ length: 32 }).default('#ffffff'), // 卡片背景色
     originalPrice: d.integer().notNull(), // 划线价（分）
     salePrice: d.integer().notNull(), // 最低销售价（分）
     specs: jsonb().$type<PackageSpec[]>().notNull(),
