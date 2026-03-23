@@ -13,7 +13,9 @@ export const auth = betterAuth({
   secret: env.BETTER_AUTH_SECRET,
   baseURL: env.BETTER_AUTH_URL,
   trustedOrigins: env.BETTER_AUTH_URL ? [env.BETTER_AUTH_URL] : [],
-  emailAndPassword: { enabled: false },
+  emailAndPassword: { enabled: true },
+  // 禁用公开注册 HTTP 端点，仅允许管理员通过 auth.api.signUpEmail() 内部调用创建用户
+  disabledPaths: ['/sign-up/email'],
   advanced: {
     useSecureCookies,
   },
@@ -27,8 +29,7 @@ export const auth = betterAuth({
         await sendSmsOtp(phone, code);
       },
       otpLength: 6,
-      expiresIn: 300, // 5 minutes
-      // 首次验证时自动创建用户（better-auth 内部需要 email 字段，用手机号生成占位值）
+      expiresIn: 300,
       signUpOnVerification: {
         getTempEmail: (phone) => `${phone}@phone.local`,
         getTempName: (phone) => phone,

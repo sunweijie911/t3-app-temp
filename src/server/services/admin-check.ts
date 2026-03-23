@@ -1,24 +1,24 @@
 import 'server-only';
 import { env } from '@/env';
 
-let parsedPhones: string[] | null = null;
+let parsedEmails: string[] | null = null;
 let cacheTimestamp = 0;
 const CACHE_TTL_MS = 5 * 60_000; // 5 minutes
 
-function getAdminPhones(): string[] {
+function getAdminEmails(): string[] {
   const now = Date.now();
-  if (parsedPhones && now - cacheTimestamp < CACHE_TTL_MS) {
-    return parsedPhones;
+  if (parsedEmails && now - cacheTimestamp < CACHE_TTL_MS) {
+    return parsedEmails;
   }
-  parsedPhones = (env.ADMIN_PHONES ?? '')
+  parsedEmails = (env.ADMIN_EMAILS ?? '')
     .split(',')
-    .map((p) => p.trim())
+    .map((e) => e.trim().toLowerCase())
     .filter(Boolean);
   cacheTimestamp = now;
-  return parsedPhones;
+  return parsedEmails;
 }
 
-export function isAdminPhone(phone: string | null | undefined): boolean {
-  if (!phone) return false;
-  return getAdminPhones().includes(phone.trim());
+export function isAdminEmail(email: string | null | undefined): boolean {
+  if (!email) return false;
+  return getAdminEmails().includes(email.trim().toLowerCase());
 }

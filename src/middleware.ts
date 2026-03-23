@@ -1,6 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { auth } from '@/server/better-auth';
+import { isAdminEmail } from '@/server/services/admin-check';
 
 // Required for auth.api.getSession() which uses the postgres driver (Node.js only)
 export const runtime = 'nodejs';
@@ -23,6 +24,11 @@ export async function middleware(request: NextRequest) {
     const signinUrl = new URL('/signin', request.url);
     signinUrl.searchParams.set('callbackUrl', pathname);
     return NextResponse.redirect(signinUrl);
+  }
+
+  // /admin 路由需要管理员权限
+  if (pathname.startsWith('/admin') && !isAdminEmail(session.user.email)) {
+    return NextResponse.redirect(new URL('/', request.url));
   }
 
   return NextResponse.next();

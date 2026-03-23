@@ -12,9 +12,8 @@ import superjson from 'superjson';
 import { ZodError } from 'zod';
 
 import { auth } from '@/server/better-auth';
-import { getUserPhone } from '@/server/better-auth/types';
 import { db } from '@/server/db';
-import { isAdminPhone } from '@/server/services/admin-check';
+import { isAdminEmail } from '@/server/services/admin-check';
 
 /**
  * 1. CONTEXT
@@ -138,12 +137,11 @@ export const protectedProcedure = t.procedure
   });
 
 /**
- * 管理员专用过程 —— 仅允许手机号在 ADMIN_PHONES 白名单中的用户访问。
+ * 管理员专用过程 —— 仅允许邮箱在 ADMIN_EMAILS 白名单中的用户访问。
  * 继承自 protectedProcedure，确保登录态校验保持一致。
  */
 export const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
-  const phone = getUserPhone(ctx.session.user);
-  if (!isAdminPhone(phone)) {
+  if (!isAdminEmail(ctx.session.user.email)) {
     throw new TRPCError({
       code: 'FORBIDDEN',
       message: 'Admin access required',

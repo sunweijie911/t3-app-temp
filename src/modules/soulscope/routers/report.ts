@@ -7,9 +7,8 @@ import {
   generateReport,
 } from '@/modules/soulscope/services/report-generator';
 import { createTRPCRouter, protectedProcedure } from '@/server/api/trpc';
-import { getUserPhone } from '@/server/better-auth/types';
 import { aiReports, testResults } from '@/server/db/schema';
-import { isAdminPhone } from '@/server/services/admin-check';
+import { isAdminEmail } from '@/server/services/admin-check';
 import { reportGenerateLimiter } from '@/server/services/rate-limiter';
 
 export const reportRouter = createTRPCRouter({
@@ -43,8 +42,7 @@ export const reportRouter = createTRPCRouter({
       }
 
       // 付款校验：退款后不可再读取完整报告（管理员豁免）
-      const phone = getUserPhone(ctx.session.user);
-      if (!isAdminPhone(phone)) {
+      if (!isAdminEmail(ctx.session.user.email)) {
         const hasPaid = await hasPaidOrder(
           ctx.db,
           ctx.session.user.id,

@@ -20,6 +20,10 @@ export const env = createEnv({
       .enum(['development', 'test', 'production'])
       .default('development'),
     ADMIN_PHONES: z.string().optional(),
+    ADMIN_EMAILS:
+      process.env.NODE_ENV === 'production'
+        ? z.string().min(1)
+        : z.string().optional(),
     LLM_API_KEY: z.string().optional(),
     BETTER_AUTH_URL:
       process.env.NODE_ENV === 'production'
@@ -52,6 +56,7 @@ export const env = createEnv({
     DATABASE_URL: stripQuotes(process.env.DATABASE_URL),
     NODE_ENV: stripQuotes(process.env.NODE_ENV),
     ADMIN_PHONES: stripQuotes(process.env.ADMIN_PHONES),
+    ADMIN_EMAILS: stripQuotes(process.env.ADMIN_EMAILS),
     LLM_API_KEY: stripQuotes(process.env.LLM_API_KEY),
     BETTER_AUTH_URL: stripQuotes(process.env.BETTER_AUTH_URL),
     NEXT_PUBLIC_DEFAULT_MODULE: stripQuotes(

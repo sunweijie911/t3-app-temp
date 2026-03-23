@@ -4,9 +4,8 @@ import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { simulatePayment } from '@/modules/soulscope/services/payment';
 import { createTRPCRouter, protectedProcedure } from '@/server/api/trpc';
-import { getUserPhone } from '@/server/better-auth/types';
 import { orders, testResults } from '@/server/db/schema';
-import { isAdminPhone } from '@/server/services/admin-check';
+import { isAdminEmail } from '@/server/services/admin-check';
 
 export const orderRouter = createTRPCRouter({
   create: protectedProcedure
@@ -67,8 +66,10 @@ export const orderRouter = createTRPCRouter({
   simulatePayment: protectedProcedure
     .input(z.object({ orderId: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      const phone = getUserPhone(ctx.session.user);
-      if (process.env.NODE_ENV === 'production' && !isAdminPhone(phone)) {
+      if (
+        process.env.NODE_ENV === 'production' &&
+        !isAdminEmail(ctx.session.user.email)
+      ) {
         throw new TRPCError({
           code: 'FORBIDDEN',
           message: 'Payment simulation is not available in production',
