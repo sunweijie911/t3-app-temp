@@ -21,10 +21,16 @@ ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN pnpm build
 
-# Compile seed script for production (no tsx in runner)
+# Compile seed scripts for production (no tsx in runner)
 RUN pnpm exec esbuild scripts/seed-test-data.ts \
     --bundle --platform=node --format=esm \
     --outfile=seed.mjs \
+    --external:postgres \
+    --tsconfig=tsconfig.json
+
+RUN pnpm exec esbuild scripts/seed-admin.ts \
+    --bundle --platform=node --format=esm \
+    --outfile=seed-admin.mjs \
     --external:postgres \
     --tsconfig=tsconfig.json
 
@@ -61,6 +67,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/node_modules/postgres ./node_modu
 COPY --from=builder --chown=nextjs:nodejs /app/drizzle ./drizzle
 COPY --from=builder --chown=nextjs:nodejs /app/migrate.mjs ./migrate.mjs
 COPY --from=builder --chown=nextjs:nodejs /app/seed.mjs ./seed.mjs
+COPY --from=builder --chown=nextjs:nodejs /app/seed-admin.mjs ./seed-admin.mjs
 
 USER nextjs
 
@@ -69,4 +76,4 @@ EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 
-CMD ["sh", "-c", "node migrate.mjs && if [ \"$RUN_SEEDS\" = 'true' ]; then node seed.mjs; fi && node server.js"]
+CMD ["sh", "-c", "node migrate.mjs && if [ \"$RUN_SEEDS\" = 'true' ]; then node seed.mjs; fi && if [ -n \"$SEED_ADMIN_EMAIL\" ]; then node seed-admin.mjs; fi && node server.js"]
