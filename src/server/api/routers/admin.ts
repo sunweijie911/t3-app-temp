@@ -7,13 +7,15 @@ import {
   protectedProcedure,
 } from '@/server/api/trpc';
 import { auth } from '@/server/better-auth';
+import { getUserPhone } from '@/server/better-auth/types';
 import { user } from '@/server/db/auth-schema';
 import { systemConfig } from '@/server/db/schema';
-import { isAdminEmail } from '@/server/services/admin-check';
+import { isAdminEmail, isAdminPhone } from '@/server/services/admin-check';
 
 export const adminRouter = createTRPCRouter({
   isAdmin: protectedProcedure.query(({ ctx }) => {
-    return isAdminEmail(ctx.session.user.email);
+    const phone = getUserPhone(ctx.session.user);
+    return isAdminEmail(ctx.session.user.email) || isAdminPhone(phone);
   }),
 
   // ---- 用户管理 ----

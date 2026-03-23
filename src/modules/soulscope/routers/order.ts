@@ -4,8 +4,9 @@ import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { simulatePayment } from '@/modules/soulscope/services/payment';
 import { createTRPCRouter, protectedProcedure } from '@/server/api/trpc';
+import { getUserPhone } from '@/server/better-auth/types';
 import { orders, testResults } from '@/server/db/schema';
-import { isAdminEmail } from '@/server/services/admin-check';
+import { isAdminEmail, isAdminPhone } from '@/server/services/admin-check';
 
 export const orderRouter = createTRPCRouter({
   create: protectedProcedure
@@ -68,7 +69,8 @@ export const orderRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       if (
         process.env.NODE_ENV === 'production' &&
-        !isAdminEmail(ctx.session.user.email)
+        !isAdminEmail(ctx.session.user.email) &&
+        !isAdminPhone(getUserPhone(ctx.session.user))
       ) {
         throw new TRPCError({
           code: 'FORBIDDEN',
