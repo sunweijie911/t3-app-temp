@@ -14,6 +14,10 @@ export const auth = betterAuth({
   baseURL: env.BETTER_AUTH_URL,
   trustedOrigins: env.BETTER_AUTH_URL ? [env.BETTER_AUTH_URL] : [],
   emailAndPassword: { enabled: true },
+  session: {
+    expiresIn: 60 * 60, // 1 小时过期
+    updateAge: 5 * 60, // 活跃用户每 5 分钟自动续期
+  },
   // 禁用公开注册 HTTP 端点，仅允许管理员通过 auth.api.signUpEmail() 内部调用创建用户
   disabledPaths: ['/sign-up/email'],
   advanced: {

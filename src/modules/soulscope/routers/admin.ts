@@ -330,7 +330,9 @@ export const soulscopeAdminRouter = createTRPCRouter({
     )
     .mutation(async ({ ctx, input }) => {
       // Rate limit check
-      const rateCheck = questionGenerateLimiter.check(ctx.session.user.id);
+      const userId = ctx.session?.user.id;
+      if (!userId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+      const rateCheck = questionGenerateLimiter.check(userId);
       if (!rateCheck.allowed) {
         throw new TRPCError({
           code: 'TOO_MANY_REQUESTS',

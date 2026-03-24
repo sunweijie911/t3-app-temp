@@ -14,6 +14,7 @@ import { ZodError } from 'zod';
 import { auth } from '@/server/better-auth';
 import { getUserPhone } from '@/server/better-auth/types';
 import { db } from '@/server/db';
+import { adminAuditLog } from '@/server/db/schema';
 import { isAdminEmail, isAdminPhone } from '@/server/services/admin-check';
 
 /**
@@ -138,16 +139,81 @@ export const protectedProcedure = t.procedure
   });
 
 /**
+ * 对输入参数进行脱敏，移除密码、token 等敏感字段。
+ */
+function sanitizeInput(input: unknown): unknown {
+  if (!input || typeof input !== 'object') return input;
+  const sensitiveKeys = ['password', 'secret', 'token', 'otp', 'code'];
+  const sanitized = { ...(input as Record<string, unknown>) };
+  for (const key of sensitiveKeys) {
+    if (key in sanitized) sanitized[key] = '***';
+  }
+  return sanitized;
+}
+
+/**
+ * 审计日志中间件 —— 记录所有 admin mutation 操作到 adminAuditLog 表。
+ * 异步写入，不阻塞响应。
+ */
+const auditMiddleware = t.middleware(
+  async ({ ctx, next, path, type, getRawInput }) => {
+    if (type !== 'mutation') return next({ ctx });
+    if (!ctx.session?.user) return next({ ctx });
+
+    const sessionUser = ctx.session.user;
+    const rawInput = await getRawInput();
+    const ip =
+      ctx.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
+    const ua = ctx.headers.get('user-agent') ?? null;
+
+    const writeLog = (values: typeof adminAuditLog.$inferInsert) => {
+      db.insert(adminAuditLog)
+        .values(values)
+        .catch((err) => console.error('[AuditLog] 写入失败:', err));
+    };
+
+    try {
+      const result = await next({ ctx });
+      writeLog({
+        userId: sessionUser.id,
+        userEmail: sessionUser.email,
+        action: path,
+        input: sanitizeInput(rawInput) as Record<string, unknown>,
+        result: 'success',
+        ipAddress: ip,
+        userAgent: ua,
+      });
+      return result;
+    } catch (error) {
+      writeLog({
+        userId: sessionUser.id,
+        userEmail: sessionUser.email,
+        action: path,
+        input: sanitizeInput(rawInput) as Record<string, unknown>,
+        result: 'error',
+        errorMessage: error instanceof Error ? error.message : 'Unknown error',
+        ipAddress: ip,
+        userAgent: ua,
+      });
+      throw error;
+    }
+  },
+);
+
+/**
  * 管理员专用过程 —— 邮箱在 ADMIN_EMAILS 或手机号在 ADMIN_PHONES 白名单中即可访问。
  * 继承自 protectedProcedure，确保登录态校验保持一致。
+ * 所有 mutation 操作自动记录审计日志。
  */
-export const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
-  const phone = getUserPhone(ctx.session.user);
-  if (!isAdminEmail(ctx.session.user.email) && !isAdminPhone(phone)) {
-    throw new TRPCError({
-      code: 'FORBIDDEN',
-      message: 'Admin access required',
-    });
-  }
-  return next({ ctx });
-});
+export const adminProcedure = protectedProcedure
+  .use(({ ctx, next }) => {
+    const phone = getUserPhone(ctx.session.user);
+    if (!isAdminEmail(ctx.session.user.email) && !isAdminPhone(phone)) {
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'Admin access required',
+      });
+    }
+    return next({ ctx });
+  })
+  .use(auditMiddleware);

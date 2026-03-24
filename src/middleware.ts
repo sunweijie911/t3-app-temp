@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/server/better-auth';
 import { getUserPhone } from '@/server/better-auth/types';
 import { isAdminEmail, isAdminPhone } from '@/server/services/admin-check';
+import { authIpLimiter, globalIpLimiter } from '@/server/services/rate-limiter';
 
 // Required for auth.api.getSession() which uses the postgres driver (Node.js only)
 export const runtime = 'nodejs';
@@ -14,8 +15,54 @@ const protectedPatterns = [
   /^\/lucky-wheel\/records(\/|$)/,
 ];
 
+function getClientIp(request: NextRequest): string {
+  return (
+    request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
+    request.headers.get('x-real-ip') ??
+    'unknown'
+  );
+}
+
+function rateLimitResponse(retryAfterMs: number, message: string) {
+  return NextResponse.json(
+    { error: message },
+    {
+      status: 429,
+      headers: { 'Retry-After': String(Math.ceil(retryAfterMs / 1000)) },
+    },
+  );
+}
+
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
+  const ip = getClientIp(request);
+
+  // ── IP 限流（在所有逻辑之前） ──
+
+  // 对 API 路由执行全局 IP 限流
+  if (pathname.startsWith('/api/')) {
+    const globalCheck = globalIpLimiter.check(ip);
+    if (!globalCheck.allowed) {
+      return rateLimitResponse(
+        globalCheck.retryAfterMs,
+        '请求过于频繁，请稍后再试',
+      );
+    }
+  }
+
+  // 登录接口额外严格限流
+  if (pathname.startsWith('/api/auth/sign-in')) {
+    const authCheck = authIpLimiter.check(ip);
+    if (!authCheck.allowed) {
+      return rateLimitResponse(
+        authCheck.retryAfterMs,
+        '登录尝试过于频繁，请稍后再试',
+      );
+    }
+  }
+
+  // ── 页面认证保护 ──
+
   const isProtected = protectedPatterns.some((p) => p.test(pathname));
   if (!isProtected) return NextResponse.next();
 
@@ -40,6 +87,9 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
+    '/api/auth/:path*',
+    '/api/trpc/:path*',
+    '/api/upload',
     '/admin/:path*',
     '/soulscope/results/:path*',
     '/soulscope/tests/:slug/take/:path*',

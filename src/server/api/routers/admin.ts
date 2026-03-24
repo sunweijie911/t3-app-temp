@@ -1,5 +1,5 @@
 import { TRPCError } from '@trpc/server';
-import { desc, eq } from 'drizzle-orm';
+import { and, count, desc, eq, gte, lte } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   adminProcedure,
@@ -9,7 +9,7 @@ import {
 import { auth } from '@/server/better-auth';
 import { getUserPhone } from '@/server/better-auth/types';
 import { user } from '@/server/db/auth-schema';
-import { systemConfig } from '@/server/db/schema';
+import { adminAuditLog, systemConfig } from '@/server/db/schema';
 import { isAdminEmail, isAdminPhone } from '@/server/services/admin-check';
 
 export const adminRouter = createTRPCRouter({
@@ -72,7 +72,7 @@ export const adminRouter = createTRPCRouter({
   deleteUser: adminProcedure
     .input(z.object({ userId: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      if (input.userId === ctx.session.user.id) {
+      if (input.userId === ctx.session?.user.id) {
         throw new TRPCError({
           code: 'FORBIDDEN',
           message: '不能删除自己的账户',
@@ -80,6 +80,49 @@ export const adminRouter = createTRPCRouter({
       }
       await ctx.db.delete(user).where(eq(user.id, input.userId));
       return { success: true };
+    }),
+
+  // ---- 审计日志 ----
+
+  listAuditLogs: adminProcedure
+    .input(
+      z.object({
+        page: z.number().min(1).default(1),
+        pageSize: z.number().min(1).max(100).default(20),
+        startDate: z.string().optional(),
+        endDate: z.string().optional(),
+        action: z.string().optional(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const conditions = [];
+      if (input.startDate) {
+        conditions.push(
+          gte(adminAuditLog.createdAt, new Date(input.startDate)),
+        );
+      }
+      if (input.endDate) {
+        conditions.push(lte(adminAuditLog.createdAt, new Date(input.endDate)));
+      }
+      if (input.action) {
+        conditions.push(eq(adminAuditLog.action, input.action));
+      }
+
+      const where = conditions.length > 0 ? and(...conditions) : undefined;
+      const offset = (input.page - 1) * input.pageSize;
+
+      const [logs, countResult] = await Promise.all([
+        ctx.db
+          .select()
+          .from(adminAuditLog)
+          .where(where)
+          .orderBy(desc(adminAuditLog.createdAt))
+          .limit(input.pageSize)
+          .offset(offset),
+        ctx.db.select({ total: count() }).from(adminAuditLog).where(where),
+      ]);
+
+      return { logs, total: countResult[0]?.total ?? 0 };
     }),
 
   // ---- 系统配置 ----

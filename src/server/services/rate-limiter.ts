@@ -64,3 +64,9 @@ export const uploadLimiter = new RateLimiter(5, 60_000);
 
 // 信息采集提交：同一手机号 1 分钟 3 次
 export const infoCollectSubmitLimiter = new RateLimiter(3, 60_000);
+
+// 全局 IP 限流：单 IP 每分钟 60 次请求
+export const globalIpLimiter = new RateLimiter(60, 60_000);
+
+// 登录接口限流：单 IP 每分钟 5 次登录尝试
+export const authIpLimiter = new RateLimiter(5, 60_000);
