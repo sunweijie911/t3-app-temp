@@ -607,18 +607,37 @@ export default function AdminBatterySwapPage() {
                   未设置 Banner
                 </div>
               )}
-              <Upload
-                accept="image/*"
-                beforeUpload={(file) => {
-                  void handleBannerUpload(file);
-                  return false;
-                }}
-                showUploadList={false}
-              >
-                <Button icon={<UploadOutlined />} loading={uploadingBanner}>
-                  {bannerConfig?.value ? '更换 Banner' : '上传 Banner'}
-                </Button>
-              </Upload>
+              <Space>
+                <Upload
+                  accept="image/*"
+                  beforeUpload={(file) => {
+                    void handleBannerUpload(file);
+                    return false;
+                  }}
+                  showUploadList={false}
+                >
+                  <Button icon={<UploadOutlined />} loading={uploadingBanner}>
+                    {bannerConfig?.value ? '更换 Banner' : '上传 Banner'}
+                  </Button>
+                </Upload>
+                {typeof bannerConfig?.value === 'string' &&
+                  bannerConfig.value && (
+                    <Popconfirm
+                      onConfirm={() =>
+                        setConfigMutation.mutate({
+                          key: BANNER_CONFIG_KEY,
+                          value: '',
+                          description: `${MODULE_NAME}页面顶部 Banner 图`,
+                        })
+                      }
+                      title="确定删除 Banner 吗？"
+                    >
+                      <Button danger icon={<DeleteOutlined />}>
+                        删除
+                      </Button>
+                    </Popconfirm>
+                  )}
+              </Space>
             </div>
           </div>
 
