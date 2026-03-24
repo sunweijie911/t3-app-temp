@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Docker Compose 管理脚本
-# 用法: ./manage.sh [start|stop|restart|status|logs|health|pull]
+# 用法: ./manage.sh [build|start|stop|restart|deploy|update|status|logs|pull|health|help]
 
 set -euo pipefail
 
@@ -42,10 +42,29 @@ check_docker() {
     fi
 }
 
+# 封装 docker compose 命令，自动处理 profile
+compose_cmd() {
+    local profile="${1:-}"
+    shift
+    if [ "$profile" = "dev" ]; then
+        docker compose --profile dev "$@"
+    else
+        docker compose "$@"
+    fi
+}
+
+# 构建镜像
+build_images() {
+    log_info "Building images..."
+    docker compose build
+    log_info "Images built successfully"
+}
+
 # 启动服务
 start_services() {
+    local profile="${1:-}"
     log_info "Starting services..."
-    docker compose up -d
+    compose_cmd "$profile" up -d
     log_info "Services started!"
     log_blue "Access the application at: http://localhost:${PORT}"
     show_status
@@ -53,33 +72,57 @@ start_services() {
 
 # 停止服务
 stop_services() {
+    local profile="${1:-}"
     log_info "Stopping services..."
-    docker compose stop
+    compose_cmd "$profile" down
     log_info "Services stopped"
 }
 
 # 重启服务
 restart_services() {
+    local profile="${1:-}"
     log_info "Restarting services..."
-    docker compose down
-    docker compose up -d
+    compose_cmd "$profile" down
+    compose_cmd "$profile" up -d
     log_info "Services restarted!"
     show_status
 }
 
-# 显示状态
-show_status() {
-    log_blue "Service Status:"
-    docker compose ps
+# 构建 + 启动（一键部署）
+deploy_services() {
+    local profile="${1:-}"
+    build_images
+    log_info "Recreating services..."
+    compose_cmd "$profile" up -d --force-recreate
+    log_info "Deploy complete!"
+    log_blue "Access the application at: http://localhost:${PORT}"
+    show_status
+    log_info "Running health check in 10s..."
+    sleep 10
+    health_check 3
 }
 
-# 显示日志
+# 更新代码并重新部署
+update_deploy() {
+    local profile="${1:-}"
+    log_info "Pulling latest code..."
+    git pull || { log_error "Git pull failed, aborting deploy"; exit 1; }
+    deploy_services "$profile"
+}
+
+# 显示状态（始终带 --profile dev，对非 dev 模式无影响）
+show_status() {
+    log_blue "Service Status:"
+    docker compose --profile dev ps
+}
+
+# 显示日志（始终带 --profile dev，使 db 服务可查）
 show_logs() {
     local service="${1:-}"
     if [ -n "$service" ]; then
-        docker compose logs -f "$service"
+        docker compose --profile dev logs -f "$service"
     else
-        docker compose logs -f
+        docker compose --profile dev logs -f
     fi
 }
 
@@ -126,14 +169,17 @@ ${BLUE}Docker Compose Management Script${NC}
 Usage: $0 [COMMAND]
 
 ${GREEN}Commands:${NC}
-  start       Start all services
-  stop        Stop all services
-  restart     Restart all services (down + up)
-  status      Show service status
-  logs [svc]  Show logs (optionally for a specific service: t3-app, t3-nginx, db)
-  pull        Pull images from registry
-  health      Run health check against /api/health
-  help        Show this help message
+  build           Build Docker images locally
+  start [dev]     Start all services (add 'dev' to include database)
+  stop [dev]      Stop all services (add 'dev' to include database)
+  restart [dev]   Restart all services (add 'dev' to include database)
+  deploy [dev]    Build + start (one-step deploy, add 'dev' to include database)
+  update [dev]    Git pull + build + start (update & redeploy)
+  status          Show service status
+  logs [svc]      Show logs (optionally for a specific service: t3-app, t3-nginx, db)
+  pull            Pull images from registry
+  health          Run health check against /api/health
+  help            Show this help message
 
 ${GREEN}Environment Variables:${NC}
   HOST_PORT     Host port for nginx (default: 5000)
@@ -141,7 +187,9 @@ ${GREEN}Environment Variables:${NC}
   NGINX_IMAGE   Nginx image (for pull command)
 
 ${GREEN}Examples:${NC}
-  $0 start                    # Start all services
+  $0 deploy dev               # First deploy (build + start with database)
+  $0 update dev               # Pull code + rebuild + restart
+  $0 start dev                # Start services with database
   $0 logs t3-app              # View app logs only
   $0 health                   # Run health check
   $0 restart                  # Restart all services
@@ -156,9 +204,12 @@ main() {
     local command="${1:-help}"
 
     case "$command" in
-        start)          start_services ;;
-        stop)           stop_services ;;
-        restart)        restart_services ;;
+        build)          build_images ;;
+        start)          start_services "${2:-}" ;;
+        stop)           stop_services "${2:-}" ;;
+        restart)        restart_services "${2:-}" ;;
+        deploy)         deploy_services "${2:-}" ;;
+        update)         update_deploy "${2:-}" ;;
         status)         show_status ;;
         logs)           show_logs "${2:-}" ;;
         pull)           pull_images ;;
