@@ -34,17 +34,19 @@ export default function BatterySwapHome() {
     <div className="min-h-screen bg-gray-100">
       {/* Banner */}
       {bannerUrl && (
-        <Image
-          alt={MODULE_NAME}
-          className="w-full"
-          height={400}
-          src={bannerUrl}
-          width={750}
-        />
+        <div className="px-3 pt-3">
+          <Image
+            alt={MODULE_NAME}
+            className="aspect-video w-full rounded-2xl object-cover"
+            height={422}
+            src={bannerUrl}
+            width={750}
+          />
+        </div>
       )}
 
-      {/* 卡片列表 */}
-      <div className="bg-gray-100 px-3 pt-4 pb-8">
+      {/* 套餐卡片列表 */}
+      <div className="space-y-3 px-3 pt-3 pb-8">
         {isLoading && (
           <div className="flex justify-center py-20">
             <Spin size="large" />
@@ -71,6 +73,8 @@ export default function BatterySwapHome() {
             salePrice={pkg.salePrice}
             specs={pkg.specs}
             title={pkg.title}
+            validFrom={pkg.validFrom}
+            validTo={pkg.validTo}
           />
         ))}
       </div>

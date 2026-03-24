@@ -1,11 +1,19 @@
 'use client';
 
+import {
+  CalendarOutlined,
+  EnvironmentOutlined,
+  InfoCircleOutlined,
+  SafetyCertificateOutlined,
+  SearchOutlined,
+} from '@ant-design/icons';
 import Image from 'next/image';
 import { useState } from 'react';
+
 import type { PackageSpec } from '@/modules/battery-swap/schema';
 import { formatPrice } from '@/modules/battery-swap/schema';
 
-type PackageCardProps = {
+export type PackageCardProps = {
   title: string;
   company: string;
   imageUrl: string | null;
@@ -18,8 +26,46 @@ type PackageCardProps = {
   regionLimit: string | null;
   purchaseNotes: string | null;
   purchaseLink: string | null;
+  validFrom: Date | string | null;
+  validTo: Date | string | null;
   onBuy: (link: string) => void;
 };
+
+// 将 hex 颜色转为 rgba
+function hexToRgba(hex: string, alpha: number): string {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  if (!result) return `rgba(0,82,208,${alpha})`;
+  const [, r, g, b] = result;
+  return `rgba(${parseInt(r ?? '0', 16)},${parseInt(g ?? '0', 16)},${parseInt(b ?? '0', 16)},${alpha})`;
+}
+
+// 获取卡片主题色：白色/空值时回退为品牌蓝
+function getAccentColor(cardBgColor: string | null): string {
+  if (
+    !cardBgColor ||
+    cardBgColor.toLowerCase() === '#ffffff' ||
+    cardBgColor.toLowerCase() === '#fff'
+  ) {
+    return '#0052d0';
+  }
+  return cardBgColor;
+}
+
+// 格式化有效期范围
+function formatDateRange(
+  from: Date | string | null,
+  to: Date | string | null,
+): string {
+  if (!from && !to) return '长期有效';
+  const fmt = (d: Date | string) => {
+    const date = typeof d === 'string' ? new Date(d) : d;
+    return `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getDate()).padStart(2, '0')}`;
+  };
+  if (from && to) return `${fmt(from)} - ${fmt(to)}`;
+  if (from) return `${fmt(from)} 起`;
+  // to 一定存在（前面已排除 !from && !to 和 from 存在的情况）
+  return `截至 ${fmt(to as Date | string)}`;
+}
 
 export function PackageCard({
   title,
@@ -34,21 +80,24 @@ export function PackageCard({
   regionLimit,
   purchaseNotes,
   purchaseLink,
+  validFrom,
+  validTo,
   onBuy,
 }: PackageCardProps) {
   const [showDetail, setShowDetail] = useState(false);
+  const accent = getAccentColor(cardBgColor);
 
   return (
     <>
       <div
-        className="mb-4 overflow-hidden rounded-2xl shadow"
-        style={{ backgroundColor: cardBgColor ?? '#ffffff' }}
+        className="overflow-hidden rounded-2xl bg-white shadow-sm"
+        style={{ borderLeft: `4px solid ${accent}` }}
       >
         {/* 商品大图 */}
         {imageUrl && (
           <Image
             alt={title}
-            className="aspect-[2/1] w-full object-cover"
+            className="h-32 w-full object-cover"
             height={200}
             src={imageUrl}
             width={400}
@@ -56,76 +105,141 @@ export function PackageCard({
         )}
 
         <div className="p-4">
-          {/* 公司 + 标题 */}
-          <div className="mb-2 flex items-center gap-2">
-            <span className="shrink-0 rounded-md bg-green-500 px-2 py-0.5 font-medium text-white text-xs">
-              {company}
-            </span>
-            <h3 className="font-bold text-base text-gray-900 leading-snug">
-              {title}
-            </h3>
-          </div>
-
-          {/* 价格区 */}
-          <div className="mb-3 flex items-baseline gap-1.5">
-            <span className="font-bold text-red-500 text-sm">¥</span>
-            <span className="font-extrabold text-2xl text-red-500 leading-none">
-              {formatPrice(salePrice)}
-            </span>
-            <span className="text-gray-300 text-xs line-through">
-              ¥{formatPrice(originalPrice)}
-            </span>
-          </div>
-
-          {/* 规格 */}
-          {specs.length > 0 && (
-            <div className="mb-3 flex gap-2">
-              {specs.map((s, idx) => (
-                <div
-                  className="flex-1 rounded-xl border border-green-100 bg-green-50/60 px-2 py-2 text-center"
-                  key={idx}
+          {/* 标题行：左侧公司标签+标题，右侧查看详情+价格 */}
+          <div className="mb-3 flex items-start justify-between">
+            <div className="min-w-0 flex-1">
+              <div className="mb-1 flex items-center gap-2">
+                <span
+                  className="shrink-0 rounded-md px-2 py-0.5 font-bold text-[10px]"
+                  style={{
+                    backgroundColor: hexToRgba(accent, 0.12),
+                    color: accent,
+                  }}
                 >
-                  <div className="font-medium text-gray-600 text-xs">
-                    {s.model}
-                  </div>
-                  <div className="mt-0.5">
-                    <span className="font-bold text-red-500 text-sm">
-                      ¥{formatPrice(s.price)}
-                    </span>
-                    <span className="text-[10px] text-gray-400">/月</span>
-                  </div>
-                </div>
-              ))}
+                  {company}
+                </span>
+              </div>
+              <h3 className="font-bold text-base text-gray-900 leading-tight">
+                {title}
+              </h3>
             </div>
-          )}
-
-          {/* 信息标签 */}
-          <div className="mb-3 flex flex-wrap gap-x-3 gap-y-1 text-gray-400 text-xs">
-            {depositMethod && <span>押金：{depositMethod}</span>}
-            {regionLimit && <span>区域：{regionLimit}</span>}
-            {purchaseNotes && <span>须知：{purchaseNotes}</span>}
+            <div className="ml-3 flex shrink-0 flex-col items-end">
+              {detailImageUrl && (
+                <button
+                  className="mb-1 flex cursor-pointer items-center gap-1 font-medium text-[10px]"
+                  onClick={() => setShowDetail(true)}
+                  style={{ color: hexToRgba(accent, 0.6) }}
+                  type="button"
+                >
+                  <SearchOutlined style={{ fontSize: 12, color: accent }} />
+                  <span>查看详情</span>
+                </button>
+              )}
+              <div className="text-right">
+                <div className="flex items-baseline gap-1">
+                  <span
+                    className="font-bold text-[10px]"
+                    style={{ color: accent }}
+                  >
+                    ¥
+                  </span>
+                  <span
+                    className="font-black text-xl leading-none"
+                    style={{ color: accent }}
+                  >
+                    {formatPrice(salePrice)}
+                  </span>
+                </div>
+                <div className="text-[10px] text-gray-400 leading-none line-through">
+                  ¥{formatPrice(originalPrice)}
+                </div>
+              </div>
+            </div>
           </div>
 
-          {/* 操作按钮 */}
-          <div className="flex gap-2">
-            {detailImageUrl && (
-              <button
-                className="rounded-xl border border-green-200 bg-green-50 px-5 py-2.5 font-medium text-green-600 text-sm active:bg-green-100"
-                onClick={() => setShowDetail(true)}
-                type="button"
+          <div className="space-y-2.5">
+            {/* 规格横排 */}
+            {specs.length > 0 && (
+              <div
+                className="flex items-center justify-between rounded-xl p-3"
+                style={{ backgroundColor: hexToRgba(accent, 0.05) }}
               >
-                查看详情
-              </button>
+                {specs.map((s, idx) => (
+                  <div className="contents" key={idx}>
+                    {idx > 0 && (
+                      <div
+                        className="h-6 w-px"
+                        style={{
+                          backgroundColor: hexToRgba(accent, 0.2),
+                        }}
+                      />
+                    )}
+                    <div className="flex flex-col">
+                      <span
+                        className="font-semibold text-[10px]"
+                        style={{ color: hexToRgba(accent, 0.8) }}
+                      >
+                        {s.model}
+                      </span>
+                      <span
+                        className="font-bold text-xs"
+                        style={{ color: accent }}
+                      >
+                        ¥{formatPrice(s.price)}/月
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
-            <button
-              className="flex-1 rounded-xl bg-gradient-to-r from-green-500 to-green-600 py-2.5 font-bold text-sm text-white active:from-green-600 active:to-green-700 disabled:cursor-not-allowed disabled:from-gray-300 disabled:to-gray-400"
-              disabled={!purchaseLink}
-              onClick={() => purchaseLink && onBuy(purchaseLink)}
-              type="button"
-            >
-              立即购买
-            </button>
+
+            {/* 信息网格 */}
+            <div className="grid grid-cols-2 gap-y-2 text-[11px]">
+              {depositMethod && (
+                <div className="flex items-center gap-1.5 text-gray-500">
+                  <SafetyCertificateOutlined
+                    style={{ fontSize: 14, color: accent }}
+                  />
+                  <span>{depositMethod}</span>
+                </div>
+              )}
+              {regionLimit && (
+                <div className="flex items-center gap-1.5 text-gray-500">
+                  <EnvironmentOutlined
+                    style={{ fontSize: 14, color: accent }}
+                  />
+                  <span>{regionLimit}</span>
+                </div>
+              )}
+              {purchaseNotes && (
+                <div className="col-span-2 flex items-start gap-1.5 text-gray-500">
+                  <InfoCircleOutlined
+                    className="mt-0.5"
+                    style={{ fontSize: 14, color: accent }}
+                  />
+                  <span>{purchaseNotes}</span>
+                </div>
+              )}
+              <div className="col-span-2 flex items-center gap-1.5 text-gray-400">
+                <CalendarOutlined style={{ fontSize: 14, color: accent }} />
+                <span>{formatDateRange(validFrom, validTo)}</span>
+              </div>
+            </div>
           </div>
+
+          {/* 购买按钮 */}
+          <button
+            className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl py-2.5 font-bold text-sm text-white disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={!purchaseLink}
+            onClick={() => purchaseLink && onBuy(purchaseLink)}
+            style={{
+              backgroundColor: accent,
+              boxShadow: `0 10px 15px -3px ${hexToRgba(accent, 0.2)}`,
+            }}
+            type="button"
+          >
+            立即购买 ¥{formatPrice(salePrice)} 起
+          </button>
         </div>
       </div>
 
