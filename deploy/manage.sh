@@ -17,7 +17,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 COMPOSE_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$COMPOSE_DIR"
 
-# 加载 CI 部署写入的镜像配置
+# 加载环境变量（.env 供 docker compose 使用，.deploy.env 供 CI 部署使用）
+if [ -f ".env" ]; then
+    set -a; source .env; set +a
+fi
 if [ -f ".deploy.env" ]; then
     set -a; source .deploy.env; set +a
 fi
