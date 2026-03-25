@@ -1,7 +1,6 @@
 'use client';
 
 import { Spin } from 'antd';
-import Image from 'next/image';
 
 import { PackageCard } from '@/modules/battery-swap/components/package-card';
 import { MODULE_NAME } from '@/modules/battery-swap/constants';
@@ -51,12 +50,12 @@ export default function BatterySwapHome() {
       {/* Banner */}
       {bannerUrl && (
         <div className="px-3 pt-3">
-          <Image
+          {/* 运行时上传的动态图片，使用 img 避免走 /_next/image 优化端点 */}
+          {/* biome-ignore lint/performance/noImgElement: 动态上传图片，尺寸不固定 */}
+          <img
             alt={MODULE_NAME}
             className="aspect-video w-full rounded-2xl object-cover"
-            height={422}
             src={bannerUrl}
-            width={750}
           />
         </div>
       )}

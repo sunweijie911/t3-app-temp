@@ -7,7 +7,6 @@ import {
   SafetyCertificateOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
-import Image from 'next/image';
 import { useState } from 'react';
 
 import type { PackageSpec } from '@/modules/battery-swap/schema';
@@ -94,13 +93,12 @@ export function PackageCard({
         style={{ borderLeft: `4px solid ${accent}` }}
       >
         {/* 商品大图 */}
+        {/* biome-ignore lint/performance/noImgElement: 运行时上传的动态图片，使用 img 避免走 /_next/image 优化端点 */}
         {imageUrl && (
-          <Image
+          <img
             alt={title}
             className="h-32 w-full object-cover"
-            height={200}
             src={imageUrl}
-            width={400}
           />
         )}
 
