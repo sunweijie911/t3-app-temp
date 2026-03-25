@@ -97,7 +97,7 @@ export function PackageCard({
         {imageUrl && (
           <img
             alt={title}
-            className="h-32 w-full object-cover"
+            className="aspect-[2/1] w-full object-cover"
             src={imageUrl}
           />
         )}
