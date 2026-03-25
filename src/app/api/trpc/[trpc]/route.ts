@@ -20,6 +20,7 @@ const handler = (req: NextRequest) =>
     endpoint: '/api/trpc',
     req,
     router: appRouter,
+    allowMethodOverride: true,
     createContext: () => createContext(req),
     allowMethodOverride: true,
     onError:
