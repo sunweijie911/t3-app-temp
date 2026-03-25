@@ -6,6 +6,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { authClient } from '@/lib/auth-client';
+import { authMethod } from '@/lib/auth-methods';
 import { getModuleByPathname } from '@/modules/registry';
 import { useDefaultModuleId } from '@/shared/components/default-module-provider';
 import { api } from '@/trpc/react';
@@ -76,8 +77,10 @@ export function Header() {
         <div className="flex items-center gap-4">
           {session?.user ? (
             <div className="flex items-center gap-3">
-              <span className="hidden text-gray-600 text-sm sm:inline">
-                {session.user.name}
+              <span className="hidden max-w-48 truncate text-gray-600 text-sm sm:inline">
+                {authMethod === 'phone-otp'
+                  ? session.user.name
+                  : (session.user.email ?? session.user.name)}
               </span>
               <button
                 className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-gray-600 text-sm transition-colors hover:bg-gray-50"
