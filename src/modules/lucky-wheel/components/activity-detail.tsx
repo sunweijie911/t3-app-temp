@@ -2,10 +2,117 @@ import { TRPCClientError } from '@trpc/client';
 import Image from 'next/image';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import sanitizeHtml from 'sanitize-html';
 import { WheelSection } from '@/modules/lucky-wheel/components/wheel-section';
 import { PRIZE_TYPE_LABELS } from '@/modules/lucky-wheel/constants';
 import { getSession } from '@/server/better-auth/server';
 import { api, HydrateClient } from '@/trpc/server';
+
+/** 富文本净化配置：覆盖常见富文本编辑器（Tiptap / Quill / CKEditor 等）的输出标签 */
+const RULES_SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
+  allowedTags: [
+    // 块级元素
+    'p',
+    'div',
+    'section',
+    'article',
+    'h1',
+    'h2',
+    'h3',
+    'h4',
+    'h5',
+    'h6',
+    'blockquote',
+    'pre',
+    'hr',
+    'br',
+    // 列表
+    'ul',
+    'ol',
+    'li',
+    // 表格
+    'table',
+    'thead',
+    'tbody',
+    'tfoot',
+    'tr',
+    'th',
+    'td',
+    'caption',
+    'colgroup',
+    'col',
+    // 行内格式
+    'strong',
+    'b',
+    'em',
+    'i',
+    'u',
+    's',
+    'del',
+    'ins',
+    'mark',
+    'sub',
+    'sup',
+    'small',
+    'code',
+    'kbd',
+    'var',
+    'samp',
+    'abbr',
+    'span',
+    // 媒体 & 链接
+    'a',
+    'img',
+    'figure',
+    'figcaption',
+    'video',
+    'source',
+    'audio',
+    // 描述列表
+    'dl',
+    'dt',
+    'dd',
+    // 详情折叠
+    'details',
+    'summary',
+  ],
+  allowedAttributes: {
+    '*': ['style', 'class'],
+    a: ['href', 'target', 'rel', 'title'],
+    img: ['src', 'alt', 'width', 'height', 'loading'],
+    video: ['src', 'controls', 'width', 'height', 'poster', 'preload'],
+    audio: ['src', 'controls'],
+    source: ['src', 'type'],
+    td: ['colspan', 'rowspan'],
+    th: ['colspan', 'rowspan', 'scope'],
+    col: ['span'],
+    colgroup: ['span'],
+    ol: ['start', 'type'],
+    abbr: ['title'],
+  },
+  allowedStyles: {
+    '*': {
+      'text-align': [/^(left|center|right|justify)$/],
+      color: [/^#[\da-fA-F]{3,6}$/, /^rgb\(\d{1,3},\s*\d{1,3},\s*\d{1,3}\)$/],
+      'background-color': [
+        /^#[\da-fA-F]{3,6}$/,
+        /^rgb\(\d{1,3},\s*\d{1,3},\s*\d{1,3}\)$/,
+      ],
+      'font-size': [/^\d+(\.\d+)?(px|em|rem|%)$/],
+      'font-weight': [/^(normal|bold|\d{3})$/],
+      'text-decoration': [/^(none|underline|line-through|overline)$/],
+      margin: [/^\d+(\.\d+)?(px|em|rem|%)(\s+\d+(\.\d+)?(px|em|rem|%)){0,3}$/],
+      padding: [/^\d+(\.\d+)?(px|em|rem|%)(\s+\d+(\.\d+)?(px|em|rem|%)){0,3}$/],
+      width: [/^\d+(\.\d+)?(px|em|rem|%)$/],
+      height: [/^\d+(\.\d+)?(px|em|rem|%)$/],
+    },
+  },
+  // a 标签自动补全 rel="noopener noreferrer"
+  transformTags: {
+    a: sanitizeHtml.simpleTransform('a', { rel: 'noopener noreferrer' }),
+  },
+  allowedSchemes: ['http', 'https', 'mailto'],
+};
 
 interface Props {
   params: Promise<{ slug: string }>;
@@ -135,8 +242,13 @@ export default async function WheelPage({ params }: Props) {
             {activity.rules?.html && (
               <div
                 className="rich-text text-gray-500 text-sm"
-                // biome-ignore lint/security/noDangerouslySetInnerHtml: 内容由管理员后台录入，非用户输入
-                dangerouslySetInnerHTML={{ __html: activity.rules.html }}
+                // biome-ignore lint/security/noDangerouslySetInnerHtml: 内容由管理员后台录入，渲染前已用 sanitize-html 净化
+                dangerouslySetInnerHTML={{
+                  __html: sanitizeHtml(
+                    activity.rules.html,
+                    RULES_SANITIZE_OPTIONS,
+                  ),
+                }}
               />
             )}
           </div>

@@ -10,9 +10,12 @@ import { uploadLimiter } from '@/server/services/rate-limiter';
 const MAX_SIZE = 5 * 1024 * 1024; // 5MB
 
 function getClientIp(request: Request): string {
-  const forwarded = request.headers.get('x-forwarded-for');
-  if (forwarded) return forwarded.split(',')[0]?.trim() ?? 'unknown';
-  return request.headers.get('x-real-ip') ?? 'unknown';
+  // 优先使用 X-Real-IP（nginx 从 $remote_addr 设置，不可伪造）
+  return (
+    request.headers.get('x-real-ip') ??
+    request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
+    'unknown'
+  );
 }
 
 // 通过文件头魔术字节判断真实格式，不依赖客户端提供的 MIME type

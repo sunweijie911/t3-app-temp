@@ -3,6 +3,51 @@ import OpenAI from 'openai';
 import { env } from '@/env';
 import { getConfigValue } from './config';
 
+const DEFAULT_BASE_URL = 'https://api.deepseek.com/v1';
+
+// cspell:ignore dashscope aliyuncs
+/** 内置默认白名单，可通过 LLM_ALLOWED_HOSTS 环境变量扩展或覆盖 */
+const DEFAULT_ALLOWED_HOSTS = [
+  'api.deepseek.com',
+  'api.openai.com',
+  'dashscope.aliyuncs.com',
+  'api.anthropic.com',
+];
+
+function getAllowedHosts(): Set<string> {
+  const envHosts = env.LLM_ALLOWED_HOSTS;
+  if (envHosts) {
+    return new Set(
+      envHosts
+        .split(',')
+        .map((h) => h.trim())
+        .filter(Boolean),
+    );
+  }
+  return new Set(DEFAULT_ALLOWED_HOSTS);
+}
+
+/** 校验 baseURL 仅允许 HTTPS + 白名单域名，防止 SSRF */
+function validateBaseURL(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:') {
+      console.warn(`[LLM] baseURL 协议不安全: ${url}，回退到默认值`);
+      return DEFAULT_BASE_URL;
+    }
+    if (!getAllowedHosts().has(parsed.hostname)) {
+      console.warn(
+        `[LLM] baseURL 域名不在白名单: ${parsed.hostname}，回退到默认值`,
+      );
+      return DEFAULT_BASE_URL;
+    }
+    return url;
+  } catch {
+    console.warn(`[LLM] baseURL 格式无效: ${url}，回退到默认值`);
+    return DEFAULT_BASE_URL;
+  }
+}
+
 interface LLMConfig {
   baseURL: string;
   apiKey: string;
@@ -38,7 +83,7 @@ async function getClientWithConfig(): Promise<{
   ]);
 
   const config: LLMConfig = {
-    baseURL: baseURL ?? 'https://api.deepseek.com/v1',
+    baseURL: validateBaseURL(baseURL ?? DEFAULT_BASE_URL),
     // DB config takes priority; env var is the fallback
     apiKey: apiKey ?? env.LLM_API_KEY ?? '',
     model: model ?? 'deepseek-chat',

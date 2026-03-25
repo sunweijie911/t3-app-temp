@@ -16,9 +16,11 @@ const protectedPatterns = [
 ];
 
 function getClientIp(request: NextRequest): string {
+  // 优先使用 X-Real-IP（nginx 从 $remote_addr 设置，不可伪造）
+  // X-Forwarded-For 使用追加模式，首跳可被客户端伪造
   return (
-    request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
     request.headers.get('x-real-ip') ??
+    request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
     'unknown'
   );
 }
