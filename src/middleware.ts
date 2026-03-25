@@ -55,7 +55,8 @@ export async function middleware(request: NextRequest) {
   // 登录接口额外严格限流（覆盖密码登录 + 手机号 OTP）
   if (
     pathname.startsWith('/api/auth/sign-in') ||
-    pathname.startsWith('/api/auth/phone-number/')
+    pathname.startsWith('/api/auth/phone-number/') ||
+    pathname.startsWith('/api/auth/email-otp/')
   ) {
     const authCheck = authIpLimiter.check(ip);
     if (!authCheck.allowed) {

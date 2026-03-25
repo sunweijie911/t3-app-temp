@@ -6,76 +6,74 @@ const stripQuotes = (/** @type {string | undefined} */ v) =>
   v?.replace(/^["']|["']$/g, '');
 
 export const env = createEnv({
-  /**
-   * Specify your server-side environment variables schema here. This way you can ensure the app
-   * isn't built with invalid env vars.
-   */
   server: {
-    BETTER_AUTH_SECRET:
-      process.env.NODE_ENV === 'production'
-        ? z.string()
-        : z.string().optional(),
+    // 数据库
     DATABASE_URL: z.string().url(),
     NODE_ENV: z
       .enum(['development', 'test', 'production'])
       .default('development'),
-    ADMIN_PHONES: z.string().optional(),
-    ADMIN_EMAILS: z.string().optional(),
-    LLM_API_KEY: z.string().optional(),
+
+    // 认证 (Better Auth)
+    BETTER_AUTH_SECRET:
+      process.env.NODE_ENV === 'production'
+        ? z.string()
+        : z.string().optional(),
     BETTER_AUTH_URL:
       process.env.NODE_ENV === 'production'
         ? z.string().url()
         : z.string().url().optional(),
-    // 阿里云短信（生产环境 OTP 发送必填）
+
+    // 权限
+    ADMIN_EMAILS: z.string().optional(),
+    ADMIN_PHONES: z.string().optional(),
+
+    // QQ 邮箱 SMTP（email-otp 方式需要，生产环境必填）
+    SMTP_USER: z.string().optional(),
+    SMTP_PASS: z.string().optional(),
+
+    // 阿里云短信（phone-otp 方式需要，生产环境必填）
     SMS_ACCESS_KEY_ID: z.string().optional(),
     SMS_ACCESS_KEY_SECRET: z.string().optional(),
     SMS_SIGN_NAME: z.string().optional(),
     SMS_TEMPLATE_CODE: z.string().optional(),
-    // 身份证号加密密钥（生产部署时必须配置，本地 build 可省略）
-    ID_CARD_ENCRYPTION_KEY: z.string().optional(),
-    // LLM baseURL 白名单域名，逗号分隔（防止 SSRF，为空则使用内置默认值）
+
+    // LLM (大语言模型)
+    LLM_API_KEY: z.string().optional(),
     LLM_ALLOWED_HOSTS: z.string().optional(),
+
+    // 敏感数据加密（生产环境必填）
+    ID_CARD_ENCRYPTION_KEY: z.string().optional(),
   },
 
-  /**
-   * Specify your client-side environment variables schema here. This way you can ensure the app
-   * isn't built with invalid env vars. To expose them to the client, prefix them with
-   * `NEXT_PUBLIC_`.
-   */
   client: {
+    // 默认展示模块
     NEXT_PUBLIC_DEFAULT_MODULE: z.string().default('lucky-wheel'),
+    // 登录方式（单选）: email-password | phone-otp | email-otp
+    NEXT_PUBLIC_AUTH_METHOD: z.string().default('email-otp'),
   },
 
-  /**
-   * You can't destruct `process.env` as a regular object in the Next.js edge runtimes (e.g.
-   * middlewares) or client-side so we need to destruct manually.
-   */
   runtimeEnv: {
-    BETTER_AUTH_SECRET: stripQuotes(process.env.BETTER_AUTH_SECRET),
     DATABASE_URL: stripQuotes(process.env.DATABASE_URL),
     NODE_ENV: stripQuotes(process.env.NODE_ENV),
-    ADMIN_PHONES: stripQuotes(process.env.ADMIN_PHONES),
-    ADMIN_EMAILS: stripQuotes(process.env.ADMIN_EMAILS),
-    LLM_API_KEY: stripQuotes(process.env.LLM_API_KEY),
+    BETTER_AUTH_SECRET: stripQuotes(process.env.BETTER_AUTH_SECRET),
     BETTER_AUTH_URL: stripQuotes(process.env.BETTER_AUTH_URL),
-    NEXT_PUBLIC_DEFAULT_MODULE: stripQuotes(
-      process.env.NEXT_PUBLIC_DEFAULT_MODULE,
-    ),
+    ADMIN_EMAILS: stripQuotes(process.env.ADMIN_EMAILS),
+    ADMIN_PHONES: stripQuotes(process.env.ADMIN_PHONES),
+    SMTP_USER: stripQuotes(process.env.SMTP_USER),
+    SMTP_PASS: stripQuotes(process.env.SMTP_PASS),
     SMS_ACCESS_KEY_ID: stripQuotes(process.env.SMS_ACCESS_KEY_ID),
     SMS_ACCESS_KEY_SECRET: stripQuotes(process.env.SMS_ACCESS_KEY_SECRET),
     SMS_SIGN_NAME: stripQuotes(process.env.SMS_SIGN_NAME),
     SMS_TEMPLATE_CODE: stripQuotes(process.env.SMS_TEMPLATE_CODE),
-    ID_CARD_ENCRYPTION_KEY: stripQuotes(process.env.ID_CARD_ENCRYPTION_KEY),
+    LLM_API_KEY: stripQuotes(process.env.LLM_API_KEY),
     LLM_ALLOWED_HOSTS: stripQuotes(process.env.LLM_ALLOWED_HOSTS),
+    ID_CARD_ENCRYPTION_KEY: stripQuotes(process.env.ID_CARD_ENCRYPTION_KEY),
+    NEXT_PUBLIC_DEFAULT_MODULE: stripQuotes(
+      process.env.NEXT_PUBLIC_DEFAULT_MODULE,
+    ),
+    NEXT_PUBLIC_AUTH_METHOD: stripQuotes(process.env.NEXT_PUBLIC_AUTH_METHOD),
   },
-  /**
-   * Run `build` or `dev` with `SKIP_ENV_VALIDATION` to skip env validation. This is especially
-   * useful for Docker builds.
-   */
+
   skipValidation: !!process.env.SKIP_ENV_VALIDATION,
-  /**
-   * Makes it so that empty strings are treated as undefined. `SOME_VAR: z.string()` and
-   * `SOME_VAR=''` will throw an error.
-   */
   emptyStringAsUndefined: true,
 });

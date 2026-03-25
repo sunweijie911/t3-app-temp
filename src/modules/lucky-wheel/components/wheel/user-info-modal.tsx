@@ -2,12 +2,23 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { authClient } from '@/lib/auth-client';
+import { authMethod } from '@/lib/auth-methods';
 import { PHONE_RE } from '@/modules/lucky-wheel/constants';
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** 当前使用的 OTP 方式：email-otp 或 phone-otp，email-password 不适用于此场景 */
+const otpMode =
+  authMethod === 'email-otp'
+    ? 'email-otp'
+    : authMethod === 'phone-otp'
+      ? 'phone-otp'
+      : null;
 
 interface UserInfoModalProps {
   open: boolean;
   onSuccess: (info: { name: string; address: string }) => void;
-  /** 已登录时只收集收货地址，跳过手机号 OTP 步骤 */
+  /** 已登录时只收集收货地址，跳过 OTP 步骤 */
   loggedIn?: boolean;
 }
 
@@ -18,7 +29,7 @@ export function UserInfoModal({
 }: UserInfoModalProps) {
   const [step, setStep] = useState<'info' | 'code'>('info');
   const [name, setName] = useState('');
-  const [phone, setPhone] = useState('');
+  const [identifier, setIdentifier] = useState(''); // 邮箱或手机号
   const [address, setAddress] = useState('');
   const [code, setCode] = useState('');
   const [countdown, setCountdown] = useState(0);
@@ -26,7 +37,7 @@ export function UserInfoModal({
   const [loading, setLoading] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // modal 关闭时停止倒计时；组件卸载时清理 timer（防内存泄漏）
+  // modal 关闭时停止倒计时；组件卸载时清理 timer
   useEffect(() => {
     if (!open) {
       if (timerRef.current) {
@@ -56,9 +67,7 @@ export function UserInfoModal({
   if (!open) return null;
 
   const startCountdown = () => {
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-    }
+    if (timerRef.current) clearInterval(timerRef.current);
     setCountdown(60);
     timerRef.current = setInterval(() => {
       setCountdown((c) => {
@@ -74,7 +83,7 @@ export function UserInfoModal({
     }, 1000);
   };
 
-  // 已登录：收集姓名和收货地址，保存后关闭
+  // 已登录 或 无 OTP 方式：收集姓名和收货地址
   const handleSaveAddress = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) {
@@ -94,7 +103,11 @@ export function UserInfoModal({
       setError('请填写姓名');
       return;
     }
-    if (!PHONE_RE.test(phone)) {
+    if (otpMode === 'email-otp' && !EMAIL_RE.test(identifier)) {
+      setError('请输入有效的邮箱地址');
+      return;
+    }
+    if (otpMode === 'phone-otp' && !PHONE_RE.test(identifier)) {
       setError('请输入有效的手机号');
       return;
     }
@@ -105,12 +118,23 @@ export function UserInfoModal({
     setError('');
     setLoading(true);
     try {
-      const result = await authClient.phoneNumber.sendOtp({
-        phoneNumber: phone,
-      });
-      if (result.error) {
-        setError(result.error.message ?? '发送失败，请稍后重试');
-        return;
+      if (otpMode === 'email-otp') {
+        const result = await authClient.emailOtp.sendVerificationOtp({
+          email: identifier,
+          type: 'sign-in',
+        });
+        if (result.error) {
+          setError(result.error.message ?? '发送失败，请稍后重试');
+          return;
+        }
+      } else if (otpMode === 'phone-otp') {
+        const result = await authClient.phoneNumber.sendOtp({
+          phoneNumber: identifier,
+        });
+        if (result.error) {
+          setError(result.error.message ?? '发送失败，请稍后重试');
+          return;
+        }
       }
       setStep('code');
       startCountdown();
@@ -130,15 +154,26 @@ export function UserInfoModal({
     setError('');
     setLoading(true);
     try {
-      const result = await authClient.phoneNumber.verify({
-        phoneNumber: phone,
-        code,
-      });
-      if (result.error) {
-        setError(result.error.message ?? '验证码错误，请重试');
-        return;
+      if (otpMode === 'email-otp') {
+        const result = await authClient.signIn.emailOtp({
+          email: identifier,
+          otp: code,
+        });
+        if (result.error) {
+          setError(result.error.message ?? '验证码错误，请重试');
+          return;
+        }
+      } else if (otpMode === 'phone-otp') {
+        const result = await authClient.phoneNumber.verify({
+          phoneNumber: identifier,
+          code,
+        });
+        if (result.error) {
+          setError(result.error.message ?? '验证码错误，请重试');
+          return;
+        }
       }
-      onSuccess({ name, address });
+      onSuccess({ name: name.trim(), address: address.trim() });
     } catch {
       setError('验证失败，请重试');
     } finally {
@@ -149,6 +184,27 @@ export function UserInfoModal({
   const btnStyle = {
     background: 'linear-gradient(114deg, #FF8D67 0%, #F0361D 100%)',
   };
+
+  // OTP 未启用 或 已登录：仅收集信息
+  const showSimpleForm = loggedIn || !otpMode;
+
+  const identifierLabel = otpMode === 'email-otp' ? '邮箱地址' : '手机号';
+  const identifierInputProps =
+    otpMode === 'email-otp'
+      ? {
+          type: 'email' as const,
+          autoComplete: 'email',
+          placeholder: '邮箱地址',
+          inputMode: undefined as undefined,
+          maxLength: undefined as undefined,
+        }
+      : {
+          type: 'tel' as const,
+          autoComplete: 'tel',
+          placeholder: '手机号',
+          inputMode: 'numeric' as const,
+          maxLength: 11,
+        };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -164,11 +220,11 @@ export function UserInfoModal({
             参与抽奖
           </h2>
           <p className="mb-6 text-center text-gray-500 text-sm">
-            {loggedIn
+            {showSimpleForm
               ? '请填写收货地址以便寄送奖品'
               : step === 'info'
                 ? '请填写以下信息后获取验证码'
-                : `验证码已发送至 ${phone}`}
+                : `验证码已发送至 ${identifier}`}
           </p>
 
           {error && (
@@ -177,8 +233,7 @@ export function UserInfoModal({
             </div>
           )}
 
-          {/* 已登录：填姓名 + 地址 */}
-          {loggedIn ? (
+          {showSimpleForm ? (
             <form className="space-y-3" onSubmit={handleSaveAddress}>
               <input
                 className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm focus:border-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-400/20"
@@ -205,7 +260,6 @@ export function UserInfoModal({
               </button>
             </form>
           ) : step === 'info' ? (
-            /* 未登录：填写信息 + 发送 OTP */
             <form className="space-y-3" onSubmit={handleSendOtp}>
               <input
                 className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm focus:border-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-400/20"
@@ -216,14 +270,15 @@ export function UserInfoModal({
                 value={name}
               />
               <input
+                autoComplete={identifierInputProps.autoComplete}
                 className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm focus:border-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-400/20"
-                inputMode="numeric"
-                maxLength={11}
-                onChange={(e) => setPhone(e.target.value)}
-                placeholder="手机号"
+                inputMode={identifierInputProps.inputMode}
+                maxLength={identifierInputProps.maxLength}
+                onChange={(e) => setIdentifier(e.target.value)}
+                placeholder={identifierInputProps.placeholder}
                 required
-                type="tel"
-                value={phone}
+                type={identifierInputProps.type}
+                value={identifier}
               />
               <textarea
                 className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm focus:border-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-400/20"
@@ -243,7 +298,6 @@ export function UserInfoModal({
               </button>
             </form>
           ) : (
-            /* 未登录：OTP 验证 */
             <form className="space-y-4" onSubmit={handleVerifyOtp}>
               <input
                 autoComplete="one-time-code"
@@ -276,7 +330,7 @@ export function UserInfoModal({
               >
                 {countdown > 0
                   ? `重新发送 (${countdown}s)`
-                  : '修改信息并重新获取'}
+                  : `修改${identifierLabel}并重新获取`}
               </button>
             </form>
           )}
