@@ -31,6 +31,8 @@ yarn-error.log*
 .env
 .env*.local
 .deploy.env
+.deploy.env.bak
+.deploy-history
 
 # vercel
 .vercel

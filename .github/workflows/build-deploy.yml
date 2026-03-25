@@ -237,6 +237,21 @@ jobs:
               sleep 5
             done
 
+            # 记录部署历史
+            DEPLOY_TIME=$(date -u +"%Y-%m-%dT%H:%M:%S")
+            VERSION=$(echo "${IMAGE_APP}" | awk -F: '{print $NF}')
+            HISTORY_FILE="${DEPLOY_PATH}/.deploy-history"
+            HISTORY_MAX="${HISTORY_MAX:-10}"
+            NEW_LINE="${DEPLOY_TIME}|${VERSION}|${IMAGE_APP}|${IMAGE_NGINX}"
+            if [ -f "$HISTORY_FILE" ]; then
+              grep -vF "|${VERSION}|" "$HISTORY_FILE" | head -$((HISTORY_MAX - 1)) > "${HISTORY_FILE}.tmp" 2>/dev/null || true
+              echo "${NEW_LINE}" | cat - "${HISTORY_FILE}.tmp" > "$HISTORY_FILE"
+              rm -f "${HISTORY_FILE}.tmp"
+            else
+              echo "${NEW_LINE}" > "$HISTORY_FILE"
+            fi
+            echo "部署历史已记录 (版本: ${VERSION})"
+
             # 清理旧 Docker 镜像
             docker image prune -f 2>/dev/null || true
 
