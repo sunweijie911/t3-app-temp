@@ -53,6 +53,7 @@ export function TRPCReactProvider(props: { children: React.ReactNode }) {
           transformer: SuperJSON,
           methodOverride: 'POST',
           url: `${getBaseUrl()}/api/trpc`,
+          methodOverride: 'POST',
           headers: () => {
             const headers = new Headers();
             headers.set('x-trpc-source', 'nextjs-react');
