@@ -173,7 +173,7 @@ jobs:
           host: ${{ secrets.DEPLOY_SERVER_HOST }}
           username: ${{ secrets.DEPLOY_SERVER_USER }}
           key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
-          source: "deploy/*,docker-compose.yml,nginx.conf,.env.example"
+          source: "manage.sh,docker-compose.yml,nginx.conf,.env.example"
           target: ${{ secrets.DEPLOY_SERVER_PATH }}
           overwrite: true
 
@@ -191,12 +191,13 @@ jobs:
             IMAGE_NGINX="${{ env.REGISTRY }}/${{ steps.repo.outputs.image_name }}-nginx:${{ needs.build.outputs.git_hash }}"
 
             cd "${DEPLOY_PATH}"
+            chmod +x ./manage.sh
 
             # 登录 GHCR
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u "${{ github.actor }}" --password-stdin
 
-            # 通过 manage.sh 完成拉取、部署、健康检查、历史记录
-            ./deploy/manage.sh pull-deploy "${IMAGE_APP}" "${IMAGE_NGINX}"
+            # 通过 manage.sh 完成拉取、部署、健康检查
+            ./manage.sh pull-deploy "${IMAGE_APP}" "${IMAGE_NGINX}"
 
   # ==================== 通知 ====================
   notify:

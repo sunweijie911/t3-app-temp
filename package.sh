@@ -8,15 +8,13 @@
 # 产出物: t3-app_<hash>_<arch>_<timestamp>.tar.gz
 # 解压后目录结构:
 #   deploy_package/
-#   ├── build_info.sh          # 构建元信息（镜像名、hash 等）
+#   ├── build_info.sh          # 构建元信息（镜像名、hash 等，同时供 docker-compose 读取）
+#   ├── manage.sh              # 管理脚本
 #   ├── t3-app_<hash>.tar      # Next.js 应用镜像
 #   ├── t3-app-nginx_<hash>.tar # Nginx 镜像
 #   ├── docker-compose.yml     # compose 编排文件
 #   ├── nginx.conf             # nginx 配置
-#   ├── .env.example           # 环境变量模板
-#   ├── deploy/
-#   │   └── manage.sh          # 管理脚本
-#   └── DEPLOY.md              # 部署说明
+#   └── .env.example           # 环境变量模板
 
 set -euo pipefail
 
@@ -74,7 +72,7 @@ calc_md5() {
 # 准备部署文件
 prepare_deployment_files() {
     log_info "Preparing deployment files..."
-    mkdir -p deploy_package/deploy
+    mkdir -p deploy_package
 
     # 保存两个镜像
     local app_tar="${appImageTag//:/_}.tar"
@@ -90,7 +88,7 @@ prepare_deployment_files() {
     cp docker-compose.yml deploy_package/
     cp nginx.conf deploy_package/
     cp .env.example deploy_package/
-    cp deploy/manage.sh deploy_package/deploy/
+    cp manage.sh deploy_package/
 
     # 计算 MD5
     local app_md5
@@ -98,78 +96,16 @@ prepare_deployment_files() {
     local nginx_md5
     nginx_md5=$(calc_md5 "deploy_package/${nginx_tar}")
 
-    # 写入构建信息
+    # 写入构建信息（变量名与 docker-compose.yml 对齐，可直接 source）
     cat > deploy_package/build_info.sh << EOF
-hash="${gitHash}"
-build_at="${dateTime}"
-branch="${gitBranch}"
-app_image_tag="${appImageTag}"
-nginx_image_tag="${nginxImageTag}"
-app_docker_md5="${app_md5}"
-nginx_docker_md5="${nginx_md5}"
+COMMIT_HASH="${gitHash}"
+BUILD_AT="${dateTime}"
+BRANCH="${gitBranch}"
+APP_IMAGE="${appImageTag}"
+NGINX_IMAGE="${nginxImageTag}"
+APP_DOCKER_MD5="${app_md5}"
+NGINX_DOCKER_MD5="${nginx_md5}"
 EOF
-
-    # 生成部署说明
-    cat > deploy_package/DEPLOY.md << 'DEPLOYEOF'
-# 部署说明
-
-## 前置条件
-
-- Docker + Docker Compose (v2)
-- 服务器已开放对应端口（默认 5000）
-
-## 首次部署
-
-```bash
-# 1. 上传部署包到服务器
-scp t3-app_*.tar.gz user@server:/opt/t3-app/
-
-# 2. 在服务器上解压（仅用于获取 manage.sh 和初始文件）
-ssh user@server
-cd /opt/t3-app
-tar -xzf t3-app_*.tar.gz
-cp -r deploy_package/* .
-rm -rf deploy_package
-
-# 3. 初始化（创建 .env 模板）
-./deploy/manage.sh init
-
-# 4. 编辑 .env，填入生产配置
-vi .env
-#   必填: DATABASE_URL, BETTER_AUTH_SECRET, BETTER_AUTH_URL
-
-# 5. 从部署包更新（加载镜像 + 启动服务）
-./deploy/manage.sh update t3-app_*.tar.gz
-
-# 6. 验证
-./deploy/manage.sh status
-./deploy/manage.sh health
-```
-
-## 后续更新
-
-```bash
-# 上传新部署包后，一条命令完成更新
-./deploy/manage.sh update t3-app_<new_hash>_<timestamp>.tar.gz
-```
-
-update 会自动：加载镜像 → 更新配置 → 重启服务 → 健康检查 → 失败自动回滚。
-.env（数据库、密钥等）不会被覆盖。
-
-## 版本管理
-
-```bash
-./deploy/manage.sh history              # 查看部署历史
-./deploy/manage.sh rollback             # 回退到上一版本
-./deploy/manage.sh rollback abc1234     # 回退到指定版本
-```
-
-## 其他命令
-
-```bash
-./deploy/manage.sh help                 # 查看所有命令
-```
-DEPLOYEOF
 }
 
 # 主函数
@@ -234,7 +170,7 @@ main() {
     log_info ""
     log_info "部署步骤:"
     log_info "  1. scp ${packageName} user@server:/opt/t3-app/"
-    log_info "  2. ./deploy/manage.sh update ${packageName}"
+    log_info "  2. ./manage.sh update ${packageName}"
     log_info "=========================================="
 }
 

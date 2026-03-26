@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# 生产环境管理脚本（离线部署包模式）
-# 用法: ./deploy/manage.sh [init|update|start|stop|restart|status|logs|health|history|rollback|clean|help]
+# 生产环境管理脚本
+# 用法: ./manage.sh [init|update|start|stop|restart|status|logs|health|clean|help]
 
 set -euo pipefail
 
@@ -12,23 +12,21 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# 切换到 docker-compose.yml 所在目录
+# 切换到脚本所在目录（与 docker-compose.yml 同级）
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-COMPOSE_DIR="$(dirname "$SCRIPT_DIR")"
-cd "$COMPOSE_DIR"
+cd "$SCRIPT_DIR"
 
-# 加载环境变量（.env 供 docker compose 使用，.deploy.env 供部署版本管理）
+# 加载环境变量
+# .env: 应用配置（DATABASE_URL、密钥等）+ HOST_PORT
+# build_info.sh: 镜像版本（APP_IMAGE、NGINX_IMAGE）
 if [ -f ".env" ]; then
     set -a; source .env; set +a
 fi
-if [ -f ".deploy.env" ]; then
-    set -a; source .deploy.env; set +a
+if [ -f "build_info.sh" ]; then
+    set -a; source build_info.sh; set +a
 fi
 
 PORT="${HOST_PORT:-5000}"
-HISTORY_MAX="${HISTORY_MAX:-10}"
-[ "$HISTORY_MAX" -lt 2 ] && HISTORY_MAX=2
-HISTORY_FILE="${COMPOSE_DIR}/.deploy-history"
 
 # 日志函数
 log_info() { echo -e "${GREEN}[INFO]${NC} $*"; }
@@ -53,16 +51,13 @@ check_docker() {
 init_deployment() {
     log_info "初始化部署环境..."
 
-    # 检查目录结构
-    mkdir -p deploy
-
     # 检查 .env
     if [ -f ".env" ]; then
         log_info ".env 已存在，跳过创建"
     elif [ -f ".env.example" ]; then
         cp .env.example .env
         log_warn ".env 已从模板创建，请编辑填入生产配置："
-        log_blue "  vi ${COMPOSE_DIR}/.env"
+        log_blue "  vi ${SCRIPT_DIR}/.env"
         log_blue ""
         log_blue "  必填项："
         log_blue "    DATABASE_URL        — PostgreSQL 连接串"
@@ -72,11 +67,11 @@ init_deployment() {
         log_warn "未找到 .env.example 模板，请手动创建 .env 文件"
     fi
 
-    # 检查 .deploy.env
-    if [ -f ".deploy.env" ]; then
-        log_info ".deploy.env 已存在（当前镜像版本配置）"
+    # 检查 build_info.sh
+    if [ -f "build_info.sh" ]; then
+        log_info "build_info.sh 已存在（当前镜像版本配置）"
     else
-        log_info ".deploy.env 尚未创建，请先执行 update 命令加载部署包"
+        log_info "build_info.sh 尚未创建，请先执行 update 命令加载部署包"
     fi
 
     # 检查 docker-compose.yml
@@ -89,7 +84,7 @@ init_deployment() {
     log_info ""
     log_info "初始化完成。下一步："
     log_blue "  1. 编辑 .env 填入生产配置"
-    log_blue "  2. 执行 ./deploy/manage.sh update <部署包.tar.gz>"
+    log_blue "  2. 执行 ./manage.sh update <部署包.tar.gz>"
 }
 
 # ── 从部署包更新 ────────────────────────────────────────────
@@ -135,27 +130,25 @@ update_deploy() {
     fi
 
     # 读取构建信息
-    local hash="" build_at="" branch="" app_image_tag="" nginx_image_tag=""
+    local COMMIT_HASH="" BUILD_AT="" BRANCH="" APP_IMAGE="" NGINX_IMAGE=""
     source "$pkg_dir/build_info.sh"
 
-    if [ -z "$app_image_tag" ] || [ -z "$nginx_image_tag" ]; then
-        log_error "build_info.sh 缺少镜像信息（app_image_tag / nginx_image_tag）"
+    if [ -z "$APP_IMAGE" ] || [ -z "$NGINX_IMAGE" ]; then
+        log_error "build_info.sh 缺少镜像信息（APP_IMAGE / NGINX_IMAGE）"
         exit 1
     fi
 
     log_info "=========================================="
     log_info "部署包信息:"
-    log_info "  分支:       ${branch:-unknown}"
-    log_info "  Commit:     ${hash:-unknown}"
-    log_info "  构建时间:   ${build_at:-unknown}"
-    log_info "  App 镜像:   ${app_image_tag}"
-    log_info "  Nginx 镜像: ${nginx_image_tag}"
+    log_info "  分支:       ${BRANCH:-unknown}"
+    log_info "  Commit:     ${COMMIT_HASH:-unknown}"
+    log_info "  构建时间:   ${BUILD_AT:-unknown}"
+    log_info "  App 镜像:   ${APP_IMAGE}"
+    log_info "  Nginx 镜像: ${NGINX_IMAGE}"
     log_info "=========================================="
 
     # 加载 Docker 镜像
     log_info "加载 Docker 镜像..."
-    local app_tar_pattern nginx_tar_pattern
-    # 查找镜像 tar 文件（t3-app_*.tar 和 t3-app-nginx_*.tar）
     local app_tar="" nginx_tar=""
     for f in "$pkg_dir"/t3-app_*.tar; do
         [ -f "$f" ] && app_tar="$f" && break
@@ -174,26 +167,21 @@ update_deploy() {
     docker load -i "$nginx_tar"
     log_info "Nginx 镜像加载完成"
 
-    # 备份当前配置（用于回滚）
+    # 备份当前 build_info.sh（用于回滚）
     local is_first_deploy=false
-    if [ -f ".deploy.env" ]; then
-        cp .deploy.env .deploy.env.bak
-        log_info "已备份当前 .deploy.env → .deploy.env.bak"
+    if [ -f "build_info.sh" ]; then
+        cp build_info.sh build_info.sh.bak
+        log_info "已备份当前 build_info.sh → build_info.sh.bak"
     else
         is_first_deploy=true
     fi
     [ -f "docker-compose.yml" ] && cp docker-compose.yml docker-compose.yml.bak
     [ -f "nginx.conf" ] && cp nginx.conf nginx.conf.bak
 
-    # 写入新的 .deploy.env
-    printf 'APP_IMAGE=%s\nNGINX_IMAGE=%s\nHOST_PORT=%s\n' \
-        "$app_image_tag" "$nginx_image_tag" "$PORT" > .deploy.env
-    log_info "已更新 .deploy.env"
+    # 从包中更新文件（不覆盖 .env）
+    cp "$pkg_dir/build_info.sh" build_info.sh
+    log_info "已更新 build_info.sh"
 
-    # 重新加载环境变量
-    set -a; source .deploy.env; set +a
-
-    # 从包中更新配置文件（不覆盖 .env）
     if [ -f "$pkg_dir/docker-compose.yml" ]; then
         cp "$pkg_dir/docker-compose.yml" docker-compose.yml
         log_info "已更新 docker-compose.yml"
@@ -202,14 +190,17 @@ update_deploy() {
         cp "$pkg_dir/nginx.conf" nginx.conf
         log_info "已更新 nginx.conf"
     fi
-    if [ -f "$pkg_dir/deploy/manage.sh" ]; then
-        cp "$pkg_dir/deploy/manage.sh" deploy/manage.sh
-        chmod +x deploy/manage.sh
-        log_info "已更新 deploy/manage.sh"
+    if [ -f "$pkg_dir/manage.sh" ]; then
+        cp "$pkg_dir/manage.sh" manage.sh
+        chmod +x manage.sh
+        log_info "已更新 manage.sh"
     fi
     if [ -f "$pkg_dir/.env.example" ]; then
         cp "$pkg_dir/.env.example" .env.example
     fi
+
+    # 重新加载 build_info.sh
+    set -a; source build_info.sh; set +a
 
     # 显式提示 .env 不被覆盖
     log_info "保留现有 .env 不覆盖（生产环境配置由运维手动管理）"
@@ -232,10 +223,9 @@ update_deploy() {
     log_info "等待服务就绪（10s）..."
     sleep 10
     if [ "$up_ok" = true ] && health_check 3; then
-        rm -f .deploy.env.bak docker-compose.yml.bak nginx.conf.bak
-        save_deploy_history
+        rm -f build_info.sh.bak docker-compose.yml.bak nginx.conf.bak
         log_info "=========================================="
-        log_info "更新成功！当前版本: ${hash:-${app_image_tag##*:}}"
+        log_info "更新成功！当前版本: ${COMMIT_HASH:-${APP_IMAGE##*:}}"
         log_info "=========================================="
         # 清理悬空镜像
         docker image prune -f >/dev/null 2>&1 || true
@@ -249,10 +239,10 @@ update_deploy() {
         fi
         # 非首次部署：回滚到上一版本
         log_error "正在回滚到上一版本..."
-        mv .deploy.env.bak .deploy.env
+        mv build_info.sh.bak build_info.sh
         [ -f "docker-compose.yml.bak" ] && mv docker-compose.yml.bak docker-compose.yml
         [ -f "nginx.conf.bak" ] && mv nginx.conf.bak nginx.conf
-        set -a; source .deploy.env; set +a
+        set -a; source build_info.sh; set +a
         if docker compose up -d --force-recreate; then
             log_error "已回滚到上一版本，请检查新版本问题"
         else
@@ -305,30 +295,32 @@ pull_deploy() {
     log_info "  Nginx 镜像: ${nginx_image}"
     log_info "=========================================="
 
-    # 备份当前配置（用于回滚）
+    # 备份当前 build_info.sh（用于回滚）
     local is_first_deploy=false
-    if [ -f ".deploy.env" ]; then
-        cp .deploy.env .deploy.env.bak
-        log_info "已备份当前 .deploy.env → .deploy.env.bak"
+    if [ -f "build_info.sh" ]; then
+        cp build_info.sh build_info.sh.bak
+        log_info "已备份当前 build_info.sh → build_info.sh.bak"
     else
         is_first_deploy=true
     fi
 
-    # 写入新的 .deploy.env
-    printf 'APP_IMAGE=%s\nNGINX_IMAGE=%s\nHOST_PORT=%s\n' \
-        "$app_image" "$nginx_image" "$PORT" > .deploy.env
-    log_info "已更新 .deploy.env"
+    # 生成新的 build_info.sh
+    cat > build_info.sh << EOF
+APP_IMAGE="${app_image}"
+NGINX_IMAGE="${nginx_image}"
+EOF
+    log_info "已更新 build_info.sh"
 
     # 重新加载环境变量
-    set -a; source .deploy.env; set +a
+    set -a; source build_info.sh; set +a
 
     # 拉取镜像
     log_info "拉取镜像..."
     if ! docker compose pull; then
         log_error "镜像拉取失败"
         if [ "$is_first_deploy" = false ]; then
-            mv .deploy.env.bak .deploy.env
-            log_info "已恢复 .deploy.env"
+            mv build_info.sh.bak build_info.sh
+            log_info "已恢复 build_info.sh"
         fi
         exit 1
     fi
@@ -342,8 +334,7 @@ pull_deploy() {
     log_info "等待服务就绪（10s）..."
     sleep 10
     if [ "$up_ok" = true ] && health_check 3; then
-        rm -f .deploy.env.bak
-        save_deploy_history
+        rm -f build_info.sh.bak
         log_info "=========================================="
         log_info "部署成功！当前版本: ${app_image##*:}"
         log_info "=========================================="
@@ -356,8 +347,8 @@ pull_deploy() {
             exit 1
         fi
         log_error "正在回滚到上一版本..."
-        mv .deploy.env.bak .deploy.env
-        set -a; source .deploy.env; set +a
+        mv build_info.sh.bak build_info.sh
+        set -a; source build_info.sh; set +a
         docker compose pull || log_warn "拉取旧版镜像失败，将尝试使用本地缓存"
         if docker compose up -d --force-recreate; then
             log_error "已回滚到上一版本，请检查新版本问题"
@@ -435,158 +426,6 @@ health_check() {
     return 1
 }
 
-# ── 部署历史 ────────────────────────────────────────────────
-
-# 记录部署历史
-save_deploy_history() {
-    local app_image="${APP_IMAGE:-}"
-    if [ -z "$app_image" ]; then
-        return 0
-    fi
-    local nginx_image="${NGINX_IMAGE:-}"
-    local version="${app_image##*:}"
-    local timestamp
-    timestamp=$(date -u +"%Y-%m-%dT%H:%M:%S")
-    local new_line="${timestamp}|${version}|${app_image}|${nginx_image}"
-
-    if [ -f "$HISTORY_FILE" ]; then
-        # 去重：移除同版本的旧记录，保留最近 N-1 条
-        local max_old=$((HISTORY_MAX - 1))
-        grep -vF "|${version}|" "$HISTORY_FILE" | head -"$max_old" > "${HISTORY_FILE}.tmp" 2>/dev/null || true
-        echo "$new_line" | cat - "${HISTORY_FILE}.tmp" > "$HISTORY_FILE"
-        rm -f "${HISTORY_FILE}.tmp"
-    else
-        echo "$new_line" > "$HISTORY_FILE"
-    fi
-    log_info "部署记录已保存 (版本: ${version})"
-}
-
-# 查看部署历史
-show_history() {
-    if [ ! -f "$HISTORY_FILE" ] || [ ! -s "$HISTORY_FILE" ]; then
-        log_warn "暂无部署历史记录"
-        return 0
-    fi
-    log_blue "部署历史（最近 ${HISTORY_MAX} 条）："
-    printf "  %-4s %-22s %-14s %s\n" "#" "时间" "版本" "镜像"
-    printf "  %-4s %-22s %-14s %s\n" "---" "--------------------" "------------" "----"
-    local idx=0
-    while IFS='|' read -r ts ver app_img _nginx_img; do
-        idx=$((idx + 1))
-        local mark=""
-        if [ "$idx" -eq 1 ]; then
-            mark=" ← 当前"
-        fi
-        printf "  %-4s %-22s %-14s %s%s\n" "$idx" "${ts/T/ }" "$ver" "$app_img" "$mark"
-    done < "$HISTORY_FILE"
-}
-
-# ── 回滚 ────────────────────────────────────────────────────
-
-rollback_service() {
-    local target_ver="${1:-}"
-    local target_line=""
-
-    if [ ! -f "$HISTORY_FILE" ] || [ ! -s "$HISTORY_FILE" ]; then
-        log_error "无部署历史记录，无法回退"
-        exit 1
-    fi
-
-    local total
-    total=$(wc -l < "$HISTORY_FILE" | tr -d ' ')
-
-    if [ -z "$target_ver" ]; then
-        # 无参数：回退到上一个版本（第 2 行）
-        if [ "$total" -lt 2 ]; then
-            log_error "只有一条部署记录，没有可回退的版本"
-            exit 1
-        fi
-        target_line=$(sed -n '2p' "$HISTORY_FILE")
-    else
-        # 有参数：匹配版本标识
-        target_line=$(grep -F "|${target_ver}|" "$HISTORY_FILE" | head -1 || true)
-        if [ -z "$target_line" ]; then
-            log_error "未找到版本 '${target_ver}' 的部署记录"
-            log_info "使用 '$0 history' 查看可用版本"
-            exit 1
-        fi
-    fi
-
-    local target_ts target_version target_app target_nginx
-    target_ts=$(echo "$target_line" | cut -d'|' -f1)
-    target_version=$(echo "$target_line" | cut -d'|' -f2)
-    target_app=$(echo "$target_line" | cut -d'|' -f3)
-    target_nginx=$(echo "$target_line" | cut -d'|' -f4)
-
-    # 检查是否与当前版本相同
-    local current_version="${APP_IMAGE:+${APP_IMAGE##*:}}"
-    if [ "$target_version" = "$current_version" ]; then
-        log_warn "当前已是版本 ${target_version}，无需回退"
-        return 0
-    fi
-
-    # 检查本地是否存在目标镜像，不存在则尝试拉取（pull 模式部署的镜像可能来自远程仓库）
-    for img in "$target_app" "$target_nginx"; do
-        [ -z "$img" ] && continue
-        if ! docker image inspect "$img" >/dev/null 2>&1; then
-            log_warn "本地不存在镜像: ${img}，尝试从远程拉取..."
-            if ! docker pull "$img" 2>/dev/null; then
-                log_error "镜像不可用: ${img}"
-                log_info "补救方式："
-                log_info "  - 离线模式: 重新上传对应版本的部署包并执行 update"
-                log_info "  - 在线模式: docker pull ${img} 或重新触发 CI"
-                exit 1
-            fi
-        fi
-    done
-
-    log_info "回退目标："
-    log_blue "  版本: ${target_version}"
-    log_blue "  时间: ${target_ts/T/ }"
-    log_blue "  App:  ${target_app}"
-    log_blue "  Nginx: ${target_nginx}"
-
-    # 备份当前 .deploy.env
-    if [ ! -f ".deploy.env" ]; then
-        log_error ".deploy.env 不存在，无法备份当前配置。请先执行 update 完成一次部署"
-        exit 1
-    fi
-    cp .deploy.env .deploy.env.bak
-    log_info "已备份当前配置到 .deploy.env.bak"
-
-    # 更新 .deploy.env（保留 HOST_PORT）
-    printf 'APP_IMAGE=%s\nNGINX_IMAGE=%s\nHOST_PORT=%s\n' \
-        "$target_app" "$target_nginx" "$PORT" > .deploy.env
-
-    # 重新加载环境变量
-    set -a; source .deploy.env; set +a
-
-    # 重新创建容器
-    log_info "重新创建容器..."
-    local up_ok=true
-    docker compose up -d --force-recreate || up_ok=false
-
-    # 健康检查
-    log_info "等待服务就绪..."
-    sleep 5
-    if [ "$up_ok" = true ] && health_check 3; then
-        rm -f .deploy.env.bak
-        save_deploy_history
-        log_info "回退成功！当前版本: ${target_version}"
-        docker image prune -f >/dev/null 2>&1 || true
-    else
-        log_error "回退后健康检查失败，正在恢复到回退前版本..."
-        mv .deploy.env.bak .deploy.env
-        set -a; source .deploy.env; set +a
-        if docker compose up -d --force-recreate; then
-            log_error "已恢复到回退前版本，请检查目标版本是否存在问题"
-        else
-            log_error "恢复也失败！服务可能处于宕机状态，请手动检查容器状态"
-        fi
-        exit 1
-    fi
-}
-
 # ── 清理 ────────────────────────────────────────────────────
 
 clean_images() {
@@ -623,32 +462,27 @@ ${GREEN}状态查看:${NC}
   logs [service]    查看日志（可选指定服务: t3-app, t3-nginx）
   health            健康检查
 
-${GREEN}版本管理:${NC}
-  history           查看部署历史记录
-  rollback [ver]    回退到上一版本，或指定版本（ver 为镜像 tag，如 abc1234）
-
 ${GREEN}维护:${NC}
   clean             清理悬空 Docker 镜像，释放磁盘空间
   help              显示此帮助信息
 
+${GREEN}版本回退:${NC}
+  回退方式：上传旧版本部署包，执行 ./manage.sh update <旧版本.tar.gz>
+
 ${GREEN}环境变量:${NC}
-  HOST_PORT         Nginx 监听端口（默认 5000）
-  HISTORY_MAX       部署历史保留条数（默认 10）
+  HOST_PORT         Nginx 监听端口（在 .env 中配置，默认 5000）
 
 ${GREEN}文件说明:${NC}
-  .env              应用配置（数据库、密钥等）—— 手动管理，update 不会覆盖
-  .deploy.env       镜像版本配置 —— update 自动管理
-  .deploy-history   部署历史记录 —— 自动生成
+  .env              应用配置（数据库、密钥、HOST_PORT 等）—— 手动管理，update 不会覆盖
+  build_info.sh     镜像版本 + 构建元信息 —— update 自动管理
 
 ${GREEN}示例:${NC}
   $0 init                                    # 首次部署初始化
   $0 update t3-app_abc1234_2026-03-26.tar.gz # 从部署包更新
+  $0 update t3-app_old_hash_2026-03-20.tar.gz # 回退到旧版本
   $0 status                                  # 查看服务状态
   $0 logs t3-app                             # 查看 App 日志
   $0 health                                  # 健康检查
-  $0 history                                 # 查看部署历史
-  $0 rollback                                # 回退到上一个版本
-  $0 rollback abc1234                        # 回退到指定版本
   $0 clean                                   # 清理悬空镜像
 
 EOF
@@ -671,8 +505,6 @@ main() {
         status)         show_status ;;
         logs)           show_logs "${2:-}" ;;
         health)         health_check "${2:-1}" ;;
-        history)        show_history ;;
-        rollback)       rollback_service "${2:-}" ;;
         clean)          clean_images ;;
         help|--help|-h) show_help ;;
         *)
