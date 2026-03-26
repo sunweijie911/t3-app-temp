@@ -13,7 +13,7 @@ import { adminAuditLog, systemConfig } from '@/server/db/schema';
 import { isAdminEmail, isAdminPhone } from '@/server/services/admin-check';
 
 export const adminRouter = createTRPCRouter({
-  isAdmin: protectedProcedure.query(({ ctx }) => {
+  checkRole: protectedProcedure.query(({ ctx }) => {
     const phone = getUserPhone(ctx.session.user);
     return isAdminEmail(ctx.session.user.email) || isAdminPhone(phone);
   }),
