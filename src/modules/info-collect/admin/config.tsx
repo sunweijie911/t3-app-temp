@@ -5,7 +5,6 @@ import {
   Breadcrumb,
   Button,
   Card,
-  Checkbox,
   Form,
   Image,
   Spin,
@@ -15,16 +14,10 @@ import {
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { OPTIONAL_FIELDS } from '@/modules/info-collect/constants';
-import type { InfoCollectConfigFields } from '@/modules/info-collect/schema';
 import { api } from '@/trpc/react';
 
 export default function AdminInfoCollectConfigPage() {
   const [bannerUrl, setBannerUrl] = useState<string | null>(null);
-  const [enabledFields, setEnabledFields] = useState<InfoCollectConfigFields>([
-    'name',
-    'proofImage',
-  ]);
   const [uploading, setUploading] = useState(false);
 
   const { data: config, isLoading } =
@@ -42,7 +35,6 @@ export default function AdminInfoCollectConfigPage() {
   useEffect(() => {
     if (config) {
       setBannerUrl(config.bannerUrl ?? null);
-      setEnabledFields(config.enabledFields);
     }
   }, [config]);
 
@@ -69,14 +61,8 @@ export default function AdminInfoCollectConfigPage() {
     }
   }
 
-  function toggleField(key: 'name' | 'proofImage') {
-    setEnabledFields((prev) =>
-      prev.includes(key) ? prev.filter((f) => f !== key) : [...prev, key],
-    );
-  }
-
   function handleSave() {
-    saveMutation.mutate({ bannerUrl, enabledFields });
+    saveMutation.mutate({ bannerUrl });
   }
 
   if (isLoading) {
@@ -124,7 +110,6 @@ export default function AdminInfoCollectConfigPage() {
             <Form.Item label="顶部 Banner 图">
               {bannerUrl ? (
                 <div style={{ marginBottom: 12 }}>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <Image
                     alt="Banner 预览"
                     src={bannerUrl}
@@ -167,36 +152,6 @@ export default function AdminInfoCollectConfigPage() {
                 建议尺寸 750×300，支持 jpg/png/webp，最大 5MB。留空则不显示
                 Banner。
               </Typography.Text>
-            </Form.Item>
-          </Form>
-        </Card>
-
-        {/* 采集字段配置 */}
-        <Card style={{ marginBottom: 24 }} title="采集字段配置">
-          <Form layout="vertical">
-            <Form.Item>
-              <div
-                style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
-              >
-                {/* 固定字段 */}
-                <Checkbox checked disabled>
-                  手机号（必填，不可关闭）
-                </Checkbox>
-                <Checkbox checked disabled>
-                  身份证号（必填，不可关闭）
-                </Checkbox>
-
-                {/* 可选字段 */}
-                {OPTIONAL_FIELDS.map((field) => (
-                  <Checkbox
-                    checked={enabledFields.includes(field.key)}
-                    key={field.key}
-                    onChange={() => toggleField(field.key)}
-                  >
-                    {field.label}
-                  </Checkbox>
-                ))}
-              </div>
             </Form.Item>
           </Form>
         </Card>

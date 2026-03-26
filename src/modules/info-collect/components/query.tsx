@@ -1,12 +1,9 @@
 'use client';
 
-import { useState } from 'react';
-import { toast } from 'sonner';
-
-import {
-  PHONE_RE,
-  REVIEW_STATUS_LABELS,
-} from '@/modules/info-collect/constants';
+import * as dd from 'dingtalk-jsapi';
+import { useEffect, useState } from 'react';
+import { useVConsole } from '@/modules/info-collect/components/use-vconsole';
+import { REVIEW_STATUS_LABELS } from '@/modules/info-collect/constants';
 import { api } from '@/trpc/react';
 
 const STATUS_ICONS: Record<string, string> = {
@@ -17,24 +14,76 @@ const STATUS_ICONS: Record<string, string> = {
   completed: '\uD83D\uDCE6',
 };
 
+type Step = 'loading' | 'ready' | 'error';
+
 export default function InfoCollectQueryPage() {
-  const [phone, setPhone] = useState('');
-  const [searched, setSearched] = useState(false);
+  useVConsole();
+  const [step, setStep] = useState<Step>('loading');
+  const [authCode, setAuthCode] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
 
-  const {
-    data: records,
-    refetch,
-    isFetching,
-  } = api.infoCollect.query.useQuery({ phone }, { enabled: false });
+  const { data: records, isFetching } = api.infoCollect.query.useQuery(
+    { authCode },
+    {
+      enabled: !!authCode,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+    },
+  );
 
-  function handleSearch(e: React.FormEvent) {
-    e.preventDefault();
-    if (!PHONE_RE.test(phone)) {
-      toast.error('请输入有效的手机号');
+  // 钉钉免登获取 authCode
+  useEffect(() => {
+    if (dd.env.platform === 'notInDingTalk') {
+      setErrorMsg('请在钉钉客户端内打开此页面');
+      setStep('error');
       return;
     }
-    setSearched(true);
-    void refetch();
+
+    const corpId = new URLSearchParams(window.location.search).get('corpId');
+    if (!corpId) {
+      setErrorMsg('缺少 corpId 参数，请检查应用配置');
+      setStep('error');
+      return;
+    }
+
+    dd.ready(async () => {
+      try {
+        const info = await dd.runtime.permission.requestAuthCode({
+          corpId,
+        });
+        setAuthCode(info.code);
+        setStep('ready');
+      } catch {
+        setErrorMsg('钉钉免登失败，请重试');
+        setStep('error');
+      }
+    });
+  }, []);
+
+  // 错误
+  if (step === 'error') {
+    return (
+      <div
+        className="flex min-h-screen items-center justify-center p-4"
+        style={{
+          background:
+            'linear-gradient(180deg, #3B82F6 0%, #60A5FA 40%, #93C5FD 100%)',
+        }}
+      >
+        <div
+          className="w-full max-w-md rounded-2xl p-8 text-center"
+          style={{
+            backdropFilter: 'blur(30px)',
+            WebkitBackdropFilter: 'blur(30px)',
+            background:
+              'linear-gradient(180deg, rgba(255,255,255,0.9) 0%, rgba(255,255,255,1) 56%)',
+          }}
+        >
+          <div className="mb-4 text-4xl">&#9888;</div>
+          <p className="text-gray-600">{errorMsg}</p>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -58,37 +107,19 @@ export default function InfoCollectQueryPage() {
           进度查询
         </h1>
         <p className="mb-6 text-center text-gray-400 text-sm">
-          输入手机号查询审核进度
+          自动查询您的审核进度
         </p>
 
-        <form className="space-y-4" onSubmit={handleSearch}>
-          <div>
-            <input
-              className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition-colors focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-              inputMode="tel"
-              maxLength={11}
-              onChange={(e) => {
-                setPhone(e.target.value);
-                setSearched(false);
-              }}
-              placeholder="请输入手机号"
-              type="tel"
-              value={phone}
-            />
+        {/* 加载中 */}
+        {(step === 'loading' || isFetching) && (
+          <div className="py-8 text-center text-gray-400 text-sm">
+            查询中...
           </div>
-
-          <button
-            className="w-full rounded-lg bg-blue-500 py-3 font-medium text-white transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={isFetching}
-            type="submit"
-          >
-            {isFetching ? '查询中...' : '查询'}
-          </button>
-        </form>
+        )}
 
         {/* 查询结果 */}
-        {searched && !isFetching && (
-          <div className="mt-6">
+        {step === 'ready' && !isFetching && (
+          <div>
             {!records || records.length === 0 ? (
               <div className="py-4 text-center text-gray-400 text-sm">
                 未找到相关记录
@@ -160,7 +191,6 @@ export default function InfoCollectQueryPage() {
               </div>
             )}
 
-            {/* 返回链接 */}
             <div className="mt-4 text-center">
               <a
                 className="text-blue-500 text-sm hover:text-blue-600"

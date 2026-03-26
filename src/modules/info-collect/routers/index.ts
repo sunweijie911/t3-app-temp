@@ -3,10 +3,14 @@ import { and, desc, eq, inArray } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 
-import { ID_CARD_RE, PHONE_RE } from '@/modules/info-collect/constants';
+import { ID_CARD_RE } from '@/modules/info-collect/constants';
 import { createTRPCRouter, publicProcedure } from '@/server/api/trpc';
 import { infoCollectRecords } from '@/server/db/schema';
 import { encrypt, hashForLookup } from '@/server/services/crypto';
+import {
+  getDingtalkUserInfo,
+  getUserByAuthCode,
+} from '@/server/services/dingtalk';
 import { infoCollectSubmitLimiter } from '@/server/services/rate-limiter';
 
 import { infoCollectAdminRouter } from './admin';
@@ -15,24 +19,29 @@ import { fetchInfoCollectConfig } from './shared';
 export const infoCollectRouter = createTRPCRouter({
   getConfig: publicProcedure.query(async ({ ctx }) => {
     const config = await fetchInfoCollectConfig(ctx.db);
-    return {
-      bannerUrl: config.bannerUrl,
-      enabledFields: config.enabledFields,
-    };
+    return { bannerUrl: config.bannerUrl };
   }),
 
   submit: publicProcedure
     .input(
       z.object({
-        name: z.string().optional(),
-        phone: z.string().regex(PHONE_RE, '请输入有效的手机号'),
+        authCode: z.string().min(1, '缺少免登授权码'),
         idCard: z.string().regex(ID_CARD_RE, '请输入有效的身份证号'),
-        proofImageUrl: z.string().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      // 限流：基于 IP（从 headers 提取）或 phone 号，防批量提交
-      const rateLimitKey = `info-submit:${input.phone}`;
+      // 1. 通过钉钉免登获取用户信息
+      const userInfo = await getDingtalkUserInfo(input.authCode).catch(
+        (err: Error) => {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `钉钉免登失败: ${err.message}`,
+          });
+        },
+      );
+
+      // 2. 限流：基于钉钉 userid
+      const rateLimitKey = `info-submit:${userInfo.userid}`;
       const rateCheck = infoCollectSubmitLimiter.check(rateLimitKey);
       if (!rateCheck.allowed) {
         throw new TRPCError({
@@ -41,36 +50,12 @@ export const infoCollectRouter = createTRPCRouter({
         });
       }
 
-      const { enabledFields } = await fetchInfoCollectConfig(ctx.db);
-
-      // Validate enabled fields
-      if (enabledFields.includes('name')) {
-        if (!input.name || input.name.length < 2 || input.name.length > 20) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: '姓名需 2-20 个字符',
-          });
-        }
-      }
-
-      if (enabledFields.includes('proofImage')) {
-        if (
-          !input.proofImageUrl ||
-          !input.proofImageUrl.startsWith('/uploads/info-collect/')
-        ) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: '请上传在职证明截图',
-          });
-        }
-      }
-
-      // 加密身份证号，哈希用于去重查询
+      // 3. 加密身份证号
       const encryptedIdCard = encrypt(input.idCard);
       const idCardHash = hashForLookup(input.idCard);
 
+      // 4. 事务：去重 + 创建记录
       return ctx.db.transaction(async (tx) => {
-        // FOR UPDATE 防止并发提交竞态（使用哈希查找代替明文比对）
         const existing = await tx
           .select({
             id: infoCollectRecords.id,
@@ -79,7 +64,7 @@ export const infoCollectRouter = createTRPCRouter({
           .from(infoCollectRecords)
           .where(
             and(
-              eq(infoCollectRecords.phone, input.phone),
+              eq(infoCollectRecords.dingtalkUserid, userInfo.userid),
               eq(infoCollectRecords.idCardHash, idCardHash),
             ),
           )
@@ -96,6 +81,7 @@ export const infoCollectRouter = createTRPCRouter({
           });
         }
 
+        // 删除被拒绝/需补充的旧记录
         if (existing.length > 0) {
           await tx.delete(infoCollectRecords).where(
             inArray(
@@ -108,13 +94,14 @@ export const infoCollectRouter = createTRPCRouter({
         const id = nanoid();
         await tx.insert(infoCollectRecords).values({
           id,
-          name: enabledFields.includes('name') ? (input.name ?? null) : null,
-          phone: input.phone,
+          dingtalkUserid: userInfo.userid,
+          name: userInfo.name,
+          phone: userInfo.mobile,
+          department: userInfo.department,
+          position: userInfo.position,
+          jobNumber: userInfo.jobNumber,
           idCard: encryptedIdCard,
           idCardHash,
-          proofImageUrl: enabledFields.includes('proofImage')
-            ? (input.proofImageUrl ?? null)
-            : null,
           status: 'pending',
         });
 
@@ -125,10 +112,20 @@ export const infoCollectRouter = createTRPCRouter({
   query: publicProcedure
     .input(
       z.object({
-        phone: z.string().regex(PHONE_RE, '请输入有效的手机号'),
+        authCode: z.string().min(1, '缺少免登授权码'),
       }),
     )
     .query(async ({ ctx, input }) => {
+      // 通过 authCode 获取钉钉 userid
+      const authUser = await getUserByAuthCode(input.authCode).catch(
+        (err: Error) => {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `钉钉免登失败: ${err.message}`,
+          });
+        },
+      );
+
       const records = await ctx.db
         .select({
           id: infoCollectRecords.id,
@@ -138,8 +135,9 @@ export const infoCollectRouter = createTRPCRouter({
           createdAt: infoCollectRecords.createdAt,
         })
         .from(infoCollectRecords)
-        .where(eq(infoCollectRecords.phone, input.phone))
+        .where(eq(infoCollectRecords.dingtalkUserid, authUser.userid))
         .orderBy(desc(infoCollectRecords.createdAt));
+
       return records;
     }),
 

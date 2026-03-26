@@ -10,12 +10,11 @@ import { decrypt } from '@/server/services/crypto';
 
 import { fetchInfoCollectConfig } from './shared';
 
-/** 安全解密：失败时返回掩码，避免历史明文数据导致页面报错 */
+/** 安全解密：失败时返回原值，避免历史明文数据导致页面报错 */
 function safeDecrypt(value: string): string {
   try {
     return decrypt(value);
   } catch {
-    // 可能是加密前的历史明文数据，直接返回
     return value;
   }
 }
@@ -43,6 +42,10 @@ function resolveWhere(input: z.infer<typeof filterInput>) {
             infoCollectRecords.phone,
             `%${escapeLike(input.search.trim())}%`,
           ),
+          ilike(
+            infoCollectRecords.jobNumber,
+            `%${escapeLike(input.search.trim())}%`,
+          ),
         )
       : undefined,
   );
@@ -57,7 +60,6 @@ export const infoCollectAdminRouter = createTRPCRouter({
     .input(
       z.object({
         bannerUrl: z.string().nullable(),
-        enabledFields: z.array(z.enum(['name', 'proofImage'])),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -66,13 +68,11 @@ export const infoCollectAdminRouter = createTRPCRouter({
         .values({
           id: 'default',
           bannerUrl: input.bannerUrl,
-          enabledFields: input.enabledFields,
         })
         .onConflictDoUpdate({
           target: infoCollectConfig.id,
           set: {
             bannerUrl: input.bannerUrl,
-            enabledFields: input.enabledFields,
           },
         });
       return { success: true };
@@ -104,7 +104,6 @@ export const infoCollectAdminRouter = createTRPCRouter({
           .where(where),
       ]);
 
-      // 解密身份证号再返回给管理员
       const decryptedItems = items.map((item) => ({
         ...item,
         idCard: safeDecrypt(item.idCard),
@@ -132,7 +131,6 @@ export const infoCollectAdminRouter = createTRPCRouter({
         });
       }
 
-      // 仅 pending 状态可审核
       const updated = await ctx.db
         .update(infoCollectRecords)
         .set({
@@ -173,7 +171,6 @@ export const infoCollectAdminRouter = createTRPCRouter({
         });
       }
 
-      // 仅更新 pending 状态的记录
       const updated = await ctx.db
         .update(infoCollectRecords)
         .set({
@@ -200,7 +197,6 @@ export const infoCollectAdminRouter = createTRPCRouter({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      // 原子操作：仅 approved 状态可填写发货单号
       const updated = await ctx.db
         .update(infoCollectRecords)
         .set({
@@ -274,7 +270,6 @@ export const infoCollectAdminRouter = createTRPCRouter({
         .orderBy(desc(infoCollectRecords.createdAt))
         .limit(10000);
 
-      // 解密身份证号再返回（导出场景）
       return records.map((r) => ({
         ...r,
         idCard: safeDecrypt(r.idCard),

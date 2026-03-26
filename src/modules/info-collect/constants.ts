@@ -1,13 +1,5 @@
 import { z } from 'zod';
 
-export const REVIEW_STATUS = {
-  PENDING: 'pending',
-  APPROVED: 'approved',
-  REJECTED: 'rejected',
-  NEEDS_SUPPLEMENT: 'needs_supplement',
-  COMPLETED: 'completed',
-} as const;
-
 export const REVIEW_STATUS_ENUM = z.enum([
   'pending',
   'approved',
@@ -31,18 +23,6 @@ export const REVIEW_STATUS_COLORS: Record<string, string> = {
   needs_supplement: 'default',
   completed: 'success',
 };
-
-export const OPTIONAL_FIELDS = [
-  { key: 'name', label: '姓名' },
-  { key: 'proofImage', label: '在职证明截图' },
-] as const;
-
-export const DEFAULT_ENABLED_FIELDS: ('name' | 'proofImage')[] = [
-  'name',
-  'proofImage',
-];
-
-export const PHONE_RE = /^1[3-9]\d{9}$/;
 
 export const ID_CARD_RE =
   /^[1-9]\d{5}(?:18|19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx]$/;

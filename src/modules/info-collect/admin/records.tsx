@@ -5,7 +5,6 @@ import {
   Button,
   Card,
   Form,
-  Image,
   Input,
   Modal,
   Select,
@@ -19,18 +18,15 @@ import Link from 'next/link';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import XLSX from 'xlsx-js-style';
+import type { z } from 'zod';
 import {
   REVIEW_STATUS_COLORS,
+  type REVIEW_STATUS_ENUM,
   REVIEW_STATUS_LABELS,
 } from '@/modules/info-collect/constants';
 import { api, type RouterOutputs } from '@/trpc/react';
 
-type ReviewStatus =
-  | 'pending'
-  | 'approved'
-  | 'rejected'
-  | 'needs_supplement'
-  | 'completed';
+type ReviewStatus = z.infer<typeof REVIEW_STATUS_ENUM>;
 
 type Filters = {
   status: ReviewStatus | '';
@@ -53,7 +49,9 @@ type ExportRecord = {
   name: string | null;
   phone: string;
   idCard: string;
-  proofImageUrl: string | null;
+  department: string | null;
+  position: string | null;
+  jobNumber: string | null;
   status: string;
   rejectReason: string | null;
   trackingNumber: string | null;
@@ -61,45 +59,35 @@ type ExportRecord = {
   createdAt: Date;
 };
 
-function toExcel(
-  records: ExportRecord[],
-  origin: string,
-  enabledFields: string[],
-): Blob {
-  const hasName = enabledFields.includes('name');
-  const hasProof = enabledFields.includes('proofImage');
+function toExcel(records: ExportRecord[]): Blob {
+  const headers = [
+    '姓名',
+    '手机号',
+    '身份证号',
+    '部门',
+    '职位',
+    '工号',
+    '状态',
+    '拒绝/补充原因',
+    '发货单号',
+    '备注',
+    '提交时间',
+  ];
+  const colWidths = [10, 14, 22, 20, 12, 12, 10, 20, 18, 20, 20];
 
-  const headers: string[] = [];
-  const colWidths: number[] = [];
-
-  if (hasName) {
-    headers.push('姓名');
-    colWidths.push(10);
-  }
-  headers.push('手机号', '身份证号');
-  colWidths.push(14, 22);
-  if (hasProof) {
-    headers.push('在职证明截图');
-    colWidths.push(40);
-  }
-  headers.push('状态', '拒绝/补充原因', '发货单号', '备注', '提交时间');
-  colWidths.push(10, 20, 18, 20, 20);
-
-  const rows = records.map((r) => {
-    const row: (string | null)[] = [];
-    if (hasName) row.push(r.name ?? '');
-    row.push(r.phone, r.idCard);
-    if (hasProof)
-      row.push(r.proofImageUrl ? `${origin}${r.proofImageUrl}` : '');
-    row.push(
-      REVIEW_STATUS_LABELS[r.status] ?? r.status,
-      r.rejectReason ?? '',
-      r.trackingNumber ?? '',
-      r.remark ?? '',
-      dayjs(r.createdAt).format('YYYY-MM-DD HH:mm:ss'),
-    );
-    return row;
-  });
+  const rows = records.map((r) => [
+    r.name ?? '',
+    r.phone,
+    r.idCard,
+    r.department ?? '',
+    r.position ?? '',
+    r.jobNumber ?? '',
+    REVIEW_STATUS_LABELS[r.status] ?? r.status,
+    r.rejectReason ?? '',
+    r.trackingNumber ?? '',
+    r.remark ?? '',
+    dayjs(r.createdAt).format('YYYY-MM-DD HH:mm:ss'),
+  ]);
 
   const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
   ws['!cols'] = colWidths.map((w) => ({ wch: w }));
@@ -128,23 +116,6 @@ function toExcel(
     for (let r = 1; r < totalRows; r++) {
       const cell = ws[XLSX.utils.encode_cell({ r, c })];
       if (cell) cell.s = cellStyle;
-    }
-  }
-
-  // 在职证明截图列设为超链接样式
-  if (hasProof) {
-    const proofColIdx = hasName ? 3 : 2;
-    const linkStyle = {
-      alignment: { vertical: 'center' as const, wrapText: true },
-      border,
-      font: { color: { rgb: '0563C1' }, underline: true },
-    };
-    for (let r = 1; r < totalRows; r++) {
-      const cell = ws[XLSX.utils.encode_cell({ r, c: proofColIdx })];
-      if (cell?.v) {
-        cell.l = { Target: String(cell.v) };
-        cell.s = linkStyle;
-      }
     }
   }
 
@@ -184,9 +155,6 @@ export default function AdminInfoCollectPage() {
   const utils = api.useUtils();
   const queryInput = { ...buildFilterInput(filters), limit, offset };
   const { data, refetch } = api.infoCollect.admin.list.useQuery(queryInput);
-
-  const { data: configData } = api.infoCollect.admin.getConfig.useQuery();
-  const enabledFields = configData?.enabledFields ?? ['name', 'proofImage'];
 
   const reviewMutation = api.infoCollect.admin.review.useMutation({
     onSuccess: () => {
@@ -273,7 +241,7 @@ export default function AdminInfoCollectPage() {
       const records = await utils.infoCollect.admin.exportData.fetch(
         buildFilterInput(filters),
       );
-      const blob = toExcel(records, window.location.origin, enabledFields);
+      const blob = toExcel(records);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -314,21 +282,26 @@ export default function AdminInfoCollectPage() {
       width: 200,
     },
     {
-      title: '在职证明',
-      key: 'proof',
+      title: '部门',
+      dataIndex: 'department',
+      key: 'department',
+      width: 150,
+      ellipsis: true,
+      render: (val: string | null) => val ?? '-',
+    },
+    {
+      title: '职位',
+      dataIndex: 'position',
+      key: 'position',
       width: 120,
-      render: (_: unknown, record: RecordItem) =>
-        record.proofImageUrl ? (
-          <Image
-            alt="在职证明"
-            height={40}
-            src={record.proofImageUrl}
-            style={{ objectFit: 'cover', borderRadius: 4 }}
-            width={40}
-          />
-        ) : (
-          <Typography.Text type="secondary">-</Typography.Text>
-        ),
+      render: (val: string | null) => val ?? '-',
+    },
+    {
+      title: '工号',
+      dataIndex: 'jobNumber',
+      key: 'jobNumber',
+      width: 100,
+      render: (val: string | null) => val ?? '-',
     },
     {
       title: '状态',
@@ -471,8 +444,8 @@ export default function AdminInfoCollectPage() {
                   enterButton="搜索"
                   onChange={(e) => setSearchInput(e.target.value)}
                   onSearch={(v) => applyFilters({ search: v })}
-                  placeholder="姓名 / 手机号"
-                  style={{ width: 260 }}
+                  placeholder="姓名 / 手机号 / 工号"
+                  style={{ width: 280 }}
                   value={searchInput}
                 />
               </Form.Item>
@@ -555,7 +528,7 @@ export default function AdminInfoCollectPage() {
                 selectedRowKeys,
                 onChange: (keys) => setSelectedRowKeys(keys as string[]),
               }}
-              scroll={{ x: 1000 }}
+              scroll={{ x: 1200 }}
             />
           </Card>
         </div>
