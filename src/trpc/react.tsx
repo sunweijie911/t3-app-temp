@@ -51,6 +51,7 @@ export function TRPCReactProvider(props: { children: React.ReactNode }) {
         }),
         httpBatchStreamLink({
           transformer: SuperJSON,
+          methodOverride: 'POST',
           url: `${getBaseUrl()}/api/trpc`,
           headers: () => {
             const headers = new Headers();
