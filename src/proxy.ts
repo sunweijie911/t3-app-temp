@@ -5,9 +5,6 @@ import { getUserPhone } from '@/server/better-auth/types';
 import { isAdminEmail, isAdminPhone } from '@/server/services/admin-check';
 import { authIpLimiter, globalIpLimiter } from '@/server/services/rate-limiter';
 
-// Required for auth.api.getSession() which uses the postgres driver (Node.js only)
-export const runtime = 'nodejs';
-
 const protectedPatterns = [
   /^\/admin(\/|$)/,
   /^\/soulscope\/results(\/|$)/,

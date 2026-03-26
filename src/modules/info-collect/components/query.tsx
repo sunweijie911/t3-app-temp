@@ -36,33 +36,40 @@ export default function InfoCollectQueryPage() {
   // 钉钉免登获取 authCode
   useEffect(() => {
     void (async () => {
-      const dd = await import('dingtalk-jsapi');
+      try {
+        const dd = await import('dingtalk-jsapi');
+        console.log('[DingTalk] query - platform:', dd.env.platform);
 
-      if (dd.env.platform === 'notInDingTalk') {
-        setErrorMsg('请在钉钉客户端内打开此页面');
-        setStep('error');
-        return;
-      }
-
-      const corpId = new URLSearchParams(window.location.search).get('corpId');
-      if (!corpId) {
-        setErrorMsg('缺少 corpId 参数，请检查应用配置');
-        setStep('error');
-        return;
-      }
-
-      dd.ready(async () => {
-        try {
-          const info = await dd.runtime.permission.requestAuthCode({
-            corpId,
-          });
-          setAuthCode(info.code);
-          setStep('ready');
-        } catch {
-          setErrorMsg('钉钉免登失败，请重试');
+        if (dd.env.platform === 'notInDingTalk') {
+          setErrorMsg('请在钉钉客户端内打开此页面');
           setStep('error');
+          return;
         }
-      });
+
+        const corpId = new URLSearchParams(window.location.search).get(
+          'corpId',
+        );
+        console.log('[DingTalk] query - corpId:', corpId);
+        if (!corpId) {
+          setErrorMsg('缺少 corpId 参数，请检查应用配置');
+          setStep('error');
+          return;
+        }
+
+        console.log('[DingTalk] query - requestAuthCode start');
+        const info = await dd.runtime.permission.requestAuthCode({ corpId });
+        console.log(
+          '[DingTalk] query - authCode obtained:',
+          info.code?.slice(0, 8),
+          '...',
+        );
+        setAuthCode(info.code);
+        setStep('ready');
+      } catch (err) {
+        console.error('[DingTalk] query - 免登失败:', err);
+        setErrorMsg('钉钉免登失败，请重试');
+        setStep('error');
+      }
     })();
   }, []);
 

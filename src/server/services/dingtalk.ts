@@ -41,6 +41,7 @@ async function callLinkGateway<T>(
   params: Record<string, unknown>,
 ): Promise<T> {
   const gateway = `${env.DINGTALK_LINK_GATEWAY}?apiName=${encodeURIComponent(apiName)}`;
+  console.log(`[钉钉] callLinkGateway: ${apiName}`, JSON.stringify(params));
 
   const res = await fetch(gateway, {
     method: 'POST',
@@ -49,12 +50,18 @@ async function callLinkGateway<T>(
   });
 
   if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    console.error(
+      `[钉钉] LINK 网关 HTTP 错误: ${res.status} ${res.statusText}`,
+      text,
+    );
     throw new Error(
       `[钉钉] LINK 网关请求失败: HTTP ${res.status} ${res.statusText}`,
     );
   }
 
   const result = (await res.json()) as LinkGatewayResponse<T>;
+  console.log(`[钉钉] ${apiName} 响应:`, JSON.stringify(result));
 
   if (result.success !== 'true' || !result.data) {
     throw new Error(
