@@ -76,15 +76,21 @@ CI 自动构建镜像并推送到 `ghcr.io/<owner>/t3-app`，服务器通过 `do
 
 ### 方式二：离线部署（fallback）
 
-如果服务器无法访问 `ghcr.io`，可手动导出镜像 tar 包并上传：
+如果服务器无法访问 `ghcr.io`，使用 `package.sh` 打包离线部署包：
 
 ```bash
-# 本地导出
-docker save t3-app:local -o t3-app.tar
+# 开发机：构建打包
+./package.sh
+# 产出: t3-app_<hash>_<timestamp>.tar.gz
 
-# 上传到服务器后加载
-scp t3-app.tar user@server:/deploy/path/deploy/
-ssh user@server "cd /deploy/path/deploy && docker load -i t3-app.tar"
+# 上传到服务器
+scp t3-app_*.tar.gz user@server:/opt/t3-app/
+
+# 服务器：首次需先 init，然后 update
+ssh user@server
+cd /opt/t3-app
+./deploy/manage.sh init          # 仅首次
+./deploy/manage.sh update t3-app_*.tar.gz
 ```
 
 ## 5. 验证

@@ -22,7 +22,7 @@ set -euo pipefail
 log_info() { echo -e "\033[0;32m[INFO]\033[0m $*"; }
 log_error() { echo -e "\033[0;31m[ERROR]\033[0m $*" >&2; }
 
-# 清理函数
+# 清理函数（仅在错误时调用）
 cleanup() {
     log_info "Cleaning up temporary files..."
     rm -rf deploy_package
@@ -35,9 +35,8 @@ handle_error() {
     exit 1
 }
 
-# 设置错误处理
+# 设置错误处理（仅 ERR，不在正常退出时清理，因为 tar 打包后 deploy_package 仍需保留到打包完成）
 trap 'handle_error $LINENO' ERR
-trap cleanup EXIT
 
 # 检查必需工具
 check_requirements() {
@@ -115,65 +114,56 @@ EOF
 - Docker + Docker Compose (v2)
 - 服务器已开放对应端口（默认 5000）
 
-## 部署步骤
-
-### 1. 上传并解压
+## 首次部署
 
 ```bash
+# 1. 上传部署包到服务器
 scp t3-app_*.tar.gz user@server:/opt/t3-app/
+
+# 2. 在服务器上解压（仅用于获取 manage.sh 和初始文件）
 ssh user@server
 cd /opt/t3-app
 tar -xzf t3-app_*.tar.gz
-cd deploy_package
-```
+cp -r deploy_package/* .
+rm -rf deploy_package
 
-### 2. 加载 Docker 镜像
+# 3. 初始化（创建 .env 模板）
+./deploy/manage.sh init
 
-```bash
-source build_info.sh
-docker load -i t3-app_*.tar
-docker load -i t3-app-nginx_*.tar
-```
-
-### 3. 配置环境变量
-
-```bash
-# 首次部署：创建 .env（应用配置：数据库、密钥等）
-cp .env.example .env
+# 4. 编辑 .env，填入生产配置
 vi .env
+#   必填: DATABASE_URL, BETTER_AUTH_SECRET, BETTER_AUTH_URL
 
-# 写入镜像 tag 到 .deploy.env（与 CI 部署一致）
-source build_info.sh
-printf 'APP_IMAGE=%s\nNGINX_IMAGE=%s\n' "${app_image_tag}" "${nginx_image_tag}" > .deploy.env
-```
+# 5. 从部署包更新（加载镜像 + 启动服务）
+./deploy/manage.sh update t3-app_*.tar.gz
 
-### 4. 启动服务
-
-```bash
-# 首次部署（包含数据库）
-./deploy/manage.sh start dev
-
-# 仅应用（数据库在外部）
-./deploy/manage.sh start
-
-# 查看状态
+# 6. 验证
 ./deploy/manage.sh status
-
-# 健康检查
 ./deploy/manage.sh health
 ```
 
-### 5. 后续更新
-
-上传新包后重复步骤 1-2，然后：
+## 后续更新
 
 ```bash
-# 更新 .deploy.env 中的镜像 tag
-source build_info.sh
-printf 'APP_IMAGE=%s\nNGINX_IMAGE=%s\n' "${app_image_tag}" "${nginx_image_tag}" > .deploy.env
+# 上传新部署包后，一条命令完成更新
+./deploy/manage.sh update t3-app_<new_hash>_<timestamp>.tar.gz
+```
 
-# 重启服务
-./deploy/manage.sh restart
+update 会自动：加载镜像 → 更新配置 → 重启服务 → 健康检查 → 失败自动回滚。
+.env（数据库、密钥等）不会被覆盖。
+
+## 版本管理
+
+```bash
+./deploy/manage.sh history              # 查看部署历史
+./deploy/manage.sh rollback             # 回退到上一版本
+./deploy/manage.sh rollback abc1234     # 回退到指定版本
+```
+
+## 其他命令
+
+```bash
+./deploy/manage.sh help                 # 查看所有命令
 ```
 DEPLOYEOF
 }
@@ -213,6 +203,9 @@ main() {
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
 
+    # 清理中间产物
+    rm -rf deploy_package
+
     log_info "=========================================="
     log_info "构建完成！耗时 ${duration} 秒"
     log_info "部署包: ${packageName}"
@@ -221,8 +214,7 @@ main() {
     log_info ""
     log_info "部署步骤:"
     log_info "  1. scp ${packageName} user@server:/opt/t3-app/"
-    log_info "  2. 在服务器上解压: tar -xzf ${packageName}"
-    log_info "  3. cd deploy_package && cat DEPLOY.md"
+    log_info "  2. ./deploy/manage.sh update ${packageName}"
     log_info "=========================================="
 }
 

@@ -173,7 +173,7 @@ jobs:
           host: ${{ secrets.DEPLOY_SERVER_HOST }}
           username: ${{ secrets.DEPLOY_SERVER_USER }}
           key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
-          source: "deploy/*,docker-compose.yml,nginx.conf"
+          source: "deploy/*,docker-compose.yml,nginx.conf,.env.example"
           target: ${{ secrets.DEPLOY_SERVER_PATH }}
           overwrite: true
 
@@ -187,73 +187,16 @@ jobs:
             set -e
 
             DEPLOY_PATH="${{ secrets.DEPLOY_SERVER_PATH }}"
-            REGISTRY="${{ env.REGISTRY }}"
             IMAGE_APP="${{ env.REGISTRY }}/${{ steps.repo.outputs.image_name }}:${{ needs.build.outputs.git_hash }}"
             IMAGE_NGINX="${{ env.REGISTRY }}/${{ steps.repo.outputs.image_name }}-nginx:${{ needs.build.outputs.git_hash }}"
-            HOST_PORT="${{ secrets.DEPLOY_HOST_PORT || '80' }}"
-
-            echo "=========================================="
-            echo "部署信息:"
-            echo "  App 镜像:   ${IMAGE_APP}"
-            echo "  Nginx 镜像: ${IMAGE_NGINX}"
-            echo "  路径: ${DEPLOY_PATH}"
-            echo "=========================================="
 
             cd "${DEPLOY_PATH}"
 
             # 登录 GHCR
-            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${REGISTRY} -u "${{ github.actor }}" --password-stdin
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u "${{ github.actor }}" --password-stdin
 
-            # 停止旧的单容器部署（首次迁移时清理）
-            docker stop t3-app 2>/dev/null && docker rm t3-app 2>/dev/null || true
-
-            # 持久化镜像 tag，manage.sh restart 时也能读到
-            printf 'APP_IMAGE=%s\nNGINX_IMAGE=%s\nHOST_PORT=%s\n' \
-              "${IMAGE_APP}" "${IMAGE_NGINX}" "${HOST_PORT}" > .deploy.env
-
-            # 加载环境变量，拉取并启动
-            set -a; source .deploy.env; set +a
-
-            docker compose pull
-            docker compose up -d --remove-orphans
-
-            echo "容器已启动"
-            docker compose ps
-
-            # 健康检查
-            echo "等待服务就绪..."
-            for i in $(seq 1 30); do
-              STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${HOST_PORT}/api/health" 2>/dev/null || true)
-              if [ "$STATUS" = "200" ]; then
-                echo "健康检查通过 (attempt ${i}/30)"
-                break
-              fi
-              echo "Waiting... (attempt ${i}/30, status=${STATUS})"
-              if [ $i -eq 30 ]; then
-                echo "健康检查超时（150s），服务可能未正常启动"
-                docker compose logs --tail 50
-                exit 1
-              fi
-              sleep 5
-            done
-
-            # 记录部署历史
-            DEPLOY_TIME=$(date -u +"%Y-%m-%dT%H:%M:%S")
-            VERSION=$(echo "${IMAGE_APP}" | awk -F: '{print $NF}')
-            HISTORY_FILE="${DEPLOY_PATH}/.deploy-history"
-            HISTORY_MAX="${HISTORY_MAX:-10}"
-            NEW_LINE="${DEPLOY_TIME}|${VERSION}|${IMAGE_APP}|${IMAGE_NGINX}"
-            if [ -f "$HISTORY_FILE" ]; then
-              grep -vF "|${VERSION}|" "$HISTORY_FILE" | head -$((HISTORY_MAX - 1)) > "${HISTORY_FILE}.tmp" 2>/dev/null || true
-              echo "${NEW_LINE}" | cat - "${HISTORY_FILE}.tmp" > "$HISTORY_FILE"
-              rm -f "${HISTORY_FILE}.tmp"
-            else
-              echo "${NEW_LINE}" > "$HISTORY_FILE"
-            fi
-            echo "部署历史已记录 (版本: ${VERSION})"
-
-            # 清理旧 Docker 镜像
-            docker image prune -f 2>/dev/null || true
+            # 通过 manage.sh 完成拉取、部署、健康检查、历史记录
+            ./deploy/manage.sh pull-deploy "${IMAGE_APP}" "${IMAGE_NGINX}"
 
   # ==================== 通知 ====================
   notify:
