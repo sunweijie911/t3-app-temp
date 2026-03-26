@@ -1,11 +1,12 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { ReportViewer } from '@/modules/soulscope/components/report/report-viewer';
+import { MODULE_NAME } from '@/modules/soulscope/constants';
 import { getSession } from '@/server/better-auth/server';
 import { HydrateClient } from '@/trpc/server';
 
 export const metadata = {
-  title: '深度分析报告 - SoulScope',
+  title: `深度分析报告 - ${MODULE_NAME}`,
 };
 
 export default async function ReportPage({

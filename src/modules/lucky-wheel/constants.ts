@@ -1,6 +1,9 @@
 // lucky-wheel module constants
 import { z } from 'zod';
 
+/** 模块显示名称，修改此处即可全局生效 */
+export const MODULE_NAME = '幸运大转盘';
+
 export const PRIZE_TYPE_LABELS: Record<string, string> = {
   physical: '实物',
   virtual: '虚拟',

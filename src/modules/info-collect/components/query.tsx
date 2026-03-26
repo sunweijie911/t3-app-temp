@@ -2,7 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import { useVConsole } from '@/modules/info-collect/components/use-vconsole';
-import { REVIEW_STATUS_LABELS } from '@/modules/info-collect/constants';
+import {
+  MODULE_NAME,
+  REVIEW_STATUS_LABELS,
+} from '@/modules/info-collect/constants';
 import { api } from '@/trpc/react';
 
 const STATUS_ICONS: Record<string, string> = {
@@ -199,7 +202,7 @@ export default function InfoCollectQueryPage() {
                 className="text-blue-500 text-sm hover:text-blue-600"
                 href="/info-collect"
               >
-                返回信息采集
+                返回{MODULE_NAME}
               </a>
             </div>
           </div>

@@ -1,5 +1,6 @@
 import { Suspense } from 'react';
 import { TestGrid } from '@/modules/soulscope/components/test/test-grid';
+import { MODULE_NAME } from '@/modules/soulscope/constants';
 import { api, HydrateClient } from '@/trpc/server';
 
 async function AllTests() {
@@ -8,7 +9,7 @@ async function AllTests() {
 }
 
 export const metadata = {
-  title: '全部测试 - SoulScope',
+  title: `全部测试 - ${MODULE_NAME}`,
   description: '探索MBTI、九型人格、大五人格等10种专业人格测试',
 };
 

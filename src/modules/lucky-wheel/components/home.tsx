@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { Suspense } from 'react';
 import { ActivityCard } from '@/modules/lucky-wheel/components/activity/activity-card';
+import { MODULE_NAME } from '@/modules/lucky-wheel/constants';
 import { api, HydrateClient } from '@/trpc/server';
 
 async function ActiveActivities() {
@@ -25,7 +26,7 @@ export default async function LuckyWheelHome() {
         <section className="bg-gradient-to-br from-orange-500 via-red-500 to-pink-500 px-4 py-20 text-white">
           <div className="mx-auto max-w-4xl text-center">
             <h1 className="mb-4 font-bold text-4xl tracking-tight sm:text-5xl">
-              幸运大转盘
+              {MODULE_NAME}
             </h1>
             <p className="mb-8 text-lg text-orange-100">
               转一转，好运连连！精彩奖品等你来拿

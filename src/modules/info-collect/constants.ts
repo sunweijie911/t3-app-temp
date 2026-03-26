@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+/** 模块显示名称，修改此处即可全局生效 */
+export const MODULE_NAME = '信息采集';
+
 export const REVIEW_STATUS_ENUM = z.enum([
   'pending',
   'approved',

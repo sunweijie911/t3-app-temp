@@ -1,3 +1,4 @@
+import { MODULE_NAME } from '@/modules/info-collect/constants';
 import { ModuleLayout } from '@/shared/components/layout/module-layout';
 
 export default function InfoCollectLayout({
@@ -8,7 +9,7 @@ export default function InfoCollectLayout({
   return (
     <ModuleLayout
       footerSubtitle="请确保提交信息的准确性"
-      footerTitle="信息采集平台"
+      footerTitle={`${MODULE_NAME}平台`}
     >
       {children}
     </ModuleLayout>

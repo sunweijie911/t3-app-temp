@@ -3,6 +3,7 @@
 import type { TableProps } from 'antd';
 import { Breadcrumb, Table, Tag } from 'antd';
 import Link from 'next/link';
+import { MODULE_NAME } from '@/modules/soulscope/constants';
 import { api, type RouterOutputs } from '@/trpc/react';
 
 type TestItem = RouterOutputs['soulscope']['test']['list'][number];
@@ -49,7 +50,7 @@ export default function AdminTestsPage() {
       <div style={{ maxWidth: 1152, margin: '0 auto', padding: '48px 24px' }}>
         <Breadcrumb
           items={[
-            { title: <Link href="/admin/soulscope">SoulScope 管理</Link> },
+            { title: <Link href="/admin/soulscope">{MODULE_NAME} 管理</Link> },
             { title: '测试管理' },
           ]}
           style={{ marginBottom: 24 }}

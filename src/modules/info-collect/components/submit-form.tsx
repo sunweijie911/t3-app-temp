@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { useVConsole } from '@/modules/info-collect/components/use-vconsole';
-import { ID_CARD_RE } from '@/modules/info-collect/constants';
+import { ID_CARD_RE, MODULE_NAME } from '@/modules/info-collect/constants';
 import { api } from '@/trpc/react';
 
 interface DingtalkUserInfo {
@@ -214,7 +214,7 @@ export default function InfoCollectPage() {
         >
           <div className="p-6">
             <h1 className="mb-1 text-center font-bold text-gray-800 text-xl">
-              在职信息采集
+              在职{MODULE_NAME}
             </h1>
             <p className="mb-6 text-center text-gray-400 text-sm">
               以下信息已从钉钉自动获取

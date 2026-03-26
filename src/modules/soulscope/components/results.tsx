@@ -1,10 +1,11 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
+import { MODULE_NAME } from '@/modules/soulscope/constants';
 import { getSession } from '@/server/better-auth/server';
 import { api, HydrateClient } from '@/trpc/server';
 
 export const metadata = {
-  title: '我的结果 - SoulScope',
+  title: `我的结果 - ${MODULE_NAME}`,
 };
 
 export default async function ResultsPage() {

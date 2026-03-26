@@ -20,6 +20,7 @@ import { toast } from 'sonner';
 import XLSX from 'xlsx-js-style';
 import type { z } from 'zod';
 import {
+  MODULE_NAME,
   REVIEW_STATUS_COLORS,
   type REVIEW_STATUS_ENUM,
   REVIEW_STATUS_LABELS,
@@ -246,7 +247,7 @@ export default function AdminInfoCollectPage() {
       const a = document.createElement('a');
       a.href = url;
       const date = new Date().toISOString().slice(0, 10);
-      a.download = `信息采集记录_${date}.xlsx`;
+      a.download = `${MODULE_NAME}记录_${date}.xlsx`;
       a.click();
       URL.revokeObjectURL(url);
       if (records.length >= 10000) {
@@ -423,7 +424,7 @@ export default function AdminInfoCollectPage() {
             }}
           >
             <Typography.Title level={4} style={{ margin: 0 }}>
-              信息采集记录
+              {MODULE_NAME}记录
             </Typography.Title>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <Link href="/admin/info-collect/config">

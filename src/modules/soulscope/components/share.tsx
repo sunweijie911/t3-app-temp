@@ -2,6 +2,7 @@ import { TRPCError } from '@trpc/server';
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { ResultSummary } from '@/modules/soulscope/components/result/result-summary';
+import { MODULE_NAME } from '@/modules/soulscope/constants';
 import { api } from '@/trpc/server';
 
 export async function generateMetadata({
@@ -13,7 +14,7 @@ export async function generateMetadata({
   try {
     const result = await api.soulscope.result.getByShareToken({ shareToken });
     return {
-      title: `${result.resultLabel} - ${result.testType?.name} | SoulScope`,
+      title: `${result.resultLabel} - ${result.testType?.name} | ${MODULE_NAME}`,
       description: result.summary,
       openGraph: {
         title: `我的${result.testType?.name}结果：${result.resultLabel}`,
@@ -22,7 +23,7 @@ export async function generateMetadata({
       },
     };
   } catch {
-    return { title: 'SoulScope' };
+    return { title: MODULE_NAME };
   }
 }
 
@@ -46,7 +47,7 @@ export default async function SharePage({
     <main className="min-h-screen bg-white">
       <div className="mx-auto max-w-3xl px-4 py-12 sm:px-6 lg:px-8">
         <div className="mb-6 text-center">
-          <p className="text-gray-500 text-sm">SoulScope 人格测试结果</p>
+          <p className="text-gray-500 text-sm">{MODULE_NAME} 人格测试结果</p>
         </div>
 
         <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm sm:p-8">

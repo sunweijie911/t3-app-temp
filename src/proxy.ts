@@ -35,7 +35,7 @@ function rateLimitResponse(retryAfterMs: number, message: string) {
   );
 }
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const ip = getClientIp(request);
 

@@ -1,3 +1,4 @@
+import { MODULE_NAME } from '@/modules/lucky-wheel/constants';
 import { ModuleLayout } from '@/shared/components/layout/module-layout';
 
 export default function LuckyWheelLayout({
@@ -8,7 +9,7 @@ export default function LuckyWheelLayout({
   return (
     <ModuleLayout
       footerSubtitle="活动最终解释权归主办方所有"
-      footerTitle="幸运大转盘"
+      footerTitle={MODULE_NAME}
     >
       {children}
     </ModuleLayout>

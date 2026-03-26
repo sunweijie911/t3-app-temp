@@ -13,6 +13,7 @@ import {
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
+import { MODULE_NAME } from '@/modules/soulscope/constants';
 import { api } from '@/trpc/react';
 
 type ConfigType = 'text' | 'password' | 'number' | 'textarea';
@@ -150,7 +151,7 @@ export default function AdminConfigPage() {
       <div style={{ maxWidth: 896, margin: '0 auto', padding: '48px 24px' }}>
         <Breadcrumb
           items={[
-            { title: <Link href="/admin/soulscope">SoulScope 管理</Link> },
+            { title: <Link href="/admin/soulscope">{MODULE_NAME} 管理</Link> },
             { title: '系统配置' },
           ]}
           style={{ marginBottom: 8 }}

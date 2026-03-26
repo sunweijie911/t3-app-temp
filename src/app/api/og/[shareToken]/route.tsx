@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { ImageResponse } from 'next/og';
+import { MODULE_NAME } from '@/modules/soulscope/constants';
 import { db } from '@/server/db';
 import { testResults } from '@/server/db/schema';
 
@@ -35,7 +36,7 @@ export async function GET(
       }}
     >
       <div style={{ fontSize: 24, opacity: 0.8, marginBottom: 16 }}>
-        SoulScope - {result.testType?.name}
+        {MODULE_NAME} - {result.testType?.name}
       </div>
       <div style={{ fontSize: 72, fontWeight: 'bold', marginBottom: 16 }}>
         {result.resultCode}

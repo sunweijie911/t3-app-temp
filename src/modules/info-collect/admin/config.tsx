@@ -14,6 +14,7 @@ import {
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
+import { MODULE_NAME } from '@/modules/info-collect/constants';
 import { api } from '@/trpc/react';
 
 export default function AdminInfoCollectConfigPage() {
@@ -87,7 +88,7 @@ export default function AdminInfoCollectConfigPage() {
         <Breadcrumb
           items={[
             {
-              title: <Link href="/admin/info-collect">信息采集管理</Link>,
+              title: <Link href="/admin/info-collect">{MODULE_NAME}管理</Link>,
             },
             { title: '采集配置' },
           ]}

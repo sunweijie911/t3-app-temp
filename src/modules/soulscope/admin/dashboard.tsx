@@ -1,10 +1,11 @@
 import { Card, Col, Row, Statistic } from 'antd';
 import Link from 'next/link';
 import { getModule } from '@/modules/registry';
+import { MODULE_NAME } from '@/modules/soulscope/constants';
 import { api, HydrateClient } from '@/trpc/server';
 
 export const metadata = {
-  title: 'SoulScope 管理 - 管理后台',
+  title: `${MODULE_NAME} 管理 - 管理后台`,
 };
 
 export default async function AdminSoulscopePage() {
@@ -24,7 +25,7 @@ export default async function AdminSoulscopePage() {
               marginBottom: 32,
             }}
           >
-            SoulScope 管理
+            {MODULE_NAME} 管理
           </h1>
 
           {/* 统计卡片 */}

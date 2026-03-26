@@ -1,5 +1,6 @@
 ##### BASE
 FROM node:22-alpine AS base
+ENV COREPACK_NPM_REGISTRY=https://registry.npmmirror.com
 RUN corepack enable && corepack prepare pnpm@9.15.5 --activate
 
 ##### DEPENDENCIES
@@ -7,7 +8,8 @@ FROM base AS deps
 WORKDIR /app
 
 COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+RUN pnpm config set registry https://registry.npmmirror.com && \
+    pnpm install --frozen-lockfile
 
 ##### BUILDER
 FROM base AS builder

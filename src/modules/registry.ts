@@ -1,4 +1,7 @@
 import { MODULE_NAME as BATTERY_SWAP_NAME } from '@/modules/battery-swap/constants';
+import { MODULE_NAME as INFO_COLLECT_NAME } from '@/modules/info-collect/constants';
+import { MODULE_NAME as LUCKY_WHEEL_NAME } from '@/modules/lucky-wheel/constants';
+import { MODULE_NAME as SOULSCOPE_NAME } from '@/modules/soulscope/constants';
 
 export interface AdminNavItem {
   label: string;
@@ -42,7 +45,7 @@ export interface ModuleDefinition {
 const modules: Record<string, ModuleDefinition> = {
   'lucky-wheel': {
     id: 'lucky-wheel',
-    name: '幸运大转盘',
+    name: LUCKY_WHEEL_NAME,
     description: '转盘抽奖活动平台',
     basePath: '/lucky-wheel',
     theme: {
@@ -66,8 +69,8 @@ const modules: Record<string, ModuleDefinition> = {
   },
   'info-collect': {
     id: 'info-collect',
-    name: '信息采集',
-    description: '在职信息采集平台',
+    name: INFO_COLLECT_NAME,
+    description: `在职${INFO_COLLECT_NAME}平台`,
     basePath: '/info-collect',
     theme: {
       brand: 'text-blue-600',
@@ -77,7 +80,7 @@ const modules: Record<string, ModuleDefinition> = {
       cardHover: 'group-hover:text-blue-600',
     },
     navLinks: [
-      { label: '信息采集', href: '/info-collect' },
+      { label: INFO_COLLECT_NAME, href: '/info-collect' },
       { label: '进度查询', href: '/info-collect/query' },
     ],
     adminNavItems: [
@@ -116,7 +119,7 @@ const modules: Record<string, ModuleDefinition> = {
   },
   soulscope: {
     id: 'soulscope',
-    name: 'SoulScope',
+    name: SOULSCOPE_NAME,
     description: 'AI 人格测试平台',
     basePath: '/soulscope',
     theme: {

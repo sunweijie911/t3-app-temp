@@ -1,9 +1,10 @@
 import Link from 'next/link';
 import { MyRecords } from '@/modules/lucky-wheel/components/record/my-records';
+import { MODULE_NAME } from '@/modules/lucky-wheel/constants';
 import { HydrateClient } from '@/trpc/server';
 
 export const metadata = {
-  title: '我的抽奖记录 - 幸运大转盘',
+  title: `我的抽奖记录 - ${MODULE_NAME}`,
 };
 
 export default function RecordsPage() {
