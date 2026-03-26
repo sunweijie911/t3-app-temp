@@ -1,9 +1,11 @@
 #!/bin/bash
 
 # 一键构建 Docker 镜像并打包部署文件
-# 用法: ./package.sh
+# 用法: ./package.sh [--arm64|--amd64]
+#   --amd64   构建 linux/amd64 镜像（默认）
+#   --arm64   构建 linux/arm64 镜像
 #
-# 产出物: t3-app_<hash>_<timestamp>.tar.gz
+# 产出物: t3-app_<hash>_<arch>_<timestamp>.tar.gz
 # 解压后目录结构:
 #   deploy_package/
 #   ├── build_info.sh          # 构建元信息（镜像名、hash 等）
@@ -51,11 +53,13 @@ check_requirements() {
 
 # 构建 Docker 镜像（runner + nginx 两个 target）
 build_docker_images() {
+    log_info "构建平台: ${platform}"
+
     log_info "Building app image (runner target)..."
-    docker build -t "${appImageTag}" --target runner .
+    docker build --platform "${platform}" -t "${appImageTag}" --target runner .
 
     log_info "Building nginx image (nginx target)..."
-    docker build -t "${nginxImageTag}" --target nginx .
+    docker build --platform "${platform}" -t "${nginxImageTag}" --target nginx .
 }
 
 # 计算文件 MD5
@@ -172,6 +176,21 @@ DEPLOYEOF
 main() {
     local start_time=$(date +%s)
 
+    # 解析参数
+    platform="linux/amd64"
+    local arch="amd64"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --arm64)  platform="linux/arm64"; arch="arm64"; shift ;;
+            --amd64)  platform="linux/amd64"; arch="amd64"; shift ;;
+            *)
+                log_error "未知参数: $1"
+                echo "用法: $0 [--arm64|--amd64]"
+                exit 1
+                ;;
+        esac
+    done
+
     # 检查依赖
     check_requirements
 
@@ -182,12 +201,13 @@ main() {
     imagePrefix='t3-app'
     appImageTag="${imagePrefix}:${gitHash}"
     nginxImageTag="${imagePrefix}-nginx:${gitHash}"
-    packageName="${imagePrefix}_${gitHash}_${dateTime}.tar.gz"
+    packageName="${imagePrefix}_${gitHash}_${arch}_${dateTime}.tar.gz"
 
     log_info "=========================================="
     log_info "构建信息:"
     log_info "  分支:       ${gitBranch}"
     log_info "  Hash:       ${gitHash}"
+    log_info "  平台:       ${platform}"
     log_info "  App 镜像:   ${appImageTag}"
     log_info "  Nginx 镜像: ${nginxImageTag}"
     log_info "=========================================="
@@ -198,7 +218,7 @@ main() {
 
     # 创建部署包
     log_info "Creating deployment package..."
-    tar -czf "${packageName}" deploy_package
+    tar --no-xattrs -czf "${packageName}" deploy_package
 
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
