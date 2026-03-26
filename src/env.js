@@ -43,6 +43,9 @@ export const env = createEnv({
 
     // 敏感数据加密（生产环境必填）
     ID_CARD_ENCRYPTION_KEY: z.string().optional(),
+
+    // 钉钉 LINK 网关
+    DINGTALK_LINK_GATEWAY: z.url(),
   },
 
   client: {
@@ -68,6 +71,7 @@ export const env = createEnv({
     LLM_API_KEY: stripQuotes(process.env.LLM_API_KEY),
     LLM_ALLOWED_HOSTS: stripQuotes(process.env.LLM_ALLOWED_HOSTS),
     ID_CARD_ENCRYPTION_KEY: stripQuotes(process.env.ID_CARD_ENCRYPTION_KEY),
+    DINGTALK_LINK_GATEWAY: stripQuotes(process.env.DINGTALK_LINK_GATEWAY),
     NEXT_PUBLIC_DEFAULT_MODULE: stripQuotes(
       process.env.NEXT_PUBLIC_DEFAULT_MODULE,
     ),
