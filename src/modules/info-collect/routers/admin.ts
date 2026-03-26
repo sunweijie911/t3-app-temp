@@ -30,22 +30,14 @@ function escapeLike(str: string): string {
 }
 
 function resolveWhere(input: z.infer<typeof filterInput>) {
+  const search = input.search?.trim();
   return and(
     input.status ? eq(infoCollectRecords.status, input.status) : undefined,
-    input.search?.trim()
+    search
       ? or(
-          ilike(
-            infoCollectRecords.name,
-            `%${escapeLike(input.search.trim())}%`,
-          ),
-          ilike(
-            infoCollectRecords.phone,
-            `%${escapeLike(input.search.trim())}%`,
-          ),
-          ilike(
-            infoCollectRecords.jobNumber,
-            `%${escapeLike(input.search.trim())}%`,
-          ),
+          ilike(infoCollectRecords.name, `%${escapeLike(search)}%`),
+          ilike(infoCollectRecords.phone, `%${escapeLike(search)}%`),
+          ilike(infoCollectRecords.jobNumber, `%${escapeLike(search)}%`),
         )
       : undefined,
   );
@@ -269,6 +261,13 @@ export const infoCollectAdminRouter = createTRPCRouter({
         .where(where)
         .orderBy(desc(infoCollectRecords.createdAt))
         .limit(10000);
+
+      console.log(
+        '[info-collect/export] admin=%s count=%d filters=%j',
+        ctx.session?.user?.name ?? 'unknown',
+        records.length,
+        input,
+      );
 
       return records.map((r) => ({
         ...r,

@@ -9,10 +9,15 @@ import { useEffect } from 'react';
 export function useVConsole() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get('debug') === 'true') {
-      void import('vconsole').then(({ default: VConsole }) => {
-        new VConsole();
-      });
-    }
+    if (params.get('debug') !== 'true') return;
+
+    let instance: { destroy: () => void } | undefined;
+    void import('vconsole').then(({ default: VConsole }) => {
+      instance = new VConsole();
+    });
+
+    return () => {
+      instance?.destroy();
+    };
   }, []);
 }

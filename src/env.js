@@ -45,7 +45,7 @@ export const env = createEnv({
     ID_CARD_ENCRYPTION_KEY: z.string().optional(),
 
     // 钉钉 LINK 网关
-    DINGTALK_LINK_GATEWAY: z.url(),
+    DINGTALK_LINK_GATEWAY: z.url().optional(),
   },
 
   client: {

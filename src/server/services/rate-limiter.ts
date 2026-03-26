@@ -62,8 +62,11 @@ export const drawLimiter = new RateLimiter(10, 60_000);
 // 文件上传：1 分钟 5 次
 export const uploadLimiter = new RateLimiter(5, 60_000);
 
-// 信息采集提交：同一手机号 1 分钟 3 次
+// 信息采集提交：同一用户 1 分钟 3 次
 export const infoCollectSubmitLimiter = new RateLimiter(3, 60_000);
+
+// 钉钉免登接口：单 IP 每分钟 30 次
+export const dingtalkUserInfoLimiter = new RateLimiter(30, 60_000);
 
 // 全局 IP 限流：单 IP 每分钟 60 次请求
 export const globalIpLimiter = new RateLimiter(60, 60_000);

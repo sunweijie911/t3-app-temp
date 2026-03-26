@@ -1,6 +1,5 @@
 'use client';
 
-import * as dd from 'dingtalk-jsapi';
 import { useEffect, useState } from 'react';
 import { useVConsole } from '@/modules/info-collect/components/use-vconsole';
 import { REVIEW_STATUS_LABELS } from '@/modules/info-collect/constants';
@@ -33,31 +32,35 @@ export default function InfoCollectQueryPage() {
 
   // 钉钉免登获取 authCode
   useEffect(() => {
-    if (dd.env.platform === 'notInDingTalk') {
-      setErrorMsg('请在钉钉客户端内打开此页面');
-      setStep('error');
-      return;
-    }
+    void (async () => {
+      const dd = await import('dingtalk-jsapi');
 
-    const corpId = new URLSearchParams(window.location.search).get('corpId');
-    if (!corpId) {
-      setErrorMsg('缺少 corpId 参数，请检查应用配置');
-      setStep('error');
-      return;
-    }
-
-    dd.ready(async () => {
-      try {
-        const info = await dd.runtime.permission.requestAuthCode({
-          corpId,
-        });
-        setAuthCode(info.code);
-        setStep('ready');
-      } catch {
-        setErrorMsg('钉钉免登失败，请重试');
+      if (dd.env.platform === 'notInDingTalk') {
+        setErrorMsg('请在钉钉客户端内打开此页面');
         setStep('error');
+        return;
       }
-    });
+
+      const corpId = new URLSearchParams(window.location.search).get('corpId');
+      if (!corpId) {
+        setErrorMsg('缺少 corpId 参数，请检查应用配置');
+        setStep('error');
+        return;
+      }
+
+      dd.ready(async () => {
+        try {
+          const info = await dd.runtime.permission.requestAuthCode({
+            corpId,
+          });
+          setAuthCode(info.code);
+          setStep('ready');
+        } catch {
+          setErrorMsg('钉钉免登失败，请重试');
+          setStep('error');
+        }
+      });
+    })();
   }, []);
 
   // 错误

@@ -1,4 +1,5 @@
 import { getDingtalkUserInfo } from '@/server/services/dingtalk';
+import { dingtalkUserInfoLimiter } from '@/server/services/rate-limiter';
 
 /**
  * @openapi
@@ -91,6 +92,18 @@ import { getDingtalkUserInfo } from '@/server/services/dingtalk';
  */
 export async function POST(request: Request) {
   try {
+    // IP 级速率限制
+    const ip =
+      request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
+      'unknown';
+    const rateCheck = dingtalkUserInfoLimiter.check(`dingtalk-user:${ip}`);
+    if (!rateCheck.allowed) {
+      return Response.json(
+        { success: false, errorMsg: '请求过于频繁，请稍后再试' },
+        { status: 429 },
+      );
+    }
+
     const body = (await request.json()) as { authCode?: string };
 
     if (!body.authCode) {

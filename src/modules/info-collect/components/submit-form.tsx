@@ -1,6 +1,5 @@
 'use client';
 
-import * as dd from 'dingtalk-jsapi';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { useVConsole } from '@/modules/info-collect/components/use-vconsole';
@@ -41,46 +40,50 @@ export default function InfoCollectPage() {
 
   // 钉钉免登获取 authCode → 调用后端获取用户信息
   useEffect(() => {
-    if (dd.env.platform === 'notInDingTalk') {
-      setErrorMsg('请在钉钉客户端内打开此页面');
-      setStep('error');
-      return;
-    }
+    void (async () => {
+      const dd = await import('dingtalk-jsapi');
 
-    const corpId = new URLSearchParams(window.location.search).get('corpId');
-    if (!corpId) {
-      setErrorMsg('缺少 corpId 参数，请检查应用配置');
-      setStep('error');
-      return;
-    }
-
-    dd.ready(async () => {
-      try {
-        const info = await dd.runtime.permission.requestAuthCode({
-          corpId,
-        });
-        const res = await fetch('/api/dingtalk/user-info', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ authCode: info.code }),
-        });
-        const data = (await res.json()) as {
-          success: boolean;
-          data?: DingtalkUserInfo;
-          errorMsg?: string;
-        };
-        if (!data.success || !data.data) {
-          setErrorMsg(data.errorMsg ?? '获取用户信息失败');
-          setStep('error');
-          return;
-        }
-        setUserInfo(data.data);
-        setStep('form');
-      } catch {
-        setErrorMsg('钉钉免登失败，请重试');
+      if (dd.env.platform === 'notInDingTalk') {
+        setErrorMsg('请在钉钉客户端内打开此页面');
         setStep('error');
+        return;
       }
-    });
+
+      const corpId = new URLSearchParams(window.location.search).get('corpId');
+      if (!corpId) {
+        setErrorMsg('缺少 corpId 参数，请检查应用配置');
+        setStep('error');
+        return;
+      }
+
+      dd.ready(async () => {
+        try {
+          const info = await dd.runtime.permission.requestAuthCode({
+            corpId,
+          });
+          const res = await fetch('/api/dingtalk/user-info', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ authCode: info.code }),
+          });
+          const data = (await res.json()) as {
+            success: boolean;
+            data?: DingtalkUserInfo;
+            errorMsg?: string;
+          };
+          if (!data.success || !data.data) {
+            setErrorMsg(data.errorMsg ?? '获取用户信息失败');
+            setStep('error');
+            return;
+          }
+          setUserInfo(data.data);
+          setStep('form');
+        } catch {
+          setErrorMsg('钉钉免登失败，请重试');
+          setStep('error');
+        }
+      });
+    })();
   }, []);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -98,6 +101,7 @@ export default function InfoCollectPage() {
       return;
     }
     try {
+      const dd = await import('dingtalk-jsapi');
       const info = await dd.runtime.permission.requestAuthCode({ corpId });
       submitMutation.mutate({ authCode: info.code, idCard });
     } catch {
