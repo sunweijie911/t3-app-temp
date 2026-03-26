@@ -16,7 +16,7 @@ export function Header() {
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
   const { data: session } = authClient.useSession();
-  const { data: isAdmin } = api.admin.isAdmin.useQuery(undefined, {
+  const { data: isAdmin } = api.sys.isAdmin.useQuery(undefined, {
     enabled: !!session?.user,
     staleTime: Infinity,
   });

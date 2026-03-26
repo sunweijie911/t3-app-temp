@@ -36,15 +36,15 @@ function ConfigItem({ configKey, label, type }: ConfigDef) {
   const [value, setValue] = useState<string | number>('');
   const utils = api.useUtils();
 
-  const { data, isLoading } = api.admin.getConfig.useQuery(
+  const { data, isLoading } = api.sys.getConfig.useQuery(
     { key: configKey },
     { retry: false },
   );
 
-  const setConfig = api.admin.setConfig.useMutation({
+  const setConfig = api.sys.setConfig.useMutation({
     onSuccess: () => {
       toast.success(`${label} 已保存`);
-      void utils.admin.getConfig.invalidate();
+      void utils.sys.getConfig.invalidate();
     },
     onError: (err) => toast.error(err.message),
   });

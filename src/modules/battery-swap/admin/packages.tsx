@@ -205,13 +205,13 @@ export default function AdminBatterySwapPage() {
 
   // ── Banner 配置 ──────────────────────────────────────
   const utils = api.useUtils();
-  const { data: bannerConfig } = api.admin.getConfig.useQuery({
+  const { data: bannerConfig } = api.sys.getConfig.useQuery({
     key: BANNER_CONFIG_KEY,
   });
-  const setConfigMutation = api.admin.setConfig.useMutation({
+  const setConfigMutation = api.sys.setConfig.useMutation({
     onSuccess: () => {
       toast.success('Banner 已更新');
-      void utils.admin.getConfig.invalidate({ key: BANNER_CONFIG_KEY });
+      void utils.sys.getConfig.invalidate({ key: BANNER_CONFIG_KEY });
     },
     onError: (err) => toast.error(err.message),
   });

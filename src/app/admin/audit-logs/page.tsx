@@ -15,7 +15,7 @@ import dayjs from 'dayjs';
 import { useState } from 'react';
 import { api, type RouterOutputs } from '@/trpc/react';
 
-type AuditLog = RouterOutputs['admin']['listAuditLogs']['logs'][number];
+type AuditLog = RouterOutputs['sys']['listAuditLogs']['logs'][number];
 
 type Filters = {
   page: number;
@@ -36,7 +36,7 @@ const defaultFilters: Filters = {
 export default function AuditLogsPage() {
   const [filters, setFilters] = useState<Filters>(defaultFilters);
 
-  const { data, isLoading } = api.admin.listAuditLogs.useQuery({
+  const { data, isLoading } = api.sys.listAuditLogs.useQuery({
     page: filters.page,
     pageSize: filters.pageSize,
     startDate: filters.startDate || undefined,

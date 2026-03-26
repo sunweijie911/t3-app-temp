@@ -46,3 +46,7 @@ yarn-error.log*
 # playwright
 playwright-report/
 test-results/
+
+# tar
+*.tar
+*.tar.gz

@@ -16,7 +16,7 @@ export function ModuleSwitcher({ currentModuleId }: Props) {
   const modules = getAllModules();
   const setContextModuleId = useSetDefaultModuleId();
 
-  const setConfig = api.admin.setConfig.useMutation({
+  const setConfig = api.sys.setConfig.useMutation({
     onSuccess: () => toast.success('默认首页模块已更新'),
     onError: (err) => toast.error(err.message),
   });
