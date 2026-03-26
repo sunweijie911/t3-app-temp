@@ -21,6 +21,7 @@ const handler = (req: NextRequest) =>
     req,
     router: appRouter,
     createContext: () => createContext(req),
+    allowMethodOverride: true,
     onError:
       env.NODE_ENV === 'development'
         ? ({ path, error }) => {
