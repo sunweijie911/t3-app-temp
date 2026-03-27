@@ -141,7 +141,6 @@ function toExcel(records: ExportRecord[]): Blob {
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, '中奖记录');
-  // cspell:ignore wbout openxmlformats officedocument spreadsheetml
   const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
   return new Blob([wbout], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

@@ -1,10 +1,6 @@
 'use client';
 
-import {
-  HolderOutlined,
-  PlusOutlined,
-  UploadOutlined,
-} from '@ant-design/icons';
+import { HolderOutlined, PlusOutlined } from '@ant-design/icons';
 import type { DragEndEvent } from '@dnd-kit/core';
 import {
   DndContext,
@@ -31,13 +27,13 @@ import {
   Space,
   Table,
   Tag,
-  Upload,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { MODULE_NAME } from '@/modules/sim-card/constants';
 import { formatSimCardPrice } from '@/modules/sim-card/schema';
+import { ImageUploader } from '@/shared/components/admin/image-uploader';
 import { api } from '@/trpc/react';
 
 // ── 拖拽行组件 ──────────────────────────────────────────
@@ -182,8 +178,6 @@ export default function AdminSimCardPackagesPage() {
   });
 
   const [editing, setEditing] = useState<EditingPackage | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [uploadingDetail, setUploadingDetail] = useState(false);
 
   // ── 拖拽排序 ──────────────────────────────────────
   const [localPackages, setLocalPackages] = useState<typeof packages>();
@@ -209,64 +203,6 @@ export default function AdminSimCardPackagesPage() {
     const reordered = arrayMove([...displayPackages], fromIdx, toIdx);
     setLocalPackages(reordered);
     reorderMutation.mutate({ ids: reordered.map((p) => p.id) });
-  }
-
-  // ── 图片上传 ──────────────────────────────────────
-
-  async function handleImageUpload(file: File) {
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error('图片大小不能超过 5MB');
-      return;
-    }
-    setUploading(true);
-    try {
-      const fd = new FormData();
-      fd.append('file', file);
-      const res = await fetch('/api/upload?module=sim-card', {
-        method: 'POST',
-        body: fd,
-      });
-      const data = (await res.json()) as { url?: string; error?: string };
-      if (!res.ok || !data.url) {
-        toast.error(data.error ?? '上传失败');
-        return;
-      }
-      setEditing((prev) =>
-        prev ? { ...prev, imageUrl: data.url ?? null } : prev,
-      );
-    } catch {
-      toast.error('上传失败，请重试');
-    } finally {
-      setUploading(false);
-    }
-  }
-
-  async function handleDetailImageUpload(file: File) {
-    if (file.size > 10 * 1024 * 1024) {
-      toast.error('详情长图大小不能超过 10MB');
-      return;
-    }
-    setUploadingDetail(true);
-    try {
-      const fd = new FormData();
-      fd.append('file', file);
-      const res = await fetch('/api/upload?module=sim-card', {
-        method: 'POST',
-        body: fd,
-      });
-      const data = (await res.json()) as { url?: string; error?: string };
-      if (!res.ok || !data.url) {
-        toast.error(data.error ?? '上传失败');
-        return;
-      }
-      setEditing((prev) =>
-        prev ? { ...prev, detailImageUrl: data.url ?? null } : prev,
-      );
-    } catch {
-      toast.error('上传失败，请重试');
-    } finally {
-      setUploadingDetail(false);
-    }
   }
 
   // ── 亮点标签管理 ──────────────────────────────────
@@ -499,6 +435,7 @@ export default function AdminSimCardPackagesPage() {
       </div>
 
       <Modal
+        centered
         footer={
           <Space>
             <Button onClick={() => setEditing(null)}>取消</Button>
@@ -513,6 +450,7 @@ export default function AdminSimCardPackagesPage() {
         }
         onCancel={() => setEditing(null)}
         open={!!editing}
+        styles={{ body: { maxHeight: '80vh', overflowY: 'auto' } }}
         title={editing?.id ? '编辑套餐' : '新建套餐'}
         width={700}
       >
@@ -520,67 +458,26 @@ export default function AdminSimCardPackagesPage() {
           <Form layout="vertical" style={{ marginTop: 16 }}>
             {/* 商品图片 */}
             <Form.Item label="商品图片">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {editing.imageUrl && (
-                  <Image
-                    alt="商品图片"
-                    src={editing.imageUrl}
-                    style={{ borderRadius: 8, objectFit: 'cover' }}
-                    width={200}
-                  />
-                )}
-                <Upload
-                  accept="image/*"
-                  beforeUpload={(file) => {
-                    void handleImageUpload(file);
-                    return false;
-                  }}
-                  showUploadList={false}
-                >
-                  <Button icon={<UploadOutlined />} loading={uploading}>
-                    {editing.imageUrl ? '更换图片' : '上传图片'}
-                  </Button>
-                </Upload>
-              </div>
+              <ImageUploader
+                height={140}
+                module="sim-card"
+                onChange={(url) => updateEditing({ imageUrl: url })}
+                value={editing.imageUrl}
+                width={140}
+              />
             </Form.Item>
 
             {/* 详情长图 */}
             <Form.Item label="详情长图">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {editing.detailImageUrl && (
-                  <div
-                    style={{ position: 'relative', display: 'inline-block' }}
-                  >
-                    <Image
-                      alt="详情长图"
-                      src={editing.detailImageUrl}
-                      style={{ borderRadius: 8, objectFit: 'cover' }}
-                      width={200}
-                    />
-                    <Button
-                      danger
-                      onClick={() => updateEditing({ detailImageUrl: null })}
-                      size="small"
-                      style={{ marginLeft: 8 }}
-                      type="text"
-                    >
-                      移除
-                    </Button>
-                  </div>
-                )}
-                <Upload
-                  accept="image/*"
-                  beforeUpload={(file) => {
-                    void handleDetailImageUpload(file);
-                    return false;
-                  }}
-                  showUploadList={false}
-                >
-                  <Button icon={<UploadOutlined />} loading={uploadingDetail}>
-                    {editing.detailImageUrl ? '更换详情图' : '上传详情图'}
-                  </Button>
-                </Upload>
-              </div>
+              <ImageUploader
+                height={140}
+                maxSize={10}
+                module="sim-card"
+                onChange={(url) => updateEditing({ detailImageUrl: url })}
+                placeholder="点击或拖拽上传详情图"
+                value={editing.detailImageUrl}
+                width={140}
+              />
             </Form.Item>
 
             {/* 卡片背景色 */}

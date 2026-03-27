@@ -47,7 +47,6 @@ function DashboardNav() {
       {mod.adminNavItems.map((item) => (
         <Col key={item.href} sm={8} xs={24}>
           <Link href={item.href} style={{ display: 'block', marginBottom: 16 }}>
-            {/* cspell:disable-next-line */}
             <Card hoverable>
               <h3 style={{ fontWeight: 600, marginBottom: 4, fontSize: 15 }}>
                 {item.label}

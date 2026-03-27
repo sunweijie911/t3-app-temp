@@ -1,5 +1,4 @@
 import { TRPCError } from '@trpc/server';
-// cspell:ignore ilike
 import {
   and,
   asc,

@@ -232,6 +232,7 @@ export default function AdminLuckyWheelPage() {
       </main>
 
       <Modal
+        centered
         footer={
           <Space>
             <Button onClick={() => setEditing(null)}>取消</Button>
@@ -246,6 +247,7 @@ export default function AdminLuckyWheelPage() {
         }
         onCancel={() => setEditing(null)}
         open={!!editing}
+        styles={{ body: { maxHeight: '80vh', overflowY: 'auto' } }}
         title={editing?.id ? '编辑活动' : '新建活动'}
         width={700}
       >

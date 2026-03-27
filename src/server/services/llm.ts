@@ -5,7 +5,6 @@ import { getConfigValue } from './config';
 
 const DEFAULT_BASE_URL = 'https://api.deepseek.com/v1';
 
-// cspell:ignore dashscope aliyuncs
 /** 内置默认白名单，可通过 LLM_ALLOWED_HOSTS 环境变量扩展或覆盖 */
 const DEFAULT_ALLOWED_HOSTS = [
   'api.deepseek.com',

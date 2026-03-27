@@ -1,17 +1,18 @@
 'use client';
 
 import {
-  AppstoreOutlined,
   FileTextOutlined,
   LeftOutlined,
+  LogoutOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Button, Layout, Menu, theme } from 'antd';
+import { Button, Dropdown, Layout, Menu, theme } from 'antd';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { env } from '@/env';
 import { authClient } from '@/lib/auth-client';
 import { getAllModules } from '@/modules/registry';
 import { ModuleSwitcher } from '@/shared/components/admin/module-switcher';
@@ -37,20 +38,12 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   const menuItems: MenuItem[] = useMemo(() => {
     const moduleItems: MenuItem[] = modules.map((mod) => ({
       key: `module-${mod.id}`,
-      icon: <AppstoreOutlined />,
+      icon: mod.icon,
       label: mod.name,
-      children: [
-        {
-          key: `/admin/${mod.id}`,
-          label: '概览',
-        },
-        ...mod.adminNavItems
-          .filter((nav) => nav.href !== `/admin/${mod.id}`)
-          .map((nav) => ({
-            key: nav.href,
-            label: nav.label,
-          })),
-      ],
+      children: mod.adminNavItems.map((nav) => ({
+        key: nav.href,
+        label: nav.label,
+      })),
     }));
 
     return [
@@ -146,7 +139,9 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             }}
           >
             {!collapsed && (
-              <span style={{ fontWeight: 600, fontSize: 16 }}>管理后台</span>
+              <span style={{ fontWeight: 600, fontSize: 16 }}>
+                {env.NEXT_PUBLIC_SITE_NAME || '管理后台'}
+              </span>
             )}
             <Button
               icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
@@ -216,9 +211,27 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             返回前台
           </Link>
           {session?.user && (
-            <span style={{ color: '#666', fontSize: 14 }}>
-              {session.user.email ?? session.user.name}
-            </span>
+            <Dropdown
+              menu={{
+                items: [
+                  {
+                    key: 'logout',
+                    icon: <LogoutOutlined />,
+                    label: '退出登录',
+                    onClick: () => {
+                      void authClient.signOut().then(() => {
+                        router.push('/signin');
+                      });
+                    },
+                  },
+                ],
+              }}
+              trigger={['hover']}
+            >
+              <span style={{ color: '#666', fontSize: 14, cursor: 'pointer' }}>
+                {session.user.email ?? session.user.name}
+              </span>
+            </Dropdown>
           )}
         </Header>
 

@@ -1,3 +1,12 @@
+import {
+  ExperimentOutlined,
+  GiftOutlined,
+  PhoneOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons';
+import type { ReactNode } from 'react';
+import { createElement } from 'react';
+import { env } from '@/env';
 import { MODULE_NAME as BATTERY_SWAP_NAME } from '@/modules/battery-swap/constants';
 import { MODULE_NAME as LUCKY_WHEEL_NAME } from '@/modules/lucky-wheel/constants';
 import { MODULE_NAME as SIM_CARD_NAME } from '@/modules/sim-card/constants';
@@ -34,6 +43,8 @@ export interface ModuleDefinition {
   name: string;
   description: string;
   basePath: string;
+  /** 后台 Sidebar 菜单图标 */
+  icon: ReactNode;
   theme: ModuleTheme;
   navLinks: NavLink[];
   adminNavItems: AdminNavItem[];
@@ -48,6 +59,7 @@ const modules: Record<string, ModuleDefinition> = {
     name: LUCKY_WHEEL_NAME,
     description: '转盘抽奖活动平台',
     basePath: '/lucky-wheel',
+    icon: createElement(GiftOutlined),
     theme: {
       brand: 'text-orange-600',
       active: 'text-orange-600',
@@ -61,6 +73,11 @@ const modules: Record<string, ModuleDefinition> = {
     ],
     adminNavItems: [
       {
+        label: '活动管理',
+        href: '/admin/lucky-wheel',
+        description: '管理转盘抽奖活动',
+      },
+      {
         label: '中奖记录',
         href: '/admin/lucky-wheel/records',
         description: '查看中奖记录，更新发货状态',
@@ -72,6 +89,7 @@ const modules: Record<string, ModuleDefinition> = {
     name: SIM_CARD_NAME,
     description: `${SIM_CARD_NAME}展示与办理平台`,
     basePath: '/sim-card',
+    icon: createElement(PhoneOutlined),
     theme: {
       brand: 'text-blue-600',
       active: 'text-blue-600',
@@ -103,6 +121,7 @@ const modules: Record<string, ModuleDefinition> = {
     name: BATTERY_SWAP_NAME,
     description: `${BATTERY_SWAP_NAME}展示与购买平台`,
     basePath: '/battery-swap',
+    icon: createElement(ThunderboltOutlined),
     theme: {
       brand: 'text-green-600',
       active: 'text-green-600',
@@ -124,6 +143,7 @@ const modules: Record<string, ModuleDefinition> = {
     name: SOULSCOPE_NAME,
     description: 'AI 人格测试平台',
     basePath: '/soulscope',
+    icon: createElement(ExperimentOutlined),
     theme: {
       brand: 'text-purple-600',
       active: 'text-purple-600',
@@ -155,6 +175,36 @@ const modules: Record<string, ModuleDefinition> = {
   },
 };
 
+/** 解析 NEXT_PUBLIC_MODULE_NAMES，返回 moduleId → 自定义名称 的映射 */
+function getModuleNameOverrides(): Record<string, string> {
+  const raw = env.NEXT_PUBLIC_MODULE_NAMES;
+  if (!raw) return {};
+  const result: Record<string, string> = {};
+  for (const pair of raw.split(',')) {
+    const [id, name] = pair.split(':').map((s) => s.trim());
+    if (id && name) result[id] = name;
+  }
+  return result;
+}
+
+/** 解析 NEXT_PUBLIC_ENABLED_MODULES，返回 null 表示全部启用 */
+function getEnabledModuleIds(): string[] | null {
+  const raw = env.NEXT_PUBLIC_ENABLED_MODULES;
+  if (!raw) return null;
+  const ids = raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return ids.length > 0 ? ids : null;
+}
+
+/** 应用名称覆盖 */
+function applyNameOverride(mod: ModuleDefinition): ModuleDefinition {
+  const overrides = getModuleNameOverrides();
+  const name = overrides[mod.id];
+  return name ? { ...mod, name } : mod;
+}
+
 export function getModule(id: string): ModuleDefinition {
   const mod = modules[id];
   if (!mod) {
@@ -162,11 +212,21 @@ export function getModule(id: string): ModuleDefinition {
       `Unknown module: ${id}. Available: ${Object.keys(modules).join(', ')}`,
     );
   }
-  return mod;
+  const enabled = getEnabledModuleIds();
+  if (enabled && !enabled.includes(id)) {
+    throw new Error(
+      `Module "${id}" is not enabled. Enabled: ${enabled.join(', ')}`,
+    );
+  }
+  return applyNameOverride(mod);
 }
 
 export function getAllModules(): ModuleDefinition[] {
-  return Object.values(modules);
+  const enabled = getEnabledModuleIds();
+  const list = enabled
+    ? enabled.filter((id) => modules[id]).map((id) => modules[id]!)
+    : Object.values(modules);
+  return list.map(applyNameOverride);
 }
 
 /**
@@ -178,17 +238,19 @@ export function getModuleByPathname(
   pathname: string,
   fallbackId?: string,
 ): ModuleDefinition {
-  for (const mod of Object.values(modules)) {
+  const enabledModules = getAllModules();
+  for (const mod of enabledModules) {
     if (
       pathname.startsWith(mod.basePath) ||
       pathname.startsWith(`/admin/${mod.id}`)
     )
       return mod;
   }
-  if (fallbackId && modules[fallbackId]) {
-    return modules[fallbackId];
+  if (fallbackId) {
+    const fallback = enabledModules.find((m) => m.id === fallbackId);
+    if (fallback) return fallback;
   }
-  const first = Object.values(modules)[0];
-  if (!first) throw new Error('No modules registered');
+  const first = enabledModules[0];
+  if (!first) throw new Error('No modules enabled');
   return first;
 }

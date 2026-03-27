@@ -4,7 +4,6 @@ import {
   DeleteOutlined,
   HolderOutlined,
   PlusOutlined,
-  UploadOutlined,
 } from '@ant-design/icons';
 import type { DragEndEvent } from '@dnd-kit/core';
 import {
@@ -33,7 +32,6 @@ import {
   Space,
   Table,
   Tag,
-  Upload,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { Dayjs } from 'dayjs';
@@ -46,6 +44,7 @@ import {
 } from '@/modules/battery-swap/constants';
 import type { PackageSpec } from '@/modules/battery-swap/schema';
 import { formatPrice } from '@/modules/battery-swap/schema';
+import { ImageUploader } from '@/shared/components/admin/image-uploader';
 import { api } from '@/trpc/react';
 
 // ── 拖拽行组件 ──────────────────────────────────────────
@@ -215,41 +214,7 @@ export default function AdminBatterySwapPage() {
     },
     onError: (err) => toast.error(err.message),
   });
-  const [uploadingBanner, setUploadingBanner] = useState(false);
-
-  async function handleBannerUpload(file: File) {
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error('Banner 图片不能超过 5MB');
-      return;
-    }
-    setUploadingBanner(true);
-    try {
-      const fd = new FormData();
-      fd.append('file', file);
-      const res = await fetch('/api/upload?module=battery-swap', {
-        method: 'POST',
-        body: fd,
-      });
-      const data = (await res.json()) as { url?: string; error?: string };
-      if (!res.ok || !data.url) {
-        toast.error(data.error ?? '上传失败');
-        return;
-      }
-      setConfigMutation.mutate({
-        key: BANNER_CONFIG_KEY,
-        value: data.url,
-        description: `${MODULE_NAME}页面顶部 Banner 图`,
-      });
-    } catch {
-      toast.error('上传失败，请重试');
-    } finally {
-      setUploadingBanner(false);
-    }
-  }
-
   const [editing, setEditing] = useState<EditingPackage | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [uploadingDetail, setUploadingDetail] = useState(false);
 
   // ── 拖拽排序（乐观更新，先更新 UI 再提交服务器）──────
   const [localPackages, setLocalPackages] = useState<typeof packages>();
@@ -276,66 +241,6 @@ export default function AdminBatterySwapPage() {
     const reordered = arrayMove([...displayPackages], fromIdx, toIdx);
     setLocalPackages(reordered);
     reorderMutation.mutate({ ids: reordered.map((p) => p.id) });
-  }
-
-  // ── 图片上传 ──────────────────────────────────────────
-
-  async function handleImageUpload(file: File) {
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error('图片大小不能超过 5MB');
-      return;
-    }
-    setUploading(true);
-    try {
-      const fd = new FormData();
-      fd.append('file', file);
-      const res = await fetch('/api/upload?module=battery-swap', {
-        method: 'POST',
-        body: fd,
-      });
-      const data = (await res.json()) as { url?: string; error?: string };
-      if (!res.ok || !data.url) {
-        toast.error(data.error ?? '上传失败');
-        return;
-      }
-      setEditing((prev) =>
-        prev ? { ...prev, imageUrl: data.url ?? null } : prev,
-      );
-    } catch {
-      toast.error('上传失败，请重试');
-    } finally {
-      setUploading(false);
-    }
-  }
-
-  // ── 详情长图上传 ──────────────────────────────────────
-
-  async function handleDetailImageUpload(file: File) {
-    if (file.size > 10 * 1024 * 1024) {
-      toast.error('详情长图大小不能超过 10MB');
-      return;
-    }
-    setUploadingDetail(true);
-    try {
-      const fd = new FormData();
-      fd.append('file', file);
-      const res = await fetch('/api/upload?module=battery-swap', {
-        method: 'POST',
-        body: fd,
-      });
-      const data = (await res.json()) as { url?: string; error?: string };
-      if (!res.ok || !data.url) {
-        toast.error(data.error ?? '上传失败');
-        return;
-      }
-      setEditing((prev) =>
-        prev ? { ...prev, detailImageUrl: data.url ?? null } : prev,
-      );
-    } catch {
-      toast.error('上传失败，请重试');
-    } finally {
-      setUploadingDetail(false);
-    }
   }
 
   // ── 保存 ──────────────────────────────────────────────
@@ -593,52 +498,23 @@ export default function AdminBatterySwapPage() {
           {/* Banner 配置 */}
           <div className="mb-6 rounded-xl bg-white p-4">
             <h2 className="mb-3 font-semibold text-gray-700">页面 Banner</h2>
-            <div className="flex items-center gap-4">
-              {bannerConfig?.value && typeof bannerConfig.value === 'string' ? (
-                <Image
-                  alt="Banner"
-                  height={80}
-                  src={bannerConfig.value}
-                  style={{ borderRadius: 8, objectFit: 'cover' }}
-                  width={240}
-                />
-              ) : (
-                <div className="flex h-20 w-60 items-center justify-center rounded-lg border border-gray-300 border-dashed text-gray-400 text-sm">
-                  未设置 Banner
-                </div>
-              )}
-              <Space>
-                <Upload
-                  accept="image/*"
-                  beforeUpload={(file) => {
-                    void handleBannerUpload(file);
-                    return false;
-                  }}
-                  showUploadList={false}
-                >
-                  <Button icon={<UploadOutlined />} loading={uploadingBanner}>
-                    {bannerConfig?.value ? '更换 Banner' : '上传 Banner'}
-                  </Button>
-                </Upload>
-                {typeof bannerConfig?.value === 'string' &&
-                  bannerConfig.value && (
-                    <Popconfirm
-                      onConfirm={() =>
-                        setConfigMutation.mutate({
-                          key: BANNER_CONFIG_KEY,
-                          value: '',
-                          description: `${MODULE_NAME}页面顶部 Banner 图`,
-                        })
-                      }
-                      title="确定删除 Banner 吗？"
-                    >
-                      <Button danger icon={<DeleteOutlined />}>
-                        删除
-                      </Button>
-                    </Popconfirm>
-                  )}
-              </Space>
-            </div>
+            <ImageUploader
+              height={80}
+              module="battery-swap"
+              onChange={(url) =>
+                setConfigMutation.mutate({
+                  key: BANNER_CONFIG_KEY,
+                  value: url ?? '',
+                  description: `${MODULE_NAME}页面顶部 Banner 图`,
+                })
+              }
+              value={
+                typeof bannerConfig?.value === 'string'
+                  ? bannerConfig.value
+                  : null
+              }
+              width={240}
+            />
           </div>
 
           <DndContext
@@ -665,6 +541,7 @@ export default function AdminBatterySwapPage() {
       </main>
 
       <Modal
+        centered
         footer={
           <Space>
             <Button onClick={() => setEditing(null)}>取消</Button>
@@ -679,6 +556,7 @@ export default function AdminBatterySwapPage() {
         }
         onCancel={() => setEditing(null)}
         open={!!editing}
+        styles={{ body: { maxHeight: '80vh', overflowY: 'auto' } }}
         title={editing?.id ? '编辑套餐' : '新建套餐'}
         width={700}
       >
@@ -686,67 +564,26 @@ export default function AdminBatterySwapPage() {
           <Form layout="vertical" style={{ marginTop: 16 }}>
             {/* 商品图片 */}
             <Form.Item label="商品实物图">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {editing.imageUrl && (
-                  <Image
-                    alt="商品图片"
-                    src={editing.imageUrl}
-                    style={{ borderRadius: 8, objectFit: 'cover' }}
-                    width={200}
-                  />
-                )}
-                <Upload
-                  accept="image/*"
-                  beforeUpload={(file) => {
-                    void handleImageUpload(file);
-                    return false;
-                  }}
-                  showUploadList={false}
-                >
-                  <Button icon={<UploadOutlined />} loading={uploading}>
-                    {editing.imageUrl ? '更换图片' : '上传图片'}
-                  </Button>
-                </Upload>
-              </div>
+              <ImageUploader
+                height={140}
+                module="battery-swap"
+                onChange={(url) => updateEditing({ imageUrl: url })}
+                value={editing.imageUrl}
+                width={140}
+              />
             </Form.Item>
 
             {/* 详情长图 */}
             <Form.Item label="详情长图（前台可查看）">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {editing.detailImageUrl && (
-                  <div
-                    style={{ position: 'relative', display: 'inline-block' }}
-                  >
-                    <Image
-                      alt="详情长图"
-                      src={editing.detailImageUrl}
-                      style={{ borderRadius: 8, objectFit: 'cover' }}
-                      width={200}
-                    />
-                    <Button
-                      danger
-                      onClick={() => updateEditing({ detailImageUrl: null })}
-                      size="small"
-                      style={{ marginLeft: 8 }}
-                      type="text"
-                    >
-                      移除
-                    </Button>
-                  </div>
-                )}
-                <Upload
-                  accept="image/*"
-                  beforeUpload={(file) => {
-                    void handleDetailImageUpload(file);
-                    return false;
-                  }}
-                  showUploadList={false}
-                >
-                  <Button icon={<UploadOutlined />} loading={uploadingDetail}>
-                    {editing.detailImageUrl ? '更换详情图' : '上传详情图'}
-                  </Button>
-                </Upload>
-              </div>
+              <ImageUploader
+                height={140}
+                maxSize={10}
+                module="battery-swap"
+                onChange={(url) => updateEditing({ detailImageUrl: url })}
+                placeholder="点击或拖拽上传详情图"
+                value={editing.detailImageUrl}
+                width={140}
+              />
             </Form.Item>
 
             {/* 卡片背景色 */}

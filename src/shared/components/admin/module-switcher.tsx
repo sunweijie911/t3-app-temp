@@ -52,7 +52,7 @@ export function ModuleSwitcher({ currentModuleId }: Props) {
         loading={setConfig.isPending}
         onChange={handleChange}
         options={modules.map((m) => ({ value: m.id, label: m.name }))}
-        style={{ width: 160 }}
+        style={{ width: 120 }}
         value={currentModuleId}
       />
     </div>

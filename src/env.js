@@ -58,8 +58,14 @@ export const env = createEnv({
   },
 
   client: {
+    // 站点名称（登录页品牌名、后台标题）
+    NEXT_PUBLIC_SITE_NAME: z.string().default('跳跳商城'),
+    // 模块显示名称覆盖，格式: "moduleId:名称,moduleId:名称"
+    NEXT_PUBLIC_MODULE_NAMES: z.string().default(''),
     // 默认展示模块
     NEXT_PUBLIC_DEFAULT_MODULE: z.string().default('lucky-wheel'),
+    // 启用的模块列表，逗号分隔，留空展示全部
+    NEXT_PUBLIC_ENABLED_MODULES: z.string().default(''),
     // 登录方式（单选）: email-password | phone-otp | email-otp
     NEXT_PUBLIC_AUTH_METHOD: z.string().default('email-otp'),
   },
@@ -96,8 +102,13 @@ export const env = createEnv({
     ),
     RATE_LIMIT_GLOBAL_IP: stripQuotes(process.env.RATE_LIMIT_GLOBAL_IP),
     RATE_LIMIT_AUTH_IP: stripQuotes(process.env.RATE_LIMIT_AUTH_IP),
+    NEXT_PUBLIC_SITE_NAME: stripQuotes(process.env.NEXT_PUBLIC_SITE_NAME),
+    NEXT_PUBLIC_MODULE_NAMES: stripQuotes(process.env.NEXT_PUBLIC_MODULE_NAMES),
     NEXT_PUBLIC_DEFAULT_MODULE: stripQuotes(
       process.env.NEXT_PUBLIC_DEFAULT_MODULE,
+    ),
+    NEXT_PUBLIC_ENABLED_MODULES: stripQuotes(
+      process.env.NEXT_PUBLIC_ENABLED_MODULES,
     ),
     NEXT_PUBLIC_AUTH_METHOD: stripQuotes(process.env.NEXT_PUBLIC_AUTH_METHOD),
   },

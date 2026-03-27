@@ -365,11 +365,13 @@ export default function AdminChancesPage({ params }: Props) {
 
       {/* 新增/编辑 Modal */}
       <Modal
+        centered
         confirmLoading={upsertMutation.isPending}
         okText="保存"
         onCancel={() => setEditing(null)}
         onOk={handleModalOk}
         open={!!editing}
+        styles={{ body: { maxHeight: '80vh', overflowY: 'auto' } }}
         title={editing?.id ? '编辑配置' : '新增配置'}
       >
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>

@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { env } from '@/env';
 import { authClient } from '@/lib/auth-client';
 import { authMethod } from '@/lib/auth-methods';
 import { getModuleByPathname } from '@/modules/registry';
@@ -591,6 +592,7 @@ function SignInForm() {
 
   const defaultModuleId = useDefaultModuleId();
   const mod = getModuleByPathname(callbackUrl, defaultModuleId);
+  const siteName = env.NEXT_PUBLIC_SITE_NAME || mod.name;
 
   const handleSuccess = () => {
     router.push(callbackUrl);
@@ -602,7 +604,7 @@ function SignInForm() {
       <div className="w-full max-w-md">
         <div className="mb-8 text-center">
           <Link className={`font-bold text-3xl ${mod.theme.brand}`} href="/">
-            {mod.name}
+            {siteName}
           </Link>
         </div>
 

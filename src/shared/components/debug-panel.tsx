@@ -4,7 +4,6 @@ import type { Eruda } from 'eruda';
 import { useSearchParams } from 'next/navigation';
 import { useEffect, useRef } from 'react';
 
-// cspell:ignore eruda
 // 模块兼容：webpack 可能把 eruda 放在 default 上，也可能直接是模块本身
 function loadEruda(): Promise<Eruda> {
   return import('eruda').then(

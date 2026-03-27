@@ -1,11 +1,10 @@
 'use client';
 
-import { DeleteOutlined, UploadOutlined } from '@ant-design/icons';
-import { Button, Checkbox, Image, Popconfirm, Space, Upload } from 'antd';
-import { useState } from 'react';
+import { Checkbox } from 'antd';
 import { toast } from 'sonner';
 
 import { MODULE_NAME, USER_INFO_FIELDS } from '@/modules/sim-card/constants';
+import { ImageUploader } from '@/shared/components/admin/image-uploader';
 import { api } from '@/trpc/react';
 
 export default function AdminSimCardConfigPage() {
@@ -17,36 +16,6 @@ export default function AdminSimCardConfigPage() {
     },
     onError: (err) => toast.error(err.message),
   });
-
-  const [uploadingBanner, setUploadingBanner] = useState(false);
-
-  // ── Banner 上传 ──────────────────────────────────
-
-  async function handleBannerUpload(file: File) {
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error('Banner 图片不能超过 5MB');
-      return;
-    }
-    setUploadingBanner(true);
-    try {
-      const fd = new FormData();
-      fd.append('file', file);
-      const res = await fetch('/api/upload?module=sim-card', {
-        method: 'POST',
-        body: fd,
-      });
-      const data = (await res.json()) as { url?: string; error?: string };
-      if (!res.ok || !data.url) {
-        toast.error(data.error ?? '上传失败');
-        return;
-      }
-      saveMutation.mutate({ bannerUrl: data.url });
-    } catch {
-      toast.error('上传失败，请重试');
-    } finally {
-      setUploadingBanner(false);
-    }
-  }
 
   // ── 字段勾选 ──────────────────────────────────────
 
@@ -66,45 +35,13 @@ export default function AdminSimCardConfigPage() {
           <h2 className="mb-4 font-semibold text-gray-700 text-lg">
             页面 Banner
           </h2>
-          <div className="flex items-center gap-4">
-            {config?.bannerUrl ? (
-              <Image
-                alt="Banner"
-                height={80}
-                src={config.bannerUrl}
-                style={{ borderRadius: 8, objectFit: 'cover' }}
-                width={240}
-              />
-            ) : (
-              <div className="flex h-20 w-60 items-center justify-center rounded-lg border border-gray-300 border-dashed text-gray-400 text-sm">
-                未设置 Banner
-              </div>
-            )}
-            <Space>
-              <Upload
-                accept="image/*"
-                beforeUpload={(file) => {
-                  void handleBannerUpload(file);
-                  return false;
-                }}
-                showUploadList={false}
-              >
-                <Button icon={<UploadOutlined />} loading={uploadingBanner}>
-                  {config?.bannerUrl ? '更换 Banner' : '上传 Banner'}
-                </Button>
-              </Upload>
-              {config?.bannerUrl && (
-                <Popconfirm
-                  onConfirm={() => saveMutation.mutate({ bannerUrl: '' })}
-                  title="确定删除 Banner 吗？"
-                >
-                  <Button danger icon={<DeleteOutlined />}>
-                    删除
-                  </Button>
-                </Popconfirm>
-              )}
-            </Space>
-          </div>
+          <ImageUploader
+            height={80}
+            module="sim-card"
+            onChange={(url) => saveMutation.mutate({ bannerUrl: url ?? '' })}
+            value={config?.bannerUrl ?? null}
+            width={240}
+          />
         </div>
 
         {/* 用户信息字段配置 */}

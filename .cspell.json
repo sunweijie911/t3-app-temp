@@ -106,7 +106,13 @@
     "alipays",
     "weixin",
     "Appstore",
-    "Sider"
+    "Sider",
+    "dashscope",
+    "aliyuncs",
+    "wbout",
+    "openxmlformats",
+    "officedocument",
+    "spreadsheetml"
   ],
   "patterns": [
     {

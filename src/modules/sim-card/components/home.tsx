@@ -112,8 +112,18 @@ export default function SimCardHome() {
       });
     }
 
-    // 跳转
-    openLink(link);
+    // 跳转（将用户姓名 Base64 编码后带入三方链接）
+    try {
+      const url = new URL(link);
+      if (userInfo?.name) {
+        const bytes = new TextEncoder().encode(userInfo.name);
+        url.searchParams.set('n', btoa(String.fromCharCode(...bytes)));
+      }
+      openLink(url.toString());
+    } catch {
+      // link 不是合法的绝对 URL，直接跳转
+      openLink(link);
+    }
   }
 
   // 获取用户信息字段映射
