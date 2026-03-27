@@ -664,7 +664,6 @@ export const luckyWheelAdminRouter = createTRPCRouter({
           wheelDrawRecords,
           eq(wheelDrawRecords.activityId, wheelActivities.id),
         )
-        .where(eq(wheelActivities.isActive, true))
         .groupBy(wheelActivities.id, wheelActivities.name)
         .orderBy(asc(wheelActivities.sortOrder)),
       // 每个奖品的库存 + 发放数

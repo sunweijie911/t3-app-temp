@@ -52,7 +52,6 @@ function detectImageType(buffer: Buffer): { ext: string; mime: string } | null {
 export async function POST(request: Request) {
   try {
     // 优先使用 session userId 限流；未登录时降级为 IP 限流
-    // 信息采集表单是公开页面，不要求登录
     const session = await auth.api.getSession({ headers: request.headers });
     const rateLimitKey = session?.user?.id ?? `ip:${getClientIp(request)}`;
 
@@ -91,14 +90,19 @@ export async function POST(request: Request) {
       );
     }
 
-    const ALLOWED_MODULES = ['info-collect', 'battery-swap'] as const;
+    const ALLOWED_MODULES = [
+      'battery-swap',
+      'sim-card',
+      'lucky-wheel',
+      'soulscope',
+    ] as const;
     const url = new URL(request.url);
-    const moduleParam = url.searchParams.get('module') ?? 'info-collect';
+    const moduleParam = url.searchParams.get('module') ?? 'battery-swap';
     const module = ALLOWED_MODULES.includes(
       moduleParam as (typeof ALLOWED_MODULES)[number],
     )
       ? moduleParam
-      : 'info-collect';
+      : 'battery-swap';
 
     const fileName = `${Date.now()}-${nanoid()}.${detected.ext}`;
     const uploadDir = join(process.cwd(), 'public', 'uploads', module);

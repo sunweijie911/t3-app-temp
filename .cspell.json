@@ -1,16 +1,38 @@
 {
+  "$schema": "https://raw.githubusercontent.com/streetsidesoftware/cspell/main/cspell.schema.json",
   "version": "0.2",
   "language": "en",
-  "ignorePaths": [
-    "node_modules",
-    "pnpm-lock.yaml",
-    ".git",
-    "dist",
-    ".next",
-    "coverage",
-    "playwright-report"
+  "minWordLength": 3,
+  "files": [
+    "packages/*/src/**/*.{js,ts,jsx,tsx,vue}",
+    "apps/*/src/**/*.{js,ts,jsx,tsx,vue}",
+    "internal/*/src/**/*.{js,ts,jsx,tsx,vue}"
+  ],
+  "dictionaries": [
+    "typescript",
+    "node",
+    "npm",
+    "html",
+    "css",
+    "fonts",
+    "softwareTerms"
   ],
   "words": [
+    "rsc",
+    "fmt",
+    "vnd",
+    "wch",
+    "aoa_to_sheet",
+    "lte",
+    "CNY",
+    "HMR",
+    "oli",
+    "uli",
+    "ilike",
+    "otp",
+    "LLM",
+    "dnd",
+    "idx",
     "Turbopack",
     "hoverable",
     "aliyun",
@@ -83,5 +105,56 @@
     "ciphertext",
     "alipays",
     "weixin"
+  ],
+  "patterns": [
+    {
+      "name": "jwt-token",
+      "pattern": "/eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+/g"
+    },
+    {
+      "name": "css-var",
+      "pattern": "/--[a-zA-Z][a-zA-Z0-9-]*/g"
+    },
+    {
+      "name": "import-path",
+      "pattern": "/@\\/[a-zA-Z0-9/-]+/g"
+    }
+  ],
+  "ignoreRegExpList": ["jwt-token", "css-var", "import-path"],
+  "ignorePaths": [
+    "**/*/node_modules",
+    "**/*/playwright-report",
+    "**/*/coverage",
+    "**/*/dist",
+    "**/*/build",
+    "**/*/public",
+    "**/*/__test__",
+    "**/*/docs",
+    ".next",
+    ".husky/**/*",
+    ".vscode/**/*",
+    "scripts/**/*",
+    "typings/**/*",
+    ".browserslistrc",
+    ".editorconfig",
+    ".gitignore",
+    "commitlint.config.ts",
+    "pnpm-lock.yaml",
+    "README.md",
+    "tsconfig.json",
+    "**/*/tsconfig.tsbuildinfo",
+    "**/*/tsconfig.stories.tsbuildinfo",
+    "**/*.svg",
+    "**/*.sh",
+    "**/*.conf",
+    "**/*.png",
+    "**/*.json",
+    "**/*.lock",
+    "**/*.ttf",
+    "**/*.otf",
+    "**/*.woff",
+    "**/*.ogg",
+    "**/*.yml",
+    "**/*.scss"
   ]
 }

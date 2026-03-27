@@ -1,6 +1,6 @@
 import { MODULE_NAME as BATTERY_SWAP_NAME } from '@/modules/battery-swap/constants';
-import { MODULE_NAME as INFO_COLLECT_NAME } from '@/modules/info-collect/constants';
 import { MODULE_NAME as LUCKY_WHEEL_NAME } from '@/modules/lucky-wheel/constants';
+import { MODULE_NAME as SIM_CARD_NAME } from '@/modules/sim-card/constants';
 import { MODULE_NAME as SOULSCOPE_NAME } from '@/modules/soulscope/constants';
 
 export interface AdminNavItem {
@@ -67,11 +67,11 @@ const modules: Record<string, ModuleDefinition> = {
       },
     ],
   },
-  'info-collect': {
-    id: 'info-collect',
-    name: INFO_COLLECT_NAME,
-    description: `在职${INFO_COLLECT_NAME}平台`,
-    basePath: '/info-collect',
+  'sim-card': {
+    id: 'sim-card',
+    name: SIM_CARD_NAME,
+    description: `${SIM_CARD_NAME}展示与办理平台`,
+    basePath: '/sim-card',
     theme: {
       brand: 'text-blue-600',
       active: 'text-blue-600',
@@ -79,20 +79,22 @@ const modules: Record<string, ModuleDefinition> = {
       link: 'text-blue-600 hover:text-blue-700',
       cardHover: 'group-hover:text-blue-600',
     },
-    navLinks: [
-      { label: INFO_COLLECT_NAME, href: '/info-collect' },
-      { label: '进度查询', href: '/info-collect/query' },
-    ],
+    navLinks: [{ label: SIM_CARD_NAME, href: '/sim-card' }],
     adminNavItems: [
       {
-        label: '采集记录',
-        href: '/admin/info-collect',
-        description: '查看采集记录，审核与发货管理',
+        label: '套餐管理',
+        href: '/admin/sim-card',
+        description: '管理电话卡套餐内容与上下架',
       },
       {
-        label: '采集配置',
-        href: '/admin/info-collect/config',
-        description: '配置 banner 和采集字段',
+        label: '页面配置',
+        href: '/admin/sim-card/config',
+        description: '配置 Banner 和用户信息展示字段',
+      },
+      {
+        label: '办理数据',
+        href: '/admin/sim-card/analytics',
+        description: '查看用户点击办理的埋点数据',
       },
     ],
   },

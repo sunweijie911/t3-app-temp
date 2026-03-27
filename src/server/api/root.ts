@@ -1,6 +1,6 @@
 import { batterySwapRouter } from '@/modules/battery-swap/routers';
-import { infoCollectRouter } from '@/modules/info-collect/routers';
 import { luckyWheelRouter } from '@/modules/lucky-wheel/routers';
+import { simCardRouter } from '@/modules/sim-card/routers';
 import { soulscopeRouter } from '@/modules/soulscope/routers';
 import { adminRouter } from '@/server/api/routers/admin';
 import { createCallerFactory, createTRPCRouter } from '@/server/api/trpc';
@@ -14,7 +14,7 @@ export const appRouter = createTRPCRouter({
   sys: adminRouter,
   soulscope: soulscopeRouter,
   luckyWheel: luckyWheelRouter,
-  infoCollect: infoCollectRouter,
+  simCard: simCardRouter,
   batterySwap: batterySwapRouter,
 });
 

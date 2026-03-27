@@ -13,8 +13,10 @@ type OrderItem =
   RouterOutputs['soulscope']['admin']['allOrders']['items'][number];
 
 const STATUS_TAG: Record<string, { color: string; label: string }> = {
-  paid: { color: 'green', label: '已付款' },
   pending: { color: 'orange', label: '待付款' },
+  paid: { color: 'green', label: '已付款' },
+  failed: { color: 'red', label: '支付失败' },
+  refunded: { color: 'blue', label: '已退款' },
 };
 
 const columns: TableProps<OrderItem>['columns'] = [
