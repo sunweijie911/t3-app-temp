@@ -50,23 +50,93 @@ export class RateLimiter {
   }
 }
 
-// 报告生成：1 分钟 3 次
-export const reportGenerateLimiter = new RateLimiter(3, 60_000);
+/**
+ * 解析 "次数/窗口毫秒" 格式的限流配置，如 "10/60000"。
+ * 解析失败时使用提供的默认值。
+ */
+function parseRateLimit(
+  value: string,
+  defaultMax: number,
+  defaultWindowMs: number,
+): [number, number] {
+  const parts = value.split('/');
+  if (parts.length !== 2) return [defaultMax, defaultWindowMs];
+  const max = parseInt(parts[0]!, 10);
+  const windowMs = parseInt(parts[1]!, 10);
+  if (
+    Number.isNaN(max) ||
+    Number.isNaN(windowMs) ||
+    max <= 0 ||
+    windowMs <= 0
+  ) {
+    return [defaultMax, defaultWindowMs];
+  }
+  return [max, windowMs];
+}
 
-// AI 题目生成：1 分钟 5 次
-export const questionGenerateLimiter = new RateLimiter(5, 60_000);
+function rl(envValue: string, defaultMax: number, defaultWindowMs: number) {
+  return new RateLimiter(
+    ...parseRateLimit(envValue, defaultMax, defaultWindowMs),
+  );
+}
 
-// 大转盘抽奖：1 分钟 10 次
-export const drawLimiter = new RateLimiter(10, 60_000);
+// 延迟初始化，首次调用时从 env 读取配置
+let _cache: {
+  reportGenerate: RateLimiter;
+  questionGenerate: RateLimiter;
+  draw: RateLimiter;
+  upload: RateLimiter;
+  dingtalkUserInfo: RateLimiter;
+  globalIp: RateLimiter;
+  authIp: RateLimiter;
+} | null = null;
 
-// 文件上传：1 分钟 5 次
-export const uploadLimiter = new RateLimiter(5, 60_000);
+function limiters() {
+  if (_cache) return _cache;
+  const { env } = require('@/env') as typeof import('@/env');
+  _cache = {
+    reportGenerate: rl(env.RATE_LIMIT_REPORT_GENERATE, 3, 60_000),
+    questionGenerate: rl(env.RATE_LIMIT_QUESTION_GENERATE, 5, 60_000),
+    draw: rl(env.RATE_LIMIT_DRAW, 10, 60_000),
+    upload: rl(env.RATE_LIMIT_UPLOAD, 5, 60_000),
+    dingtalkUserInfo: rl(env.RATE_LIMIT_DINGTALK_USER_INFO, 30, 60_000),
+    globalIp: rl(env.RATE_LIMIT_GLOBAL_IP, 60, 60_000),
+    authIp: rl(env.RATE_LIMIT_AUTH_IP, 5, 60_000),
+  };
+  return _cache;
+}
 
-// 钉钉免登接口：单 IP 每分钟 30 次
-export const dingtalkUserInfoLimiter = new RateLimiter(30, 60_000);
+// 报告生成（默认 3次/分钟）
+export const reportGenerateLimiter = {
+  check: (key: string) => limiters().reportGenerate.check(key),
+};
 
-// 全局 IP 限流：单 IP 每分钟 60 次请求
-export const globalIpLimiter = new RateLimiter(60, 60_000);
+// AI 题目生成（默认 5次/分钟）
+export const questionGenerateLimiter = {
+  check: (key: string) => limiters().questionGenerate.check(key),
+};
 
-// 登录接口限流：单 IP 每分钟 5 次登录尝试
-export const authIpLimiter = new RateLimiter(5, 60_000);
+// 大转盘抽奖（默认 10次/分钟）
+export const drawLimiter = {
+  check: (key: string) => limiters().draw.check(key),
+};
+
+// 文件上传（默认 5次/分钟）
+export const uploadLimiter = {
+  check: (key: string) => limiters().upload.check(key),
+};
+
+// 钉钉免登接口（默认 30次/分钟）
+export const dingtalkUserInfoLimiter = {
+  check: (key: string) => limiters().dingtalkUserInfo.check(key),
+};
+
+// 全局 IP 限流（默认 60次/分钟）
+export const globalIpLimiter = {
+  check: (key: string) => limiters().globalIp.check(key),
+};
+
+// 登录接口限流（默认 5次/分钟）
+export const authIpLimiter = {
+  check: (key: string) => limiters().authIp.check(key),
+};

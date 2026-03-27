@@ -8,7 +8,7 @@ const stripQuotes = (/** @type {string | undefined} */ v) =>
 export const env = createEnv({
   server: {
     // 数据库
-    DATABASE_URL: z.string().url(),
+    DATABASE_URL: z.url(),
     NODE_ENV: z
       .enum(['development', 'test', 'production'])
       .default('development'),
@@ -19,15 +19,15 @@ export const env = createEnv({
         ? z.string()
         : z.string().optional(),
     BETTER_AUTH_URL:
-      process.env.NODE_ENV === 'production'
-        ? z.string().url()
-        : z.string().url().optional(),
+      process.env.NODE_ENV === 'production' ? z.url() : z.url().optional(),
 
     // 权限
     ADMIN_EMAILS: z.string().optional(),
     ADMIN_PHONES: z.string().optional(),
 
-    // QQ 邮箱 SMTP（email-otp 方式需要，生产环境必填）
+    // 邮箱 SMTP（email-otp 方式需要，生产环境必填）
+    SMTP_HOST: z.string().default('smtp.qq.com'),
+    SMTP_PORT: z.coerce.number().int().default(465),
     SMTP_USER: z.string().optional(),
     SMTP_PASS: z.string().optional(),
 
@@ -46,6 +46,15 @@ export const env = createEnv({
 
     // 钉钉 LINK 网关
     DINGTALK_LINK_GATEWAY: z.url().optional(),
+
+    // 限流配置（格式: "次数/窗口毫秒"，如 "10/60000" 表示每分钟10次）
+    RATE_LIMIT_REPORT_GENERATE: z.string().default('3/60000'),
+    RATE_LIMIT_QUESTION_GENERATE: z.string().default('5/60000'),
+    RATE_LIMIT_DRAW: z.string().default('10/60000'),
+    RATE_LIMIT_UPLOAD: z.string().default('5/60000'),
+    RATE_LIMIT_DINGTALK_USER_INFO: z.string().default('30/60000'),
+    RATE_LIMIT_GLOBAL_IP: z.string().default('60/60000'),
+    RATE_LIMIT_AUTH_IP: z.string().default('5/60000'),
   },
 
   client: {
@@ -62,6 +71,8 @@ export const env = createEnv({
     BETTER_AUTH_URL: stripQuotes(process.env.BETTER_AUTH_URL),
     ADMIN_EMAILS: stripQuotes(process.env.ADMIN_EMAILS),
     ADMIN_PHONES: stripQuotes(process.env.ADMIN_PHONES),
+    SMTP_HOST: stripQuotes(process.env.SMTP_HOST),
+    SMTP_PORT: stripQuotes(process.env.SMTP_PORT),
     SMTP_USER: stripQuotes(process.env.SMTP_USER),
     SMTP_PASS: stripQuotes(process.env.SMTP_PASS),
     SMS_ACCESS_KEY_ID: stripQuotes(process.env.SMS_ACCESS_KEY_ID),
@@ -72,6 +83,19 @@ export const env = createEnv({
     LLM_ALLOWED_HOSTS: stripQuotes(process.env.LLM_ALLOWED_HOSTS),
     ID_CARD_ENCRYPTION_KEY: stripQuotes(process.env.ID_CARD_ENCRYPTION_KEY),
     DINGTALK_LINK_GATEWAY: stripQuotes(process.env.DINGTALK_LINK_GATEWAY),
+    RATE_LIMIT_REPORT_GENERATE: stripQuotes(
+      process.env.RATE_LIMIT_REPORT_GENERATE,
+    ),
+    RATE_LIMIT_QUESTION_GENERATE: stripQuotes(
+      process.env.RATE_LIMIT_QUESTION_GENERATE,
+    ),
+    RATE_LIMIT_DRAW: stripQuotes(process.env.RATE_LIMIT_DRAW),
+    RATE_LIMIT_UPLOAD: stripQuotes(process.env.RATE_LIMIT_UPLOAD),
+    RATE_LIMIT_DINGTALK_USER_INFO: stripQuotes(
+      process.env.RATE_LIMIT_DINGTALK_USER_INFO,
+    ),
+    RATE_LIMIT_GLOBAL_IP: stripQuotes(process.env.RATE_LIMIT_GLOBAL_IP),
+    RATE_LIMIT_AUTH_IP: stripQuotes(process.env.RATE_LIMIT_AUTH_IP),
     NEXT_PUBLIC_DEFAULT_MODULE: stripQuotes(
       process.env.NEXT_PUBLIC_DEFAULT_MODULE,
     ),

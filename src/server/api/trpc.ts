@@ -163,7 +163,9 @@ const auditMiddleware = t.middleware(
     const sessionUser = ctx.session.user;
     const rawInput = await getRawInput();
     const ip =
-      ctx.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
+      ctx.headers.get('x-real-ip') ??
+      ctx.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
+      null;
     const ua = ctx.headers.get('user-agent') ?? null;
 
     const writeLog = (values: typeof adminAuditLog.$inferInsert) => {

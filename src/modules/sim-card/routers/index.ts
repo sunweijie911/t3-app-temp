@@ -83,8 +83,8 @@ export const simCardRouter = createTRPCRouter({
       // 从请求头获取 UA 和 IP
       const userAgent = ctx.headers.get('user-agent') ?? '';
       const ipAddress =
-        ctx.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
         ctx.headers.get('x-real-ip') ??
+        ctx.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
         '';
 
       // 解析设备信息

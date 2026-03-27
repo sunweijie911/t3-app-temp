@@ -1,4 +1,5 @@
 import { getDingtalkUserInfo } from '@/server/services/dingtalk';
+import { getClientIp } from '@/server/services/get-client-ip';
 import { dingtalkUserInfoLimiter } from '@/server/services/rate-limiter';
 
 /**
@@ -93,9 +94,7 @@ import { dingtalkUserInfoLimiter } from '@/server/services/rate-limiter';
 export async function POST(request: Request) {
   try {
     // IP 级速率限制
-    const ip =
-      request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
-      'unknown';
+    const ip = getClientIp(request);
     const rateCheck = dingtalkUserInfoLimiter.check(`dingtalk-user:${ip}`);
     if (!rateCheck.allowed) {
       return Response.json(

@@ -215,7 +215,12 @@ export const luckyWheelAdminRouter = createTRPCRouter({
       return ctx.db
         .select()
         .from(wheelPrizes)
-        .where(eq(wheelPrizes.activityId, input.activityId))
+        .where(
+          and(
+            eq(wheelPrizes.activityId, input.activityId),
+            eq(wheelPrizes.isActive, true),
+          ),
+        )
         .orderBy(asc(wheelPrizes.sortOrder));
     }),
 

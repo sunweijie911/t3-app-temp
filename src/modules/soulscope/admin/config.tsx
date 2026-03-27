@@ -30,7 +30,6 @@ const LLM_CONFIGS: ConfigDef[] = [
 
 const REPORT_CONFIGS: ConfigDef[] = [
   { configKey: 'report.system_prompt', label: '系统提示词', type: 'textarea' },
-  { configKey: 'report.price', label: '报告价格（元）', type: 'number' },
 ];
 
 function ConfigItem({ configKey, label, type }: ConfigDef) {

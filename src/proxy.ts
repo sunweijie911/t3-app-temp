@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/server/better-auth';
 import { getUserPhone } from '@/server/better-auth/types';
 import { isAdminEmail, isAdminPhone } from '@/server/services/admin-check';
+import { getClientIp } from '@/server/services/get-client-ip';
 import { authIpLimiter, globalIpLimiter } from '@/server/services/rate-limiter';
 
 const protectedPatterns = [
@@ -11,16 +12,6 @@ const protectedPatterns = [
   /^\/soulscope\/tests\/[^/]+\/take(\/|$)/,
   /^\/lucky-wheel\/records(\/|$)/,
 ];
-
-function getClientIp(request: NextRequest): string {
-  // 优先使用 X-Real-IP（nginx 从 $remote_addr 设置，不可伪造）
-  // X-Forwarded-For 使用追加模式，首跳可被客户端伪造
-  return (
-    request.headers.get('x-real-ip') ??
-    request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
-    'unknown'
-  );
-}
 
 function rateLimitResponse(retryAfterMs: number, message: string) {
   return NextResponse.json(

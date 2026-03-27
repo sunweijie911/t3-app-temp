@@ -14,10 +14,13 @@ function getTransporter(): Transporter {
     throw new Error('[EMAIL] 生产环境必须配置 SMTP 变量: SMTP_USER, SMTP_PASS');
   }
 
+  const host = env.SMTP_HOST;
+  const port = env.SMTP_PORT;
+
   transporter = nodemailer.createTransport({
-    host: 'smtp.qq.com',
-    port: 465,
-    secure: true,
+    host,
+    port,
+    secure: port === 465,
     auth: { user, pass },
   });
 

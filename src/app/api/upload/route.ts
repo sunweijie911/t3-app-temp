@@ -5,18 +5,10 @@ import { nanoid } from 'nanoid';
 import { NextResponse } from 'next/server';
 
 import { auth } from '@/server/better-auth';
+import { getClientIp } from '@/server/services/get-client-ip';
 import { uploadLimiter } from '@/server/services/rate-limiter';
 
 const MAX_SIZE = 5 * 1024 * 1024; // 5MB
-
-function getClientIp(request: Request): string {
-  // 优先使用 X-Real-IP（nginx 从 $remote_addr 设置，不可伪造）
-  return (
-    request.headers.get('x-real-ip') ??
-    request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
-    'unknown'
-  );
-}
 
 // 通过文件头魔术字节判断真实格式，不依赖客户端提供的 MIME type
 function detectImageType(buffer: Buffer): { ext: string; mime: string } | null {
