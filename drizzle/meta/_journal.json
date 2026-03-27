@@ -120,6 +120,13 @@
       "when": 1774348036184,
       "tag": "0016_curvy_devos",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1774582830061,
+      "tag": "0017_chilly_stephen_strange",
+      "breakpoints": true
     }
   ]
 }
