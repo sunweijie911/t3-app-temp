@@ -2,6 +2,7 @@ import { MousePointerClick, PenLine, Sparkles } from 'lucide-react';
 import Link from 'next/link';
 import { Suspense } from 'react';
 import { TestGrid } from '@/modules/soulscope/components/test/test-grid';
+import { SkeletonCardGrid } from '@/shared/components/skeleton';
 import { api, HydrateClient } from '@/trpc/server';
 
 async function FeaturedTests() {
@@ -42,18 +43,7 @@ export default async function SoulscopeHome() {
               查看全部 &rarr;
             </Link>
           </div>
-          <Suspense
-            fallback={
-              <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-                {[1, 2, 3].map((i) => (
-                  <div
-                    className="h-48 animate-pulse rounded-2xl bg-gray-100"
-                    key={i}
-                  />
-                ))}
-              </div>
-            }
-          >
+          <Suspense fallback={<SkeletonCardGrid count={3} />}>
             <FeaturedTests />
           </Suspense>
         </section>

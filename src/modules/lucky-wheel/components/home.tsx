@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { Suspense } from 'react';
 import { ActivityCard } from '@/modules/lucky-wheel/components/activity/activity-card';
 import { MODULE_NAME } from '@/modules/lucky-wheel/constants';
+import { SkeletonCardGrid } from '@/shared/components/skeleton';
 import { api, HydrateClient } from '@/trpc/server';
 
 async function ActiveActivities() {
@@ -45,18 +46,7 @@ export default async function LuckyWheelHome() {
           <div className="mb-8">
             <h2 className="font-bold text-2xl text-gray-900">进行中的活动</h2>
           </div>
-          <Suspense
-            fallback={
-              <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-                {[1, 2, 3].map((i) => (
-                  <div
-                    className="h-48 animate-pulse rounded-2xl bg-gray-100"
-                    key={i}
-                  />
-                ))}
-              </div>
-            }
-          >
+          <Suspense fallback={<SkeletonCardGrid count={3} />}>
             <ActiveActivities />
           </Suspense>
         </section>

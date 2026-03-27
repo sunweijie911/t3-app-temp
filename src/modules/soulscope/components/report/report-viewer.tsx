@@ -1,6 +1,6 @@
 'use client';
 
-import { LoadingSpinner } from '@/shared/components/ui/loading-spinner';
+import { SkeletonBlock, SkeletonText } from '@/shared/components/skeleton';
 import { MarkdownRenderer } from '@/shared/components/ui/markdown-renderer';
 import { api } from '@/trpc/react';
 
@@ -16,9 +16,19 @@ export function ReportViewer({ resultId }: { resultId: string }) {
 
   if (isLoading) {
     return (
-      <div className="flex min-h-[400px] flex-col items-center justify-center gap-4">
-        <LoadingSpinner size="lg" />
-        <p className="text-gray-500">加载报告中...</p>
+      <div className="mx-auto max-w-3xl">
+        <div className="mb-6">
+          <SkeletonBlock height={32} rounded="lg" width="40%" />
+        </div>
+        <div className="space-y-6 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm sm:p-8">
+          {/* 模拟 markdown 报告结构：标题 + 段落 + 小标题 + 段落 */}
+          <SkeletonBlock height={24} rounded="md" width="60%" />
+          <SkeletonText gap={10} lineHeight={16} lines={4} />
+          <SkeletonBlock height={20} rounded="md" width="45%" />
+          <SkeletonText gap={10} lineHeight={16} lines={5} />
+          <SkeletonBlock height={20} rounded="md" width="50%" />
+          <SkeletonText gap={10} lineHeight={16} lines={3} />
+        </div>
       </div>
     );
   }

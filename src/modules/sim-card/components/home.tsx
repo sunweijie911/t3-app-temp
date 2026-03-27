@@ -1,11 +1,15 @@
 'use client';
 
-import { Spin } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 
 import { openLink } from '@/lib/dingtalk-utils';
+import {
+  SimCardHomeSkeleton,
+  SimCardPackageSkeletonList,
+} from '@/modules/sim-card/components/home-skeleton';
 import { SimCardPackageCard } from '@/modules/sim-card/components/package-card';
 import { MODULE_NAME, USER_INFO_FIELDS } from '@/modules/sim-card/constants';
+import { SkeletonBlock } from '@/shared/components/skeleton';
 import { api } from '@/trpc/react';
 
 interface DingtalkUserInfo {
@@ -125,14 +129,7 @@ export default function SimCardHome() {
 
   // 加载中
   if (step === 'loading') {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-100">
-        <div className="text-center text-gray-500">
-          <Spin size="large" />
-          <div className="mt-3 text-sm">正在获取用户信息...</div>
-        </div>
-      </div>
-    );
+    return <SimCardHomeSkeleton />;
   }
 
   // 错误
@@ -150,7 +147,11 @@ export default function SimCardHome() {
   return (
     <div className="min-h-screen bg-gray-100">
       {/* Banner */}
-      {bannerUrl && (
+      {packagesLoading && !bannerUrl ? (
+        <div className="px-3 pt-3">
+          <SkeletonBlock className="aspect-video w-full" rounded="2xl" />
+        </div>
+      ) : bannerUrl ? (
         <div className="px-3 pt-3">
           {/* biome-ignore lint/performance/noImgElement: 动态上传图片 */}
           <img
@@ -159,7 +160,7 @@ export default function SimCardHome() {
             src={bannerUrl}
           />
         </div>
-      )}
+      ) : null}
 
       {/* 用户信息卡片 */}
       {userInfo && visibleFields && visibleFields.length > 0 && (
@@ -188,11 +189,7 @@ export default function SimCardHome() {
 
       {/* 套餐卡片列表 */}
       <div className="space-y-3 px-3 pt-3 pb-8">
-        {packagesLoading && (
-          <div className="flex justify-center py-20">
-            <Spin size="large" />
-          </div>
-        )}
+        {packagesLoading && <SimCardPackageSkeletonList count={3} />}
 
         {!packagesLoading && (!packages || packages.length === 0) && (
           <div className="py-20 text-center text-gray-400">暂无可用套餐</div>

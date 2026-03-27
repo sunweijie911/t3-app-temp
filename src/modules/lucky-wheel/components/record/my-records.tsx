@@ -1,6 +1,7 @@
 'use client';
 
 import { RECORD_STATUS_LABELS } from '@/modules/lucky-wheel/constants';
+import { SkeletonBlock, SkeletonCircle } from '@/shared/components/skeleton';
 import { api } from '@/trpc/react';
 
 const STATUS_CONFIG: Record<
@@ -73,7 +74,17 @@ export function RecordListContent({
     return (
       <div className="space-y-3">
         {[1, 2, 3].map((i) => (
-          <div className="h-16 animate-pulse rounded-xl bg-orange-50" key={i} />
+          <div
+            className="flex items-center gap-3 rounded-2xl bg-white/80 p-3 shadow-sm"
+            key={i}
+          >
+            <SkeletonCircle size={50} />
+            <div className="min-w-0 flex-1 space-y-2">
+              <SkeletonBlock height={16} rounded="md" width="60%" />
+              <SkeletonBlock height={12} rounded="md" width="80%" />
+            </div>
+            <SkeletonBlock height={24} rounded="full" width={56} />
+          </div>
         ))}
       </div>
     );

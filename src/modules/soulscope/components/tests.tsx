@@ -1,6 +1,7 @@
 import { Suspense } from 'react';
 import { TestGrid } from '@/modules/soulscope/components/test/test-grid';
 import { MODULE_NAME } from '@/modules/soulscope/constants';
+import { SkeletonCardGrid } from '@/shared/components/skeleton';
 import { api, HydrateClient } from '@/trpc/server';
 
 async function AllTests() {
@@ -24,18 +25,7 @@ export default function TestsPage() {
               选择一项人格测试，开始探索你的内心世界
             </p>
           </div>
-          <Suspense
-            fallback={
-              <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-                {[1, 2, 3, 4, 5, 6].map((i) => (
-                  <div
-                    className="h-48 animate-pulse rounded-2xl bg-gray-100"
-                    key={i}
-                  />
-                ))}
-              </div>
-            }
-          >
+          <Suspense fallback={<SkeletonCardGrid count={6} />}>
             <AllTests />
           </Suspense>
         </div>

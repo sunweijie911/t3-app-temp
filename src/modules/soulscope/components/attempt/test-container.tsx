@@ -4,7 +4,7 @@ import { Check, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { LoadingSpinner } from '@/shared/components/ui/loading-spinner';
+import { SkeletonBlock } from '@/shared/components/skeleton';
 import { api } from '@/trpc/react';
 import { ProgressBar } from './progress-bar';
 import { QuestionCard } from './question-card';
@@ -110,8 +110,31 @@ export function TestContainer({ attemptId }: TestContainerProps) {
 
   if (isLoading) {
     return (
-      <div className="flex min-h-[400px] items-center justify-center">
-        <LoadingSpinner size="lg" />
+      <div className="py-8">
+        {/* 进度条骨架 */}
+        <div className="mx-auto max-w-2xl">
+          <SkeletonBlock className="w-full" height={8} rounded="full" />
+        </div>
+        {/* 题目卡片骨架 */}
+        <div className="mx-auto mt-8 max-w-2xl space-y-6">
+          <SkeletonBlock height={14} rounded="md" width={80} />
+          <SkeletonBlock className="w-full" height={24} rounded="md" />
+          <div className="space-y-3 pt-4">
+            {[1, 2, 3, 4].map((i) => (
+              <SkeletonBlock
+                className="w-full"
+                height={48}
+                key={i}
+                rounded="xl"
+              />
+            ))}
+          </div>
+        </div>
+        {/* 导航按钮骨架 */}
+        <div className="mx-auto mt-8 flex max-w-2xl items-center justify-between">
+          <SkeletonBlock height={40} rounded="lg" width={88} />
+          <SkeletonBlock height={40} rounded="lg" width={88} />
+        </div>
       </div>
     );
   }
