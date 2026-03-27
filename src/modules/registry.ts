@@ -83,7 +83,7 @@ const modules: Record<string, ModuleDefinition> = {
     adminNavItems: [
       {
         label: '套餐管理',
-        href: '/admin/sim-card',
+        href: '/admin/sim-card/packages',
         description: '管理电话卡套餐内容与上下架',
       },
       {
