@@ -3,7 +3,6 @@ import '@/styles/globals.css';
 
 import { AntdRegistry } from '@ant-design/nextjs-registry';
 import type { Metadata } from 'next';
-import { Geist } from 'next/font/google';
 import { Toaster } from 'sonner';
 import { getDefaultModuleId } from '@/server/services/config';
 import { DefaultModuleProvider } from '@/shared/components/default-module-provider';
@@ -15,18 +14,13 @@ export const metadata: Metadata = {
   icons: [{ rel: 'icon', url: '/favicon.ico' }],
 };
 
-const geist = Geist({
-  subsets: ['latin'],
-  variable: '--font-geist-sans',
-});
-
 export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   const defaultModuleId = await getDefaultModuleId();
 
   return (
-    <html className={`${geist.variable}`} lang="zh-CN">
+    <html lang="zh-CN">
       <body>
         <AntdRegistry>
           <TRPCReactProvider>

@@ -3,7 +3,7 @@
 import { LogOut, Menu, X } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { authClient } from '@/lib/auth-client';
 import { authMethod } from '@/lib/auth-methods';
@@ -15,11 +15,16 @@ export function Header() {
   const pathname = usePathname();
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const { data: session } = authClient.useSession();
   const { data: isAdmin } = api.sys.checkRole.useQuery(undefined, {
     enabled: !!session?.user,
     staleTime: Infinity,
   });
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const defaultModuleId = useDefaultModuleId();
   const mod = getModuleByPathname(pathname, defaultModuleId);
@@ -33,7 +38,7 @@ export function Header() {
   const navLinks = (
     <>
       {mod.navLinks.map((link) => {
-        if (link.auth && !session?.user) return null;
+        if (link.auth && (!mounted || !session?.user)) return null;
         const isActive = link.href === activeNavHref;
         return (
           <Link
@@ -48,7 +53,7 @@ export function Header() {
           </Link>
         );
       })}
-      {isAdmin && (
+      {mounted && isAdmin && (
         <Link
           className={`flex items-center gap-1.5 font-medium text-sm transition-colors ${
             pathname.startsWith('/admin') ? theme.active : 'text-gray-600'
@@ -75,7 +80,7 @@ export function Header() {
           <nav className="hidden items-center gap-6 md:flex">{navLinks}</nav>
         </div>
         <div className="flex items-center gap-4">
-          {session?.user ? (
+          {mounted && session?.user ? (
             <div className="flex items-center gap-3">
               <span className="hidden max-w-48 truncate text-gray-600 text-sm sm:inline">
                 {authMethod === 'phone-otp'
@@ -109,14 +114,14 @@ export function Header() {
                 退出
               </button>
             </div>
-          ) : (
+          ) : mounted ? (
             <Link
               className={`rounded-lg px-4 py-2 font-medium text-sm text-white transition-colors ${theme.btn}`}
               href="/signin"
             >
               登录
             </Link>
-          )}
+          ) : null}
           {/* Mobile menu toggle */}
           <button
             className="md:hidden"
