@@ -3,8 +3,10 @@ import '@/styles/globals.css';
 
 import { AntdRegistry } from '@ant-design/nextjs-registry';
 import type { Metadata } from 'next';
+import { Suspense } from 'react';
 import { Toaster } from 'sonner';
 import { getDefaultModuleId } from '@/server/services/config';
+import { DebugPanel } from '@/shared/components/debug-panel';
 import { DefaultModuleProvider } from '@/shared/components/default-module-provider';
 import { TRPCReactProvider } from '@/trpc/react';
 
@@ -30,6 +32,9 @@ export default async function RootLayout({
           </TRPCReactProvider>
         </AntdRegistry>
         <Toaster position="top-center" richColors />
+        <Suspense>
+          <DebugPanel />
+        </Suspense>
       </body>
     </html>
   );

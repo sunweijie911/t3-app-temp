@@ -72,6 +72,7 @@
     "dayjs": "^1.11.19",
     "dingtalk-jsapi": "^3.2.8",
     "drizzle-orm": "^0.45.1",
+    "eruda": "^3.4.3",
     "lucide-react": "^0.575.0",
     "nanoid": "^5.1.6",
     "next": "^16.1.6",
@@ -86,7 +87,6 @@
     "sonner": "^2.0.7",
     "superjson": "^2.2.6",
     "swagger-jsdoc": "^6.2.8",
-    "vconsole": "^3.15.1",
     "xlsx-js-style": "^1.2.0",
     "zod": "^4.3.6"
   },
