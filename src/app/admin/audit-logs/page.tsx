@@ -5,6 +5,7 @@ import {
   Breadcrumb,
   Card,
   DatePicker,
+  Input,
   Select,
   Space,
   Table,
@@ -12,6 +13,7 @@ import {
   Typography,
 } from 'antd';
 import dayjs from 'dayjs';
+import Link from 'next/link';
 import { useState } from 'react';
 import { api, type RouterOutputs } from '@/trpc/react';
 
@@ -23,6 +25,7 @@ type Filters = {
   startDate: string;
   endDate: string;
   action: string;
+  userEmail: string;
 };
 
 const defaultFilters: Filters = {
@@ -31,6 +34,7 @@ const defaultFilters: Filters = {
   startDate: '',
   endDate: '',
   action: '',
+  userEmail: '',
 };
 
 export default function AuditLogsPage() {
@@ -42,6 +46,7 @@ export default function AuditLogsPage() {
     startDate: filters.startDate || undefined,
     endDate: filters.endDate || undefined,
     action: filters.action || undefined,
+    userEmail: filters.userEmail || undefined,
   });
 
   const columns: TableProps<AuditLog>['columns'] = [
@@ -123,7 +128,10 @@ export default function AuditLogsPage() {
   return (
     <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
       <Breadcrumb
-        items={[{ title: '管理后台' }, { title: '操作日志' }]}
+        items={[
+          { title: <Link href="/admin">管理后台</Link> },
+          { title: '操作日志' },
+        ]}
         style={{ marginBottom: 16 }}
       />
 
@@ -139,6 +147,18 @@ export default function AuditLogsPage() {
               }));
             }}
             placeholder={['开始时间', '结束时间']}
+          />
+          <Input.Search
+            allowClear
+            onSearch={(val) =>
+              setFilters((prev) => ({
+                ...prev,
+                page: 1,
+                userEmail: val,
+              }))
+            }
+            placeholder="搜索操作人（邮箱/手机号）"
+            style={{ width: 260 }}
           />
           <Select
             allowClear

@@ -104,7 +104,9 @@
     "Popconfirm",
     "ciphertext",
     "alipays",
-    "weixin"
+    "weixin",
+    "Appstore",
+    "Sider"
   ],
   "patterns": [
     {

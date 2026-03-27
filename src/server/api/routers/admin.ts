@@ -1,5 +1,5 @@
 import { TRPCError } from '@trpc/server';
-import { and, count, desc, eq, gte, lte } from 'drizzle-orm';
+import { and, count, desc, eq, gte, like, lte } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   adminProcedure,
@@ -92,6 +92,7 @@ export const adminRouter = createTRPCRouter({
         startDate: z.string().optional(),
         endDate: z.string().optional(),
         action: z.string().optional(),
+        userEmail: z.string().optional(),
       }),
     )
     .query(async ({ ctx, input }) => {
@@ -106,6 +107,9 @@ export const adminRouter = createTRPCRouter({
       }
       if (input.action) {
         conditions.push(eq(adminAuditLog.action, input.action));
+      }
+      if (input.userEmail) {
+        conditions.push(like(adminAuditLog.userEmail, `%${input.userEmail}%`));
       }
 
       const where = conditions.length > 0 ? and(...conditions) : undefined;

@@ -1,6 +1,6 @@
 'use client';
 
-import { Select, Typography } from 'antd';
+import { Modal, Select, Typography } from 'antd';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { getAllModules } from '@/modules/registry';
@@ -17,18 +17,30 @@ export function ModuleSwitcher({ currentModuleId }: Props) {
   const setContextModuleId = useSetDefaultModuleId();
 
   const setConfig = api.sys.setConfig.useMutation({
-    onSuccess: () => toast.success('默认首页模块已更新'),
+    onSuccess: (_, variables) => {
+      const newId = variables.value as string;
+      setContextModuleId(newId);
+      toast.success('默认首页模块已更新');
+      router.push(`/admin/${newId}`);
+    },
     onError: (err) => toast.error(err.message),
   });
 
   const handleChange = (id: string) => {
-    setContextModuleId(id);
-    setConfig.mutate({
-      key: 'app.default_module',
-      value: id,
-      description: '首页默认展示的模块 ID',
+    const moduleName = modules.find((m) => m.id === id)?.name ?? id;
+    Modal.confirm({
+      title: '确认修改默认首页',
+      content: `确定将默认首页切换为「${moduleName}」吗？此操作会影响所有用户的访问入口。`,
+      okText: '确认切换',
+      cancelText: '取消',
+      onOk: () => {
+        setConfig.mutate({
+          key: 'app.default_module',
+          value: id,
+          description: '首页默认展示的模块 ID',
+        });
+      },
     });
-    router.push(`/admin/${id}`);
   };
 
   return (
