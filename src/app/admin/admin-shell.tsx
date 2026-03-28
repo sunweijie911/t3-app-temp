@@ -8,7 +8,7 @@ import {
   MenuUnfoldOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Button, Dropdown, Layout, Menu, theme } from 'antd';
+import { Button, Dropdown, Layout, Menu, Modal, theme } from 'antd';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -198,7 +198,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
           }}
         >
           <Link
-            href="/"
+            href={modules[0]?.basePath ?? '/'}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -219,8 +219,15 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
                     icon: <LogoutOutlined />,
                     label: '退出登录',
                     onClick: () => {
-                      void authClient.signOut().then(() => {
-                        router.push('/signin');
+                      Modal.confirm({
+                        title: '确认退出',
+                        content: '确定要退出登录吗？',
+                        okText: '确定退出',
+                        cancelText: '取消',
+                        onOk: () =>
+                          authClient.signOut().then(() => {
+                            router.push('/signin');
+                          }),
                       });
                     },
                   },

@@ -47,6 +47,9 @@ export const env = createEnv({
     // 钉钉 LINK 网关
     DINGTALK_LINK_GATEWAY: z.url().optional(),
 
+    // 定时任务鉴权密钥（Cron 接口使用 Bearer Token 校验）
+    CRON_SECRET: z.string().optional(),
+
     // 限流配置（格式: "次数/窗口毫秒"，如 "10/60000" 表示每分钟10次）
     RATE_LIMIT_REPORT_GENERATE: z.string().default('3/60000'),
     RATE_LIMIT_QUESTION_GENERATE: z.string().default('5/60000'),
@@ -100,6 +103,7 @@ export const env = createEnv({
     RATE_LIMIT_DINGTALK_USER_INFO: stripQuotes(
       process.env.RATE_LIMIT_DINGTALK_USER_INFO,
     ),
+    CRON_SECRET: stripQuotes(process.env.CRON_SECRET),
     RATE_LIMIT_GLOBAL_IP: stripQuotes(process.env.RATE_LIMIT_GLOBAL_IP),
     RATE_LIMIT_AUTH_IP: stripQuotes(process.env.RATE_LIMIT_AUTH_IP),
     NEXT_PUBLIC_SITE_NAME: stripQuotes(process.env.NEXT_PUBLIC_SITE_NAME),

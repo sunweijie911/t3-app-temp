@@ -1,0 +1,44 @@
+// 操作类型 → 中文名称映射（前后端共用，不可引入 server-only 模块）
+export const ACTION_LABELS: Record<string, string> = {
+  // 系统管理
+  'sys.createUser': '创建用户',
+  'sys.deleteUser': '删除用户',
+  'sys.setConfig': '系统配置',
+  // SIM卡模块
+  'simCard.admin.upsert': 'SIM卡-编辑套餐',
+  'simCard.admin.delete': 'SIM卡-删除套餐',
+  'simCard.admin.toggleActive': 'SIM卡-切换套餐状态',
+  'simCard.admin.reorder': 'SIM卡-调整排序',
+  'simCard.admin.saveConfig': 'SIM卡-保存配置',
+  // 幸运转盘模块
+  'luckyWheel.admin.upsertActivity': '转盘-编辑活动',
+  'luckyWheel.admin.deleteActivity': '转盘-删除活动',
+  'luckyWheel.admin.activateActivity': '转盘-激活活动',
+  'luckyWheel.admin.removeActivity': '转盘-下线活动',
+  'luckyWheel.admin.upsertPrize': '转盘-编辑奖品',
+  'luckyWheel.admin.batchUpsertPrizes': '转盘-批量编辑奖品',
+  'luckyWheel.admin.deletePrize': '转盘-删除奖品',
+  'luckyWheel.admin.activatePrize': '转盘-激活奖品',
+  'luckyWheel.admin.updateRecordStatus': '转盘-更新记录状态',
+  'luckyWheel.admin.deleteRecord': '转盘-删除记录',
+  'luckyWheel.admin.batchDeleteRecords': '转盘-批量删除记录',
+  'luckyWheel.admin.batchUpdateRecordStatus': '转盘-批量更新记录状态',
+  'luckyWheel.admin.clearRecords': '转盘-清空记录',
+  'luckyWheel.admin.upsertExtraChance': '转盘-编辑额外机会',
+  'luckyWheel.admin.deleteExtraChance': '转盘-删除额外机会',
+  'luckyWheel.admin.batchDeleteExtraChances': '转盘-批量删除额外机会',
+  'luckyWheel.admin.batchImportExtraChances': '转盘-批量导入额外机会',
+  // 灵魂测试模块
+  'soulscope.admin.upsertTestType': '灵魂测试-编辑类型',
+  'soulscope.admin.upsertQuestion': '灵魂测试-编辑题目',
+  'soulscope.admin.importQuestions': '灵魂测试-导入题目',
+  'soulscope.admin.deleteTestType': '灵魂测试-删除类型',
+  'soulscope.admin.deleteQuestion': '灵魂测试-删除题目',
+  'soulscope.admin.cleanupAbandonedAttempts': '灵魂测试-清理废弃记录',
+  'soulscope.admin.generateQuestions': '灵魂测试-AI生成题目',
+  // 换电模块
+  'batterySwap.admin.upsert': '换电-编辑套餐',
+  'batterySwap.admin.reorder': '换电-调整排序',
+  'batterySwap.admin.toggleActive': '换电-切换状态',
+  'batterySwap.admin.delete': '换电-删除套餐',
+};

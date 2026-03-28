@@ -143,10 +143,11 @@ export const protectedProcedure = t.procedure
  */
 function sanitizeInput(input: unknown): unknown {
   if (!input || typeof input !== 'object') return input;
+  if (Array.isArray(input)) return input.map(sanitizeInput);
   const sensitiveKeys = ['password', 'secret', 'token', 'otp', 'code'];
-  const sanitized = { ...(input as Record<string, unknown>) };
-  for (const key of sensitiveKeys) {
-    if (key in sanitized) sanitized[key] = '***';
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+    sanitized[key] = sensitiveKeys.includes(key) ? '***' : sanitizeInput(value);
   }
   return sanitized;
 }
