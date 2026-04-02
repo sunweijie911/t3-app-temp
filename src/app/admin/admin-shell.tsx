@@ -1,15 +1,14 @@
 'use client';
 
 import {
+  EyeOutlined,
   FileTextOutlined,
-  LeftOutlined,
   LogoutOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Button, Dropdown, Layout, Menu, Modal, theme } from 'antd';
-import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { env } from '@/env';
@@ -21,6 +20,8 @@ import { useDefaultModuleId } from '@/shared/components/default-module-provider'
 const { Sider, Content, Header } = Layout;
 
 type MenuItem = Required<MenuProps>['items'][number];
+
+const FRONT_PREFIX = '__front__';
 
 export function AdminShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -40,10 +41,18 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
       key: `module-${mod.id}`,
       icon: mod.icon,
       label: mod.name,
-      children: mod.adminNavItems.map((nav) => ({
-        key: nav.href,
-        label: nav.label,
-      })),
+      children: [
+        ...mod.adminNavItems.map((nav) => ({
+          key: nav.href,
+          label: nav.label,
+        })),
+        { type: 'divider' as const },
+        {
+          key: `__front__${mod.basePath}`,
+          icon: <EyeOutlined />,
+          label: '查看前台',
+        },
+      ],
     }));
 
     return [
@@ -100,6 +109,11 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   const effectiveOpenKeys = userOpenKeys ?? routeOpenKeys;
 
   const handleMenuClick: MenuProps['onClick'] = ({ key }) => {
+    if (key.startsWith(FRONT_PREFIX)) {
+      // 新窗口打开前台页面，避免离开后台
+      window.open(key.slice(FRONT_PREFIX.length), '_blank');
+      return;
+    }
     router.push(key);
   };
 
@@ -197,19 +211,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             lineHeight: '64px',
           }}
         >
-          <Link
-            href={modules[0]?.basePath ?? '/'}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 4,
-              color: '#666',
-              fontSize: 14,
-            }}
-          >
-            <LeftOutlined style={{ fontSize: 12 }} />
-            返回前台
-          </Link>
+          <div />
           {session?.user && (
             <Dropdown
               menu={{
