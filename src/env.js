@@ -58,6 +58,17 @@ export const env = createEnv({
     RATE_LIMIT_DINGTALK_USER_INFO: z.string().default('30/60000'),
     RATE_LIMIT_GLOBAL_IP: z.string().default('60/60000'),
     RATE_LIMIT_AUTH_IP: z.string().default('5/60000'),
+
+    // IM Bot — LLM 服务
+    IM_BOT_LLM_BASE_URL: z.string().default('https://api.deepseek.com'),
+    IM_BOT_LLM_API_KEY: z.string().optional(),
+    IM_BOT_LLM_MODEL: z.string().default('deepseek-chat'),
+
+    // IM Bot — 飞书
+    IM_BOT_FEISHU_APP_ID: z.string().optional(),
+    IM_BOT_FEISHU_APP_SECRET: z.string().optional(),
+    IM_BOT_FEISHU_ENCRYPT_KEY: z.string().optional(),
+    IM_BOT_FEISHU_VERIFICATION_TOKEN: z.string().optional(),
   },
 
   client: {
@@ -106,6 +117,17 @@ export const env = createEnv({
     CRON_SECRET: stripQuotes(process.env.CRON_SECRET),
     RATE_LIMIT_GLOBAL_IP: stripQuotes(process.env.RATE_LIMIT_GLOBAL_IP),
     RATE_LIMIT_AUTH_IP: stripQuotes(process.env.RATE_LIMIT_AUTH_IP),
+    IM_BOT_LLM_BASE_URL: stripQuotes(process.env.IM_BOT_LLM_BASE_URL),
+    IM_BOT_LLM_API_KEY: stripQuotes(process.env.IM_BOT_LLM_API_KEY),
+    IM_BOT_LLM_MODEL: stripQuotes(process.env.IM_BOT_LLM_MODEL),
+    IM_BOT_FEISHU_APP_ID: stripQuotes(process.env.IM_BOT_FEISHU_APP_ID),
+    IM_BOT_FEISHU_APP_SECRET: stripQuotes(process.env.IM_BOT_FEISHU_APP_SECRET),
+    IM_BOT_FEISHU_ENCRYPT_KEY: stripQuotes(
+      process.env.IM_BOT_FEISHU_ENCRYPT_KEY,
+    ),
+    IM_BOT_FEISHU_VERIFICATION_TOKEN: stripQuotes(
+      process.env.IM_BOT_FEISHU_VERIFICATION_TOKEN,
+    ),
     NEXT_PUBLIC_SITE_NAME: stripQuotes(process.env.NEXT_PUBLIC_SITE_NAME),
     NEXT_PUBLIC_MODULE_NAMES: stripQuotes(process.env.NEXT_PUBLIC_MODULE_NAMES),
     NEXT_PUBLIC_DEFAULT_MODULE: stripQuotes(

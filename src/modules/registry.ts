@@ -2,12 +2,14 @@ import {
   ExperimentOutlined,
   GiftOutlined,
   PhoneOutlined,
+  RobotOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
 import type { ReactNode } from 'react';
 import { createElement } from 'react';
 import { env } from '@/env';
 import { MODULE_NAME as BATTERY_SWAP_NAME } from '@/modules/battery-swap/constants';
+import { MODULE_NAME as IM_BOT_NAME } from '@/modules/im-bot/constants';
 import { MODULE_NAME as LUCKY_WHEEL_NAME } from '@/modules/lucky-wheel/constants';
 import { MODULE_NAME as SIM_CARD_NAME } from '@/modules/sim-card/constants';
 import { MODULE_NAME as SOULSCOPE_NAME } from '@/modules/soulscope/constants';
@@ -170,6 +172,43 @@ const modules: Record<string, ModuleDefinition> = {
         label: '订单管理',
         href: '/admin/soulscope/orders',
         description: '查看订单和收入',
+      },
+    ],
+  },
+  'im-bot': {
+    id: 'im-bot',
+    name: IM_BOT_NAME,
+    description: '群聊机器人 — 自然语言录入多维表格',
+    basePath: '/im-bot',
+    icon: createElement(RobotOutlined),
+    theme: {
+      brand: 'text-cyan-600',
+      active: 'text-cyan-600',
+      btn: 'bg-cyan-600 hover:bg-cyan-700',
+      link: 'text-cyan-600 hover:text-cyan-700',
+      cardHover: 'group-hover:text-cyan-600',
+    },
+    navLinks: [],
+    adminNavItems: [
+      {
+        label: '场景管理',
+        href: '/admin/im-bot',
+        description: '管理机器人业务场景',
+      },
+      {
+        label: '平台配置',
+        href: '/admin/im-bot/platforms',
+        description: '配置飞书/钉钉/企微平台凭证',
+      },
+      {
+        label: '表格映射',
+        href: '/admin/im-bot/table-mappings',
+        description: '配置场景与多维表格的字段映射',
+      },
+      {
+        label: '事件日志',
+        href: '/admin/im-bot/event-logs',
+        description: '查看机器人消息处理日志',
       },
     ],
   },

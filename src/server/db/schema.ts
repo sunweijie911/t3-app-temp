@@ -3,6 +3,7 @@ import { index, jsonb, serial } from 'drizzle-orm/pg-core';
 import { createTable } from './table-creator';
 
 export * from '@/modules/battery-swap/schema';
+export * from '@/modules/im-bot/schema';
 export * from '@/modules/lucky-wheel/schema';
 export * from '@/modules/sim-card/schema';
 export * from '@/modules/soulscope/schema';

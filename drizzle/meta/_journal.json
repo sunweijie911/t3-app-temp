@@ -127,6 +127,13 @@
       "when": 1774582830061,
       "tag": "0017_chilly_stephen_strange",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1775184432667,
+      "tag": "0018_new_chamber",
+      "breakpoints": true
     }
   ]
 }

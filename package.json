@@ -46,6 +46,36 @@
       "biome check --write --no-errors-on-unmatched"
     ]
   },
+  "cspell": {
+    "words": [
+      "aliyuncs",
+      "bitable",
+      "creds",
+      "dashscope",
+      "deepseek",
+      "dedup",
+      "dingtalk",
+      "feishu",
+      "isactive",
+      "jsapi",
+      "openxmlformats",
+      "popconfirm",
+      "sider",
+      "soulscope",
+      "spreadsheetml",
+      "unocss",
+      "varchar",
+      "wbout",
+      "wecom",
+      "officedocument",
+      "imap"
+    ],
+    "ignorePaths": [
+      "drizzle/**"
+    ],
+    "flagWords": [],
+    "caseSensitive": false
+  },
   "config": {
     "commitizen": {
       "path": "node_modules/cz-git"

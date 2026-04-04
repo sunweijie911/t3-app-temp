@@ -46,12 +46,17 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
           key: nav.href,
           label: nav.label,
         })),
-        { type: 'divider' as const },
-        {
-          key: `__front__${mod.basePath}`,
-          icon: <EyeOutlined />,
-          label: '查看前台',
-        },
+        // 仅在有前台页面时显示"查看前台"入口
+        ...(mod.navLinks.length > 0
+          ? [
+              { type: 'divider' as const },
+              {
+                key: `__front__${mod.basePath}`,
+                icon: <EyeOutlined />,
+                label: '查看前台',
+              },
+            ]
+          : []),
       ],
     }));
 
