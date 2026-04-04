@@ -43,7 +43,10 @@ ${scenesDesc}
 
 ## 规则
 - 只返回场景 id，不要解释
-- 无法判断时返回 "none"`;
+- 消息中提到商品名称、价格、快递、客户、订单等信息时，归类为 sales
+- 消息中提到任务、负责人、排期、进度、上线等信息时，归类为 tasks
+- 查看/查询/修改/删除某个具体事物的数据时，根据事物类型判断场景
+- 只有完全无法判断时才返回 "none"`;
 
     const result = await chatCompletion(systemPrompt, content);
     const sceneId = result.trim().toLowerCase();

@@ -6,7 +6,23 @@ import type {
 import type { BotScene } from '../types';
 import { getSalesSystemPrompt } from './prompt';
 
-const KEYWORDS = ['卖了', '成本', '售价', '单号', '快递', '发货', '发了'];
+const KEYWORDS = [
+  // CREATE
+  '卖了',
+  '发了',
+  '发货',
+  '成本',
+  '售价',
+  '单号',
+  '快递',
+  // QUERY / UPDATE / DELETE
+  '查看',
+  '查一下',
+  '销售',
+  '订单',
+  '记录',
+  '商品',
+];
 
 export class SalesScene implements BotScene {
   readonly id = 'sales';

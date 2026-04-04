@@ -6,7 +6,20 @@ import type {
 import type { BotScene } from '../types';
 import { getTasksSystemPrompt } from './prompt';
 
-const KEYWORDS = ['任务', '启动', '提测', '上线', '排期', '进度', '开发'];
+const KEYWORDS = [
+  // CREATE
+  '任务',
+  '启动',
+  '提测',
+  '上线',
+  '排期',
+  '开发',
+  // QUERY / UPDATE / DELETE
+  '进度',
+  '负责人',
+  '状态',
+  '发版',
+];
 
 export class TasksScene implements BotScene {
   readonly id = 'tasks';
