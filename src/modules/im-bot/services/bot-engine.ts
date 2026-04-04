@@ -7,9 +7,8 @@ import { WecomChannelAdapter } from '../channels/wecom';
 import type { BotPlatform } from '../constants';
 import { Dispatcher } from '../core/dispatcher';
 import type { BotEvent, SpreadsheetTableConfig } from '../core/types';
-import { SalesScene } from '../scenes/sales';
-import { TasksScene } from '../scenes/tasks';
-import { botEventLogs, botTableMappings } from '../schema';
+import { DatabaseDrivenScene, parseKeywords } from '../scenes/db-scene';
+import { botEventLogs, botScenes, botTableMappings } from '../schema';
 
 const channelAdapters: Record<BotPlatform, ChannelAdapter> = {
   feishu: new FeishuChannelAdapter(),
@@ -67,7 +66,10 @@ async function getDispatcher(): Promise<Dispatcher> {
   if (initPromise) return initPromise;
 
   initPromise = (async () => {
-    const tableMappings = await loadTableMappings();
+    const [tableMappings, scenes] = await Promise.all([
+      loadTableMappings(),
+      db.select().from(botScenes).where(eq(botScenes.isActive, true)),
+    ]);
 
     const d = new Dispatcher({
       getTableConfig: (sceneId, platform) =>
@@ -75,8 +77,19 @@ async function getDispatcher(): Promise<Dispatcher> {
       onEvent: logBotEvent,
     });
 
-    d.registry.register(new SalesScene());
-    d.registry.register(new TasksScene());
+    for (const s of scenes) {
+      if (!s.systemPrompt) continue;
+      d.registry.register(
+        new DatabaseDrivenScene({
+          sceneId: s.sceneId,
+          name: s.name,
+          description: s.description ?? '',
+          keywords: parseKeywords(s.keywords),
+          systemPrompt: s.systemPrompt,
+          replyTemplate: s.replyTemplate ?? undefined,
+        }),
+      );
+    }
 
     dispatcher = d;
     return d;

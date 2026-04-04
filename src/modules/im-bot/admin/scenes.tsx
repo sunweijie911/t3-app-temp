@@ -21,10 +21,12 @@ import {
   Input,
   Modal,
   Popconfirm,
+  Select,
   Space,
   Switch,
   Table,
   Tag,
+  Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useMemo, useState } from 'react';
@@ -89,7 +91,7 @@ type EditingScene = {
   sceneId: string;
   name: string;
   description: string;
-  keywords: string;
+  keywordTags: string[];
   systemPrompt: string;
   replyTemplate: string;
   isActive: boolean;
@@ -99,11 +101,31 @@ const emptyScene: EditingScene = {
   sceneId: '',
   name: '',
   description: '',
-  keywords: '',
+  keywordTags: [],
   systemPrompt: '',
   replyTemplate: '',
   isActive: true,
 };
+
+/** 从数据库存储的 keywords 字符串解析为标签数组 */
+function parseKeywordTags(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('[')) {
+    try {
+      const arr = JSON.parse(trimmed);
+      return Array.isArray(arr)
+        ? arr.filter((s: unknown) => typeof s === 'string' && s)
+        : [];
+    } catch {
+      return [];
+    }
+  }
+  return trimmed
+    .split(/[,，]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
 export default function ImBotScenesPage() {
   const { data: scenes, refetch } = api.imBot.admin.listScenes.useQuery();
@@ -215,7 +237,7 @@ export default function ImBotScenesPage() {
                 sceneId: record.sceneId,
                 name: record.name,
                 description: record.description ?? '',
-                keywords: record.keywords ?? '',
+                keywordTags: parseKeywordTags(record.keywords),
                 systemPrompt: record.systemPrompt ?? '',
                 replyTemplate: record.replyTemplate ?? '',
                 isActive: record.isActive,
@@ -280,7 +302,7 @@ export default function ImBotScenesPage() {
               sceneId: editing.sceneId,
               name: editing.name,
               description: editing.description,
-              keywords: editing.keywords,
+              keywords: JSON.stringify(editing.keywordTags),
               systemPrompt: editing.systemPrompt,
               replyTemplate: editing.replyTemplate,
               isActive: editing.isActive,
@@ -319,33 +341,57 @@ export default function ImBotScenesPage() {
                   value={editing.description}
                 />
               </Form.Item>
-              <Form.Item label="触发关键词 (JSON 数组)">
-                <Input.TextArea
-                  onChange={(e) =>
-                    setEditing({ ...editing, keywords: e.target.value })
+              <Form.Item
+                label="触发关键词"
+                tooltip="输入关键词后按回车添加，消息包含任意关键词即可匹配到此场景"
+              >
+                <Select
+                  mode="tags"
+                  onChange={(tags: string[]) =>
+                    setEditing({ ...editing, keywordTags: tags })
                   }
-                  placeholder='["卖了","成本","售价"]'
-                  rows={2}
-                  value={editing.keywords}
+                  open={false}
+                  placeholder="输入关键词后按回车添加"
+                  style={{ width: '100%' }}
+                  tokenSeparators={[',', '，']}
+                  value={editing.keywordTags}
                 />
               </Form.Item>
-              <Form.Item label="System Prompt">
+              <Form.Item
+                label="System Prompt"
+                required
+                tooltip="发送给 LLM 的系统提示词，定义字段结构和意图判断规则"
+              >
                 <Input.TextArea
                   onChange={(e) =>
                     setEditing({ ...editing, systemPrompt: e.target.value })
                   }
-                  rows={6}
+                  placeholder="定义 LLM 的角色、字段结构、意图判断规则和输出 JSON 格式"
+                  rows={10}
                   value={editing.systemPrompt}
                 />
+                <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                  支持模板变量：{'${today}'} 当前日期、{'${senderName}'}{' '}
+                  发送者、{'${chatName}'} 群名
+                </Typography.Text>
               </Form.Item>
-              <Form.Item label="回复模板">
+              <Form.Item
+                label="回复模板（可选）"
+                tooltip="自定义回复格式，留空使用默认格式"
+              >
                 <Input.TextArea
                   onChange={(e) =>
                     setEditing({ ...editing, replyTemplate: e.target.value })
                   }
+                  placeholder="留空使用默认回复格式"
                   rows={3}
                   value={editing.replyTemplate}
                 />
+                <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                  支持变量：{'${intent}'} 操作类型、{'${summary}'} 摘要、
+                  {'${fieldList}'} 字段列表、{'${count}'} 记录数、
+                  {'${sceneName}'} 场景名
+                </Typography.Text>
               </Form.Item>
             </Form>
           )}
