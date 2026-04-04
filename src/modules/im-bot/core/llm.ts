@@ -29,15 +29,46 @@ export async function chatCompletion(
 }
 
 /**
- * 从 LLM 原始输出中提取第一个 JSON 对象。
- * 处理 markdown 代码块包裹、多余文字等干扰。
+ * 从 LLM 原始输出中提取第一个完整的 JSON 对象。
+ * 使用括号平衡算法，正确处理嵌套 {}。
  */
 export function extractJson(raw: string): string | null {
+  // 优先从 markdown 代码块提取
   const codeBlock = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (codeBlock?.[1]) {
     const trimmed = codeBlock[1].trim();
     if (trimmed.startsWith('{')) return trimmed;
   }
-  const match = raw.match(/\{[\s\S]*?\}/);
-  return match?.[0] ?? null;
+
+  // 括号平衡提取第一个完整 JSON 对象
+  const start = raw.indexOf('{');
+  if (start === -1) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = start; i < raw.length; i++) {
+    const ch = raw[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\' && inString) {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === '{') depth++;
+    if (ch === '}') {
+      depth--;
+      if (depth === 0) return raw.slice(start, i + 1);
+    }
+  }
+
+  return null;
 }
