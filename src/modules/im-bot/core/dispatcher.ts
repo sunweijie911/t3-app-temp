@@ -104,7 +104,13 @@ export class Dispatcher {
         chatName: msg.chatName,
       };
       const systemPrompt = scene.getSystemPrompt(ctx);
+      console.log('[Dispatcher] 场景:', scene.id, '消息:', msg.content);
+      console.log(
+        '[Dispatcher] System Prompt (前200字):',
+        systemPrompt.slice(0, 200),
+      );
       const llmOutput = await chatCompletion(systemPrompt, msg.content);
+      console.log('[Dispatcher] LLM 原始输出:', llmOutput.slice(0, 500));
 
       // 5. JSON 提取 + 校验
       const jsonStr = extractJson(llmOutput);
