@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, lte, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gte, lt, lte, min, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { adminProcedure, createTRPCRouter } from '@/server/api/trpc';
@@ -278,4 +278,33 @@ export const imBotAdminRouter = createTRPCRouter({
       byPlatform: platformStats,
     };
   }),
+
+  // ---- 事件日志清理 ----
+
+  getEventLogStats: adminProcedure.query(async ({ ctx }) => {
+    const [countResult, minResult] = await Promise.all([
+      ctx.db.select({ total: count() }).from(botEventLogs),
+      ctx.db
+        .select({ earliest: min(botEventLogs.createdAt) })
+        .from(botEventLogs),
+    ]);
+    return {
+      total: countResult[0]?.total ?? 0,
+      earliestDate: minResult[0]?.earliest?.toISOString() ?? null,
+    };
+  }),
+
+  purgeEventLogs: adminProcedure
+    .input(
+      z.object({
+        beforeDate: z.string().datetime(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const deleted = await ctx.db
+        .delete(botEventLogs)
+        .where(lt(botEventLogs.createdAt, new Date(input.beforeDate)))
+        .returning({ id: botEventLogs.id });
+      return { deleted: deleted.length };
+    }),
 });

@@ -4,11 +4,13 @@ import {
   Button,
   Card,
   DatePicker,
+  Modal,
   Select,
   Space,
   Statistic,
   Table,
   Tag,
+  Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
@@ -121,8 +123,12 @@ export default function ImBotEventLogsPage() {
   const [exporting, setExporting] = useState(false);
   const pageSize = 20;
 
+  const [purgeDate, setPurgeDate] = useState<dayjs.Dayjs | null>(null);
+  const [purgeModalOpen, setPurgeModalOpen] = useState(false);
+
   const utils = api.useUtils();
   const { data: stats } = api.imBot.admin.getStats.useQuery();
+  const { data: logStats } = api.imBot.admin.getEventLogStats.useQuery();
   const { data: logs, isLoading } = api.imBot.admin.listEventLogs.useQuery({
     ...filters,
     limit: pageSize,
@@ -152,6 +158,20 @@ export default function ImBotEventLogsPage() {
       setExporting(false);
     }
   }
+
+  const purgeMutation = api.imBot.admin.purgeEventLogs.useMutation({
+    onSuccess: (data) => {
+      toast.success(`已清除 ${data.deleted} 条日志`);
+      setPurgeModalOpen(false);
+      setPurgeDate(null);
+      void refetch();
+      void utils.imBot.admin.getEventLogStats.invalidate();
+      void utils.imBot.admin.getStats.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const refetch = utils.imBot.admin.listEventLogs.invalidate;
 
   const columns: ColumnsType<LogRow> = [
     {
@@ -208,9 +228,14 @@ export default function ImBotEventLogsPage() {
       <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:px-8">
         <div className="mb-6 flex items-center justify-between">
           <h1 className="font-bold text-2xl text-gray-900">事件日志</h1>
-          <Button loading={exporting} onClick={handleExport}>
-            {exporting ? '导出中...' : '导出 Excel'}
-          </Button>
+          <Space>
+            <Button danger onClick={() => setPurgeModalOpen(true)}>
+              清理日志
+            </Button>
+            <Button loading={exporting} onClick={handleExport}>
+              {exporting ? '导出中...' : '导出 Excel'}
+            </Button>
+          </Space>
         </div>
 
         <div className="mb-4 grid grid-cols-3 gap-4">
@@ -286,6 +311,44 @@ export default function ImBotEventLogsPage() {
           rowKey="id"
           size="small"
         />
+
+        <Modal
+          confirmLoading={purgeMutation.isPending}
+          okButtonProps={{ danger: true, disabled: !purgeDate }}
+          okText="确认清除"
+          onCancel={() => {
+            setPurgeModalOpen(false);
+            setPurgeDate(null);
+          }}
+          onOk={() => {
+            if (!purgeDate) return;
+            purgeMutation.mutate({
+              beforeDate: purgeDate.endOf('day').toISOString(),
+            });
+          }}
+          open={purgeModalOpen}
+          title="清理事件日志"
+        >
+          <div style={{ marginBottom: 16 }}>
+            <Typography.Text type="secondary">
+              当前共 {logStats?.total ?? 0} 条日志
+              {logStats?.earliestDate && (
+                <>
+                  ，最早记录：
+                  {dayjs(logStats.earliestDate).format('YYYY-MM-DD')}
+                </>
+              )}
+            </Typography.Text>
+          </div>
+          <div>
+            <Typography.Text>清除此日期之前的所有日志：</Typography.Text>
+            <DatePicker
+              onChange={setPurgeDate}
+              style={{ display: 'block', marginTop: 8 }}
+              value={purgeDate}
+            />
+          </div>
+        </Modal>
       </div>
     </main>
   );
