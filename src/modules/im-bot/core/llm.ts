@@ -17,15 +17,27 @@ export async function chatCompletion(
   system: string,
   user: string,
 ): Promise<string> {
-  const res = await getClient().chat.completions.create({
-    model: env.IM_BOT_LLM_MODEL,
-    messages: [
-      { role: 'system', content: system },
-      { role: 'user', content: user },
-    ],
-    temperature: 0.1,
-  });
-  return res.choices[0]?.message?.content ?? '';
+  try {
+    const res = await getClient().chat.completions.create({
+      model: env.IM_BOT_LLM_MODEL,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
+      temperature: 0.1,
+    });
+    const content = res.choices?.[0]?.message?.content ?? '';
+    if (!content) {
+      console.warn(
+        '[LLM] 空响应, choices:',
+        JSON.stringify(res.choices ?? null).slice(0, 200),
+      );
+    }
+    return content;
+  } catch (err) {
+    console.error('[LLM] 调用失败:', err instanceof Error ? err.message : err);
+    throw err;
+  }
 }
 
 /**
