@@ -114,15 +114,21 @@ export class DatabaseDrivenScene implements BotScene {
     if (intent.intent === 'QUERY' && result.records) {
       if (result.records.length === 0)
         return `📊 查询结果: 未找到匹配的${this.name}`;
-      const items = result.records.map((r, i) => {
-        const summary = Object.values(r.fields)
-          .map(fieldToString)
-          .filter(Boolean)
-          .slice(0, 4)
-          .join(' | ');
-        return `${i + 1}. ${summary}`;
+      const DISPLAY_LIMIT = 10;
+      const displayed = result.records.slice(0, DISPLAY_LIMIT);
+      const items = displayed.map((r, i) => {
+        const lines = Object.entries(r.fields)
+          .map(([k, v]) => [k, fieldToString(v)] as const)
+          .map(([k, v]) => `  ${k}：${v || '—'}`);
+        const header =
+          (result.records?.length ?? 0) > 1 ? `【第 ${i + 1} 条】\n` : '';
+        return `${header}${lines.join('\n')}`;
       });
-      return `📊 查询结果 (共 ${result.records.length} 条)\n${items.join('\n')}`;
+      const truncated =
+        result.records.length > DISPLAY_LIMIT
+          ? `\n…（共 ${result.records.length} 条，仅展示前 ${DISPLAY_LIMIT} 条）`
+          : '';
+      return `📊 查询结果 (共 ${result.records.length} 条)\n\n${items.join('\n\n')}${truncated}`;
     }
 
     if (intent.intent === 'UPDATE') return `✅ 已更新${this.name}`;

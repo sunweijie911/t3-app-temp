@@ -91,18 +91,22 @@ export class FeishuBitableAdapter implements SpreadsheetAdapter {
     config: SpreadsheetTableConfig,
     filters: Record<string, unknown>,
   ): Promise<SpreadsheetRecord[]> {
-    const conditions = Object.entries(filters).map(([key, value]) => {
+    const conditions = Object.entries(filters).flatMap(([key, value]) => {
       const platformKey = config.fieldMapping[key] ?? key;
-      // 飞书日期字段 filter value 必须是毫秒时间戳
-      const coerced =
-        typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
-          ? new Date(value).getTime()
-          : value;
-      return {
-        field_name: platformKey,
-        operator: 'is',
-        value: [coerced],
-      };
+      // 日期字段（YYYY-MM-DD）转为当天 CST 范围查询，避免 is 精确匹配失败
+      if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+        const start = new Date(`${value}T00:00:00+08:00`).getTime();
+        const end = new Date(`${value}T23:59:59+08:00`).getTime();
+        return [
+          {
+            field_name: platformKey,
+            operator: 'isGreaterEqual',
+            value: [start],
+          },
+          { field_name: platformKey, operator: 'isLessEqual', value: [end] },
+        ];
+      }
+      return [{ field_name: platformKey, operator: 'is', value: [value] }];
     });
 
     const body: Record<string, unknown> = {};
@@ -118,10 +122,19 @@ export class FeishuBitableAdapter implements SpreadsheetAdapter {
       items?: Array<{ record_id: string; fields: Record<string, unknown> }>;
     };
 
-    return (data.items ?? []).map((item) => ({
-      recordId: item.record_id,
-      fields: reverseMapFields(item.fields, config.fieldMapping),
-    }));
+    const logicalKeys = Object.keys(config.fieldMapping);
+    return (data.items ?? []).map((item) => {
+      const mapped = reverseMapFields(item.fields, config.fieldMapping);
+      // 以 fieldMapping 配置的字段为基准，空值填 '' 而非缺失，保证表头完整
+      const fields: Record<string, unknown> = Object.fromEntries(
+        logicalKeys.map((k) => [k, mapped[k] ?? '']),
+      );
+      // 保留未在 mapping 中定义的额外字段
+      for (const [k, v] of Object.entries(mapped)) {
+        if (!(k in fields)) fields[k] = v;
+      }
+      return { recordId: item.record_id, fields };
+    });
   }
 
   async deleteRecord(
