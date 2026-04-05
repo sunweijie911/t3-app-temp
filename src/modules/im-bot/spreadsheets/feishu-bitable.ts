@@ -93,10 +93,15 @@ export class FeishuBitableAdapter implements SpreadsheetAdapter {
   ): Promise<SpreadsheetRecord[]> {
     const conditions = Object.entries(filters).map(([key, value]) => {
       const platformKey = config.fieldMapping[key] ?? key;
+      // 飞书日期字段 filter value 必须是毫秒时间戳
+      const coerced =
+        typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+          ? new Date(value).getTime()
+          : value;
       return {
         field_name: platformKey,
         operator: 'is',
-        value: [value],
+        value: [coerced],
       };
     });
 

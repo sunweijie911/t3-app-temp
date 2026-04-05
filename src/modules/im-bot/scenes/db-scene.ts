@@ -11,11 +11,9 @@ function fieldToString(v: unknown): string {
       .map((item) => {
         if (item != null && typeof item === 'object') {
           const obj = item as Record<string, unknown>;
-          // 飞书文本字段: [{text: "...", type: "text"}]
           if (typeof obj.text === 'string') return obj.text;
-          // 飞书人员字段: [{name: "张三", id: "..."}]
           if (typeof obj.name === 'string') return obj.name;
-          return JSON.stringify(item);
+          return fieldToString(item);
         }
         return String(item);
       })
@@ -24,8 +22,12 @@ function fieldToString(v: unknown): string {
   }
   if (typeof v === 'object') {
     const obj = v as Record<string, unknown>;
-    // 飞书 URL 字段: {text: "...", link: "..."}
+    // 飞书 URL/富文本字段: {text: "...", link?: "..."}
     if (typeof obj.text === 'string') return obj.text;
+    // 飞书类型包装字段: {type: N, value: [...]}
+    if ('value' in obj && Array.isArray(obj.value)) {
+      return fieldToString(obj.value);
+    }
     return JSON.stringify(v);
   }
   return String(v);
