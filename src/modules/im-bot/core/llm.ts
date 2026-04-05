@@ -26,6 +26,7 @@ export async function chatCompletion(
       ],
       temperature: 0.1,
     });
+    console.log('[LLM] 完整响应:', JSON.stringify(res).slice(0, 500));
     const content = res.choices?.[0]?.message?.content ?? '';
     if (!content) {
       console.warn(
