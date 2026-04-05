@@ -18,7 +18,7 @@ export async function chatCompletion(
   user: string,
 ): Promise<string> {
   try {
-    const res = await getClient().chat.completions.create({
+    const raw = await getClient().chat.completions.create({
       model: env.IM_BOT_LLM_MODEL,
       messages: [
         { role: 'system', content: system },
@@ -26,7 +26,8 @@ export async function chatCompletion(
       ],
       temperature: 0.1,
     });
-    console.log('[LLM] 完整响应:', JSON.stringify(res).slice(0, 500));
+    // openai SDK v6 在某些中转服务下返回原始 JSON 字符串而非解析后的对象
+    const res = typeof raw === 'string' ? (JSON.parse(raw) as typeof raw) : raw;
     const content = res.choices?.[0]?.message?.content ?? '';
     if (!content) {
       console.warn(

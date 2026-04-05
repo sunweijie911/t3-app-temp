@@ -1,6 +1,36 @@
 import type { ExecuteResult, ParsedIntent, SceneContext } from '../core/types';
 import type { BotScene } from './types';
 
+/** 将飞书多维表格等平台返回的复杂字段值转为可读字符串 */
+function fieldToString(v: unknown): string {
+  if (v == null || v === '') return '';
+  if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean')
+    return String(v);
+  if (Array.isArray(v)) {
+    return v
+      .map((item) => {
+        if (item != null && typeof item === 'object') {
+          const obj = item as Record<string, unknown>;
+          // 飞书文本字段: [{text: "...", type: "text"}]
+          if (typeof obj.text === 'string') return obj.text;
+          // 飞书人员字段: [{name: "张三", id: "..."}]
+          if (typeof obj.name === 'string') return obj.name;
+          return JSON.stringify(item);
+        }
+        return String(item);
+      })
+      .filter(Boolean)
+      .join(' ');
+  }
+  if (typeof v === 'object') {
+    const obj = v as Record<string, unknown>;
+    // 飞书 URL 字段: {text: "...", link: "..."}
+    if (typeof obj.text === 'string') return obj.text;
+    return JSON.stringify(v);
+  }
+  return String(v);
+}
+
 export interface DbSceneConfig {
   sceneId: string;
   name: string;
@@ -73,8 +103,9 @@ export class DatabaseDrivenScene implements BotScene {
     // 通用默认格式
     if (intent.intent === 'CREATE' && result.record) {
       const entries = Object.entries(result.record.fields)
-        .filter(([, v]) => v != null && v !== '')
-        .map(([k, v]) => `${k}：${Array.isArray(v) ? v.join(' | ') : v}`);
+        .map(([k, v]) => [k, fieldToString(v)] as const)
+        .filter(([, v]) => v !== '')
+        .map(([k, v]) => `${k}：${v}`);
       return `✅ 已录入${this.name}\n\n${entries.join('\n')}`;
     }
 
@@ -83,7 +114,8 @@ export class DatabaseDrivenScene implements BotScene {
         return `📊 查询结果: 未找到匹配的${this.name}`;
       const items = result.records.map((r, i) => {
         const summary = Object.values(r.fields)
-          .filter((v) => v != null && v !== '')
+          .map(fieldToString)
+          .filter(Boolean)
           .slice(0, 4)
           .join(' | ');
         return `${i + 1}. ${summary}`;
@@ -105,8 +137,9 @@ export class DatabaseDrivenScene implements BotScene {
   ): string {
     const fields = result.record?.fields ?? result.records?.[0]?.fields ?? {};
     const fieldList = Object.entries(fields)
-      .filter(([, v]) => v != null && v !== '')
-      .map(([k, v]) => `${k}：${Array.isArray(v) ? v.join(' | ') : v}`)
+      .map(([k, v]) => [k, fieldToString(v)] as const)
+      .filter(([, v]) => v !== '')
+      .map(([k, v]) => `${k}：${v}`)
       .join('\n');
 
     if (!this.replyTemplate) return '✅ 操作完成';
