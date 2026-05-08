@@ -27,6 +27,12 @@ async function feishuApi(path: string, method: string, body?: unknown) {
     msg?: string;
   };
   if (data.code !== 0) {
+    console.error('[FeishuBitable] API 错误', {
+      path,
+      body: JSON.stringify(body),
+      code: data.code,
+      msg: data.msg,
+    });
     throw new Error(`飞书 Bitable API 错误: ${data.msg ?? data.code}`);
   }
   return data.data;
