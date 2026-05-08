@@ -9,6 +9,6 @@ export type VerifyResult =
 export interface ChannelAdapter {
   readonly platform: BotPlatform;
   verify(req: Request, body: unknown): Promise<VerifyResult>;
-  parse(body: unknown): UnifiedMessage | null;
+  parse(body: unknown): Promise<UnifiedMessage | null>;
   reply(msg: UnifiedMessage, content: string): Promise<void>;
 }

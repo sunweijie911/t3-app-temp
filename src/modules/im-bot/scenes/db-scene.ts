@@ -70,10 +70,12 @@ export class DatabaseDrivenScene implements BotScene {
   }
 
   getSystemPrompt(ctx: SceneContext): string {
+    // biome-ignore-start lint/suspicious/noTemplateCurlyInString: 字面占位符，由 replaceAll 在 runtime 替换为上下文值
     return this.systemPrompt
       .replaceAll('${today}', ctx.today)
       .replaceAll('${senderName}', ctx.senderName)
       .replaceAll('${chatName}', ctx.chatName ?? '');
+    // biome-ignore-end lint/suspicious/noTemplateCurlyInString: end
   }
 
   parseResult(json: string): ParsedIntent | null {
@@ -151,12 +153,14 @@ export class DatabaseDrivenScene implements BotScene {
       .join('\n');
 
     if (!this.replyTemplate) return '✅ 操作完成';
+    // biome-ignore-start lint/suspicious/noTemplateCurlyInString: 字面占位符，由 replaceAll 在 runtime 替换
     return this.replyTemplate
       .replaceAll('${intent}', intent.intent)
       .replaceAll('${summary}', intent.summary)
       .replaceAll('${fieldList}', fieldList)
       .replaceAll('${count}', String(result.records?.length ?? 1))
       .replaceAll('${sceneName}', this.name);
+    // biome-ignore-end lint/suspicious/noTemplateCurlyInString: end
   }
 }
 

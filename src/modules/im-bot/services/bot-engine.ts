@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { db } from '@/server/db';
+import { feishuTokenManager } from '../auth/feishu-token';
 import { DingtalkChannelAdapter } from '../channels/dingtalk';
 import { FeishuChannelAdapter } from '../channels/feishu';
 import type { ChannelAdapter } from '../channels/types';
@@ -9,6 +10,7 @@ import { Dispatcher } from '../core/dispatcher';
 import type { BotEvent, SpreadsheetTableConfig } from '../core/types';
 import { DatabaseDrivenScene, parseKeywords } from '../scenes/db-scene';
 import { botEventLogs, botScenes, botTableMappings } from '../schema';
+import { resetCredentialsCache } from './credentials';
 
 const channelAdapters: Record<BotPlatform, ChannelAdapter> = {
   feishu: new FeishuChannelAdapter(),
@@ -102,6 +104,8 @@ async function getDispatcher(): Promise<Dispatcher> {
 
 export function reloadBotConfig() {
   dispatcher = null;
+  resetCredentialsCache();
+  feishuTokenManager.reset();
 }
 
 export async function handleBotWebhook(
@@ -119,7 +123,7 @@ export async function handleBotWebhook(
     return new Response('Forbidden', { status: verifyResult.status });
   }
 
-  const msg = adapter.parse(body);
+  const msg = await adapter.parse(body);
   if (!msg) {
     return Response.json({ ok: true });
   }

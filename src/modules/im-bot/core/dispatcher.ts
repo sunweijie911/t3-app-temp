@@ -197,7 +197,11 @@ export class Dispatcher {
 
     switch (parsed.intent) {
       case 'CREATE': {
-        const fields = { ...parsed.fields, operator: msg.senderName };
+        // 仅当 fieldMapping 显式声明 operator 字段时才注入操作人
+        // (避免对没有"录入人"字段的飞书表写入未知字段触发 InvalidField 错误)
+        const fields = tableConfig.fieldMapping.operator
+          ? { ...parsed.fields, operator: msg.senderName }
+          : parsed.fields;
         const record = await adapter.createRecord(tableConfig, fields);
         return {
           success: true,
@@ -306,6 +310,7 @@ export class Dispatcher {
       if (Number.isNaN(num) || num < 1 || num > action.candidates.length)
         return false;
       this.pending.delete(msg.chatId, msg.senderId);
+      // biome-ignore lint/style/noNonNullAssertion: num 已校验在 [1, candidates.length] 范围内
       const target = action.candidates[num - 1]!;
       const updated = await adapter.updateRecord(
         tableConfig,

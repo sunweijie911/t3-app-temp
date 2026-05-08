@@ -4,15 +4,17 @@
 > **日期**: 2026-04-03
 > **位置**: `src/modules/im-bot/`
 >
-> ### 实施决策 (2026-04-03)
+> ### 实施决策 (2026-04-03，2026-05-08 修订)
 > | 决策项 | 选择 |
 > |--------|------|
 > | LLM 接入 | OpenAI 兼容 SDK (`openai` 包 + baseURL) |
-> | 内置场景 | Sales + Tasks 两个 |
-> | 凭证存储 | 环境变量优先，数据库作为备选展示 |
+> | 场景实现 | 统一使用 `DatabaseDrivenScene`，全部由后台配置驱动（无内置硬编码场景） |
+> | 凭证存储 | 数据库（`botPlatforms.credentials`）优先，环境变量兜底 |
 > | CRUD 范围 | 一步到位，完整 CRUD + PendingAction |
 > | 后台范围 | 全部四个页面（场景、平台配置、表格映射、事件日志） |
 > | 多平台 | 飞书先实现，钉钉/企微预留 TODO |
+> | 用户名解析 | 通过飞书通讯录 API 解析 `open_id` → 真实姓名，本地缓存 1 小时 |
+> | 安全策略 | `verificationToken` 必须配置（DB 或 env），缺失时 webhook 拒绝请求（fail-closed） |
 
 ## 概述
 
@@ -216,26 +218,18 @@ src/modules/im-bot/
 │   ├── wecom-sheet.ts                # 企微智能表格
 │   └── factory.ts                     # 根据 platform 返回对应 adapter
 │
-├── scenes/                            # 内置业务场景
+├── scenes/                            # 业务场景（数据库驱动）
 │   ├── types.ts                       # BotScene 接口定义
-│   ├── sales/                         # 销售记录场景
-│   │   ├── index.ts
-│   │   ├── prompt.ts
-│   │   └── formatter.ts
-│   └── tasks/                         # 任务跟踪场景
-│       ├── index.ts
-│       ├── prompt.ts
-│       └── formatter.ts
+│   └── db-scene.ts                    # DatabaseDrivenScene — 通用场景实现
 │
-├── auth/                              # 各平台 Token 管理
+├── auth/                              # 各平台 Token / 用户解析
 │   ├── types.ts                       # TokenManager 接口
-│   ├── feishu-token.ts
-│   ├── dingtalk-token.ts
-│   └── wecom-token.ts
+│   ├── feishu-token.ts                # tenant_access_token 管理（凭证从 credentials helper 获取）
+│   └── feishu-user.ts                 # 通讯录 open_id → 用户名解析（带缓存）
 │
 └── services/                          # 业务服务
-    ├── bot-engine.ts                  # Bot 引擎创建与初始化
-    └── config-loader.ts              # 从数据库加载运行时配置
+    ├── bot-engine.ts                  # Bot 引擎创建、初始化、热重载
+    └── credentials.ts                 # 凭证加载：DB 优先 + env 兜底
 
 src/app/
 ├── api/bot/                           # Webhook API Routes
@@ -708,73 +702,66 @@ export const appRouter = createTRPCRouter({
 
 ### 配置加载策略
 
-im-bot 的配置来源有两种，按优先级合并：
+im-bot 的所有运行时配置都存储在数据库中，平台凭证支持环境变量兜底：
 
 ```mermaid
 flowchart LR
-    DB["数据库配置<br/>(botScenes / botPlatforms / botTableMappings)"] --> MERGE["配置合并"]
-    CODE["内置场景<br/>(scenes/sales, scenes/tasks)"] --> MERGE
-    MERGE --> ENGINE["Bot Engine"]
+    DB["数据库配置<br/>(botScenes / botPlatforms / botTableMappings)"] --> ENGINE["Bot Engine"]
+    ENV["环境变量<br/>(IM_BOT_FEISHU_*)"] -. 兜底 .-> ENGINE
 ```
 
-| 来源 | 说明 | 优先级 |
-|------|------|--------|
-| 数据库 | 后台界面创建的场景、平台凭证、表格映射 | 高（可覆盖内置） |
-| 内置代码 | `scenes/` 目录下的硬编码场景（默认 prompt、关键词等） | 低（兜底） |
+| 配置类型 | 主要来源 | 兜底 |
+|---------|---------|------|
+| 业务场景 | `botScenes` 表（后台 UI 管理） | — |
+| 表格映射 | `botTableMappings` 表（后台 UI 管理） | — |
+| 平台凭证 | `botPlatforms.credentials` 字段（后台 UI 管理） | 环境变量 |
+| LLM 凭证 | 环境变量 `IM_BOT_LLM_*` | — |
 
-**工作方式**：
-1. 启动时先加载内置场景 (SalesScene, TasksScene 等)
-2. 从数据库加载 `botScenes` 表中 `isActive=true` 的场景配置
-3. 如果数据库中存在与内置场景相同 `sceneId` 的记录，数据库配置覆盖内置默认值（支持在后台修改 prompt、关键词等）
-4. 数据库中新增的 sceneId 创建为 "动态场景"（DynamicScene），使用通用的 LLM 解析逻辑
-5. 平台凭证和表格映射完全由数据库管理
+**凭证加载（`services/credentials.ts`）**：
+- 飞书四项凭证（`appId` / `appSecret` / `encryptKey` / `verificationToken`）逐字段读取：DB 中有值则用 DB，DB 中为空则回退到对应 env 变量。
+- 内存缓存，配置变更时由 `reloadBotConfig()` 触发失效。
+- `verificationToken` 必须可被解析到（DB 或 env），否则 webhook 直接返回 403，避免裸奔。
 
-### 动态场景 (DynamicScene)
+### 业务场景 — DatabaseDrivenScene
 
-对于通过后台界面新增的场景（非内置），使用通用实现：
+所有场景统一使用 `scenes/db-scene.ts` 中的 `DatabaseDrivenScene`，行为完全由数据库 `botScenes` 表的字段驱动：
 
 ```typescript
-class DynamicScene implements BotScene {
-  constructor(private config: typeof botScenes.$inferSelect) {}
+class DatabaseDrivenScene implements BotScene {
+  // id / name / description / keywords / systemPrompt / replyTemplate
+  // 全部从 botScenes 行加载
 
-  get id() { return this.config.sceneId }
-  get name() { return this.config.name }
-  get description() { return this.config.description ?? '' }
-
-  match(content: string): number {
-    const keywords = JSON.parse(this.config.keywords ?? '[]') as string[]
-    const matched = keywords.filter(kw => content.includes(kw))
-    return matched.length > 0 ? matched.length / keywords.length : 0
-  }
-
-  getSystemPrompt(ctx: SceneContext): string {
-    return (this.config.systemPrompt ?? '')
-      .replace('{{today}}', ctx.today)
-      .replace('{{senderName}}', ctx.senderName)
-  }
-
-  parseResult(json: string): ParsedIntent | null {
-    // 通用 JSON 解析，校验 intent / fields / confidence 基本结构
-  }
-
-  formatReply(intent: ParsedIntent, result: ExecuteResult): string {
-    // 基于 replyTemplate 模板渲染，或使用默认格式
-  }
+  match(content)        // 关键词命中比例
+  getSystemPrompt(ctx)  // 替换 ${today} / ${senderName} / ${chatName}
+  parseResult(json)     // 校验 intent / fields / confidence
+  formatReply(intent, result)  // 优先用 replyTemplate，否则使用通用格式
 }
 ```
 
+**新增场景流程**：进入 `/admin/im-bot` → 新增场景 → 填写 `sceneId`、关键词、`systemPrompt`、`replyTemplate` → 在 `/admin/im-bot/table-mappings` 配置该场景对应的多维表格映射。
+
+### 用户名解析（飞书）
+
+`im.message.receive_v1` 事件体只包含 `open_id`，不直接给真实姓名。`auth/feishu-user.ts` 在消息解析阶段调用 `/contact/v3/users/{open_id}?user_id_type=open_id` 拿到真实姓名，并以 1 小时 TTL 在内存中缓存。失败时回退到 `open_id` 作为 `senderName`，不阻塞主流程。
+
+> 飞书应用需开通 `contact:user.base:readonly` 权限。
+
 ## 环境变量
 
-im-bot 模块的凭证配置存储在数据库中（通过后台界面管理），仅需以下全局配置：
-
 ```bash
-# LLM 服务 (OpenAI 兼容接口)
+# LLM 服务 (OpenAI 兼容接口) — 必填
 IM_BOT_LLM_BASE_URL              # API 地址，如 https://api.deepseek.com/v1
 IM_BOT_LLM_API_KEY               # API 密钥
 IM_BOT_LLM_MODEL                 # 模型名称，默认 deepseek-chat
+
+# 飞书凭证 — 兜底（推荐改用后台 UI 配置；env 仅作为初始化或本地开发兜底）
+IM_BOT_FEISHU_APP_ID
+IM_BOT_FEISHU_APP_SECRET
+IM_BOT_FEISHU_ENCRYPT_KEY        # 启用加密推送时必填
+IM_BOT_FEISHU_VERIFICATION_TOKEN # 必填（DB 或 env 二选一），缺失则 webhook 拒绝请求
 ```
 
-> 平台凭证（飞书 appId/appSecret、钉钉 appKey/appSecret、企微 corpId/botSecret 等）通过后台管理界面配置，存储在 `botPlatforms` 表中。
+> 凭证存储顺序：后台 `/admin/im-bot/platforms` 填写的 `botPlatforms.credentials` 优先；任一字段未填则回退到对应 env。后台保存后，下次 webhook 请求自动重新加载（`reloadBotConfig()` 同时清空凭证缓存与 token 缓存）。
 
 ## 缺点与风险
 
@@ -783,7 +770,7 @@ IM_BOT_LLM_MODEL                 # 模型名称，默认 deepseek-chat
 | **三平台 API 维护成本** | 飞书/钉钉/企微 API 各自迭代 | Adapter 接口隔离，独立维护 |
 | **LLM 解析准确率** | 自然语言模糊性导致字段提取错误 | confidence 阈值 + Schema 校验 + 二次确认 |
 | **Webhook 超时** | 飞书/钉钉 3s 超时，LLM 调用 1~5s | 先返回 200 再异步处理 |
-| **凭证安全** | 平台凭证存储在数据库中 | 敏感字段加密存储，后台仅管理员可访问 |
+| **凭证安全** | 平台凭证存储在数据库中（DB 优先 + env 兜底） | 后台仅管理员可访问；`verificationToken` 缺失时 webhook 直接 403 |
 | **Next.js 异步限制** | Serverless 环境异步任务可能被截断 | 使用 `waitUntil` 或在 Node.js runtime 下运行 |
 | **动态场景灵活性** | 通过后台配置的 prompt 可能不如代码精确 | 内置场景作为标杆，动态场景使用通用解析 |
 

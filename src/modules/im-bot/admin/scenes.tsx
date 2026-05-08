@@ -371,8 +371,10 @@ export default function ImBotScenesPage() {
                   value={editing.systemPrompt}
                 />
                 <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                  {/* biome-ignore-start lint/suspicious/noTemplateCurlyInString: 文档展示给用户的占位符语法 */}
                   支持模板变量：{'${today}'} 当前日期、{'${senderName}'}{' '}
                   发送者、{'${chatName}'} 群名
+                  {/* biome-ignore-end lint/suspicious/noTemplateCurlyInString: end */}
                 </Typography.Text>
               </Form.Item>
               <Form.Item
@@ -388,9 +390,11 @@ export default function ImBotScenesPage() {
                   value={editing.replyTemplate}
                 />
                 <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                  {/* biome-ignore-start lint/suspicious/noTemplateCurlyInString: 文档展示给用户的占位符语法 */}
                   支持变量：{'${intent}'} 操作类型、{'${summary}'} 摘要、
                   {'${fieldList}'} 字段列表、{'${count}'} 记录数、
                   {'${sceneName}'} 场景名
+                  {/* biome-ignore-end lint/suspicious/noTemplateCurlyInString: end */}
                 </Typography.Text>
               </Form.Item>
             </Form>

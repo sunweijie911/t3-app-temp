@@ -1,7 +1,8 @@
 import crypto from 'node:crypto';
-import { env } from '@/env';
 import { feishuTokenManager } from '../auth/feishu-token';
+import { getFeishuUserName } from '../auth/feishu-user';
 import type { UnifiedMessage } from '../core/types';
+import { getFeishuCredentials } from '../services/credentials';
 import type { ChannelAdapter, VerifyResult } from './types';
 
 function decryptFeishuEvent(encrypt: string, key: string): string {
@@ -19,12 +20,15 @@ export class FeishuChannelAdapter implements ChannelAdapter {
 
   async verify(_req: Request, body: unknown): Promise<VerifyResult> {
     const obj = body as Record<string, unknown>;
+    const creds = await getFeishuCredentials();
 
     if (typeof obj.encrypt === 'string') {
-      const encryptKey = env.IM_BOT_FEISHU_ENCRYPT_KEY;
-      if (!encryptKey) return { ok: false, status: 403 };
+      if (!creds.encryptKey) {
+        console.warn('[FeishuChannel] 收到加密事件但未配置 encryptKey');
+        return { ok: false, status: 403 };
+      }
       try {
-        const decrypted = decryptFeishuEvent(obj.encrypt, encryptKey);
+        const decrypted = decryptFeishuEvent(obj.encrypt, creds.encryptKey);
         const parsed = JSON.parse(decrypted) as Record<string, unknown>;
         Object.assign(obj, parsed);
       } catch {
@@ -36,18 +40,25 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       return { challenge: obj.challenge };
     }
 
+    // verification_token 必须配置（DB 或 env），否则拒绝以避免 webhook 裸奔
+    if (!creds.verificationToken) {
+      console.warn(
+        '[FeishuChannel] 拒绝请求：未配置 verificationToken，webhook 不能裸奔',
+      );
+      return { ok: false, status: 403 };
+    }
+
     const token = (obj.header as Record<string, unknown>)?.token as
       | string
       | undefined;
-    const verificationToken = env.IM_BOT_FEISHU_VERIFICATION_TOKEN;
-    if (verificationToken && (!token || token !== verificationToken)) {
+    if (!token || token !== creds.verificationToken) {
       return { ok: false, status: 403 };
     }
 
     return { ok: true };
   }
 
-  parse(body: unknown): UnifiedMessage | null {
+  async parse(body: unknown): Promise<UnifiedMessage | null> {
     const obj = body as Record<string, unknown>;
     const header = obj.header as Record<string, unknown> | undefined;
     const event = obj.event as Record<string, unknown> | undefined;
@@ -80,13 +91,16 @@ export class FeishuChannelAdapter implements ChannelAdapter {
     const senderInfo = sender.sender_id as Record<string, string> | undefined;
     const senderId = senderInfo?.open_id ?? senderInfo?.user_id ?? '';
 
-    // 飞书事件体中 sender.sender_id 仅含 ID，不含名字。
-    // 尝试从 mentions 中提取发送者名（如果机器人也被 @ 了，mentions 里可能有其他用户信息）。
-    // 兜底使用 senderId。后续可接入通讯录 API 查询用户名。
-    const senderName =
-      (sender as Record<string, unknown>).sender_type === 'user'
-        ? senderId
-        : '未知用户';
+    let senderName = senderId;
+    if (
+      (sender as Record<string, unknown>).sender_type === 'user' &&
+      senderId
+    ) {
+      const realName = await getFeishuUserName(senderId);
+      if (realName) senderName = realName;
+    } else if ((sender as Record<string, unknown>).sender_type !== 'user') {
+      senderName = '未知用户';
+    }
 
     return {
       platform: 'feishu',

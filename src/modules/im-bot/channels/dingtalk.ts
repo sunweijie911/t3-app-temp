@@ -9,7 +9,7 @@ export class DingtalkChannelAdapter implements ChannelAdapter {
     return { ok: false, status: 501 };
   }
 
-  parse(): UnifiedMessage | null {
+  async parse(): Promise<UnifiedMessage | null> {
     return null;
   }
 
