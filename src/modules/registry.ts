@@ -263,7 +263,8 @@ export function getModule(id: string): ModuleDefinition {
 export function getAllModules(): ModuleDefinition[] {
   const enabled = getEnabledModuleIds();
   const list = enabled
-    ? enabled.filter((id) => modules[id]).map((id) => modules[id]!)
+    ? // biome-ignore lint/style/noNonNullAssertion: 上一步 filter 已确保 modules[id] 存在
+      enabled.filter((id) => modules[id]).map((id) => modules[id]!)
     : Object.values(modules);
   return list.map(applyNameOverride);
 }

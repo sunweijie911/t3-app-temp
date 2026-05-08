@@ -74,8 +74,8 @@ export function PackageCard({
         style={{ borderLeft: `4px solid ${accent}` }}
       >
         {/* 商品大图 */}
-        {/* biome-ignore lint/performance/noImgElement: 运行时上传的动态图片，使用 img 避免走 /_next/image 优化端点 */}
         {imageUrl && (
+          // biome-ignore lint/performance/noImgElement: 运行时上传的动态图片，使用 img 避免走 /_next/image 优化端点
           <img
             alt={title}
             className="aspect-[2/1] w-full object-cover"

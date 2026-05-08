@@ -61,7 +61,9 @@ function parseRateLimit(
 ): [number, number] {
   const parts = value.split('/');
   if (parts.length !== 2) return [defaultMax, defaultWindowMs];
+  // biome-ignore lint/style/noNonNullAssertion: 上一行 length === 2 已校验
   const max = parseInt(parts[0]!, 10);
+  // biome-ignore lint/style/noNonNullAssertion: 上一行 length === 2 已校验
   const windowMs = parseInt(parts[1]!, 10);
   if (
     Number.isNaN(max) ||

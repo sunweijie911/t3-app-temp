@@ -87,6 +87,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
     const matched = allKeys
       .filter((k) => pathname.startsWith(`${k}/`) || pathname.startsWith(k))
       .sort((a, b) => b.length - a.length);
+    // biome-ignore lint/style/noNonNullAssertion: matched.length > 0 已校验
     return matched.length > 0 ? [matched[0]!] : [];
   }, [pathname, modules]);
 

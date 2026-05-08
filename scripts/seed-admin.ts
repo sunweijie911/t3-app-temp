@@ -64,6 +64,7 @@ async function main() {
       body: {
         email: email as string,
         password: password as string,
+        // biome-ignore lint/style/noNonNullAssertion: email 已通过上方校验非空，split 至少返回一段
         name: name ?? (email as string).split('@')[0]!,
       },
     });
