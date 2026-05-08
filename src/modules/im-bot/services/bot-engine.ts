@@ -113,7 +113,13 @@ export async function handleBotWebhook(
   req: Request,
 ): Promise<Response> {
   const adapter = channelAdapters[platform];
-  const body = await req.json();
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    console.warn('[BotEngine] 请求体解析失败，platform:', platform);
+    return new Response('Bad Request', { status: 400 });
+  }
 
   const verifyResult = await adapter.verify(req, body);
   if ('challenge' in verifyResult) {

@@ -48,7 +48,13 @@ ${scenesDesc}
 - 查看/查询/修改/删除某个具体事物的数据时，根据事物类型判断场景
 - 只有完全无法判断时才返回 "none"`;
 
-    const result = await chatCompletion(systemPrompt, content);
+    let result: string;
+    try {
+      result = await chatCompletion(systemPrompt, content);
+    } catch (err) {
+      console.warn('[SceneRegistry] matchByLLM 失败，降级为无场景匹配:', err);
+      return null;
+    }
     const sceneId = result.trim().toLowerCase();
     if (sceneId === 'none') return null;
     return this.scenes.find((s) => s.id === sceneId) ?? null;

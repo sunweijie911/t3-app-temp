@@ -47,13 +47,24 @@ function fieldToString(v: unknown): string {
 }
 
 function applyFieldVars(tpl: string, fields: Record<string, unknown>): string {
-  const substituted = tpl.replace(/\$\{fields\.([^}]+)\}/g, (_, key: string) =>
-    fieldToString(fields[key] ?? ''),
-  );
-  // 值为空时整行隐藏（匹配"标签：<空>"形式的行）
-  return substituted
+  return tpl
     .split('\n')
-    .filter((line) => !/：\s*$/.test(line))
+    .flatMap((line) => {
+      let hasPlaceholder = false;
+      let allEmpty = true;
+      const substituted = line.replace(
+        /\$\{fields\.([^}]+)\}/g,
+        (_, key: string) => {
+          hasPlaceholder = true;
+          const val = fieldToString(fields[key] ?? '');
+          if (val) allEmpty = false;
+          return val;
+        },
+      );
+      // 行内所有占位符都为空时整行隐藏（兼容"标签：${fields.x} 元"带单位后缀的情况）
+      if (hasPlaceholder && allEmpty) return [];
+      return [substituted];
+    })
     .join('\n');
 }
 
@@ -115,7 +126,13 @@ export class DatabaseDrivenScene implements BotScene {
         confidence: Number(obj.confidence) || 0,
         summary: String(obj.summary ?? ''),
       };
-    } catch {
+    } catch (err) {
+      console.warn(
+        '[DbScene] parseResult JSON 解析失败:',
+        err,
+        '原始JSON:',
+        json.slice(0, 500),
+      );
       return null;
     }
   }
@@ -201,7 +218,8 @@ export class DatabaseDrivenScene implements BotScene {
         const prefix = records.length > 1 ? `【第 ${i + 1} 条】\n` : '';
         return prefix + applyFieldVars(rowTpl, r.fields);
       });
-      tpl = tpl.replace(/<!--each-->[\s\S]*?<!--\/each-->/, rows.join('\n'));
+      const joined = rows.join('\n');
+      tpl = tpl.replace(/<!--each-->[\s\S]*?<!--\/each-->/, () => joined);
     } else {
       // 无 each 块时直接对第一条记录展开（CREATE/UPDATE）
       tpl = applyFieldVars(tpl, firstFields);

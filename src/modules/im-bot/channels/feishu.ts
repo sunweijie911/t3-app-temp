@@ -31,7 +31,11 @@ export class FeishuChannelAdapter implements ChannelAdapter {
         const decrypted = decryptFeishuEvent(obj.encrypt, creds.encryptKey);
         const parsed = JSON.parse(decrypted) as Record<string, unknown>;
         Object.assign(obj, parsed);
-      } catch {
+      } catch (err) {
+        console.error(
+          '[FeishuChannel] 解密事件失败，可能是 encryptKey 配置错误:',
+          err,
+        );
         return { ok: false, status: 403 };
       }
     }
@@ -81,7 +85,12 @@ export class FeishuChannelAdapter implements ChannelAdapter {
     try {
       const parsed = JSON.parse(message.content as string) as { text?: string };
       content = parsed.text ?? '';
-    } catch {
+    } catch (err) {
+      console.warn(
+        '[FeishuChannel] message.content 解析失败，raw:',
+        String(message.content).slice(0, 200),
+        err,
+      );
       return null;
     }
 
@@ -116,22 +125,41 @@ export class FeishuChannelAdapter implements ChannelAdapter {
 
   async reply(msg: UnifiedMessage, content: string): Promise<void> {
     const token = await feishuTokenManager.getToken();
-    await fetch(
-      'https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id',
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
+    try {
+      const res = await fetch(
+        'https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            receive_id: msg.chatId,
+            msg_type: 'text',
+            content: JSON.stringify({ text: content }),
+          }),
+          signal: AbortSignal.timeout(10_000),
         },
-        body: JSON.stringify({
-          receive_id: msg.chatId,
-          msg_type: 'text',
-          content: JSON.stringify({ text: content }),
-        }),
-      },
-    ).catch((err) => {
+      );
+      if (!res.ok) {
+        console.error(
+          '[FeishuChannel] 回复 HTTP 失败:',
+          res.status,
+          res.statusText,
+        );
+        return;
+      }
+      const data = (await res.json()) as { code: number; msg?: string };
+      if (data.code !== 0) {
+        console.error(
+          '[FeishuChannel] 回复业务失败: code=',
+          data.code,
+          data.msg,
+        );
+      }
+    } catch (err) {
       console.error('[FeishuChannel] 回复失败:', err);
-    });
+    }
   }
 }

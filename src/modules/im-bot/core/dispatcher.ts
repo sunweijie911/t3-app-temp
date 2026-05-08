@@ -172,7 +172,12 @@ export class Dispatcher {
       console.error('[Dispatcher] 处理失败:', err);
       await channelAdapter
         .reply(msg, '⚠️ 服务暂时繁忙，请稍后再试')
-        .catch(() => {});
+        .catch((replyErr) => {
+          console.error(
+            '[Dispatcher] 兜底回复也失败，用户可能未收到任何消息:',
+            replyErr,
+          );
+        });
       logEvent({
         result: 'error',
         errorMsg: err instanceof Error ? err.message : '未知错误',

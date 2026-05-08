@@ -13,8 +13,14 @@ async function feishuApi(path: string, method: string, body?: unknown) {
         Authorization: `Bearer ${token}`,
       },
       body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(10_000),
     },
   );
+  if (!res.ok) {
+    throw new Error(
+      `飞书 Bitable API HTTP 错误: ${res.status} ${res.statusText} path=${path}`,
+    );
+  }
   const data = (await res.json()) as {
     code: number;
     data?: unknown;

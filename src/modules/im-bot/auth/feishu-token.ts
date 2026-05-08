@@ -4,11 +4,20 @@ import type { TokenManager } from './types';
 export class FeishuTokenManager implements TokenManager {
   private token: string | null = null;
   private expiresAt = 0;
+  private refreshPromise: Promise<string> | null = null;
 
   async getToken(): Promise<string> {
     if (this.token && Date.now() < this.expiresAt - 5 * 60 * 1000) {
       return this.token;
     }
+    if (this.refreshPromise) return this.refreshPromise;
+    this.refreshPromise = this._refresh().finally(() => {
+      this.refreshPromise = null;
+    });
+    return this.refreshPromise;
+  }
+
+  private async _refresh(): Promise<string> {
     const { appId, appSecret } = await getFeishuCredentials();
     if (!appId || !appSecret) {
       throw new Error('飞书凭证缺失：未配置 appId/appSecret');
