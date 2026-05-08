@@ -115,21 +115,26 @@ function buildFilterConditions(
       obj.value.length === 2
     ) {
       const [start, end] = obj.value as [unknown, unknown];
-      const startVal =
+      const startMs =
         typeof start === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(start)
-          ? String(dateStringToMs(start, false))
-          : String(start);
-      const endVal =
+          ? dateStringToMs(start, false)
+          : Number(start);
+      const endMs =
         typeof end === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(end)
-          ? String(dateStringToMs(end, true))
-          : String(end);
+          ? dateStringToMs(end, true)
+          : Number(end);
+      // 飞书 datetime 字段不支持 isGreaterEqual/isLessEqual，用 isGreater/isLess ±1ms 模拟
       return [
         {
           field_name: fieldName,
-          operator: 'isGreaterEqual',
-          value: [startVal],
+          operator: 'isGreater',
+          value: [String(startMs - 1)],
         },
-        { field_name: fieldName, operator: 'isLessEqual', value: [endVal] },
+        {
+          field_name: fieldName,
+          operator: 'isLess',
+          value: [String(endMs + 1)],
+        },
       ];
     }
 
@@ -144,24 +149,43 @@ function buildFilterConditions(
     }
     let v: unknown = obj.value;
     if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)) {
-      v = dateStringToMs(v, op === 'isLess' || op === 'isLessEqual');
+      const isEnd = op === 'isLess' || op === 'isLessEqual';
+      const ms = dateStringToMs(v, isEnd);
+      // 飞书 datetime 字段不支持 isGreaterEqual/isLessEqual，降级为 isGreater/isLess ±1ms
+      if (op === 'isGreaterEqual') {
+        return [
+          {
+            field_name: fieldName,
+            operator: 'isGreater',
+            value: [String(ms - 1)],
+          },
+        ];
+      }
+      if (op === 'isLessEqual') {
+        return [
+          {
+            field_name: fieldName,
+            operator: 'isLess',
+            value: [String(ms + 1)],
+          },
+        ];
+      }
+      v = ms;
     }
     return [{ field_name: fieldName, operator: op, value: [String(v)] }];
   }
 
-  // 简单值：YYYY-MM-DD → 当天范围
+  // 简单值：YYYY-MM-DD → 当天范围（飞书 datetime 字段不支持 isGreaterEqual/isLessEqual，用 ±1ms 严格不等式）
   if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const startMs = dateStringToMs(raw, false);
+    const endMs = dateStringToMs(raw, true);
     return [
       {
         field_name: fieldName,
-        operator: 'isGreaterEqual',
-        value: [String(dateStringToMs(raw, false))],
+        operator: 'isGreater',
+        value: [String(startMs - 1)],
       },
-      {
-        field_name: fieldName,
-        operator: 'isLessEqual',
-        value: [String(dateStringToMs(raw, true))],
-      },
+      { field_name: fieldName, operator: 'isLess', value: [String(endMs + 1)] },
     ];
   }
 
