@@ -1,11 +1,24 @@
 import type { ExecuteResult, ParsedIntent, SceneContext } from '../core/types';
 import type { BotScene } from './types';
 
+const DATE_MS_MIN = 946684800000; // 2000-01-01
+const DATE_MS_MAX = 4102444800000; // 2100-01-01
+
 /** 将飞书多维表格等平台返回的复杂字段值转为可读字符串 */
 function fieldToString(v: unknown): string {
   if (v == null || v === '') return '';
-  if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean')
+  if (typeof v === 'number') {
+    if (v >= DATE_MS_MIN && v <= DATE_MS_MAX) {
+      return new Date(v).toLocaleDateString('zh-CN', {
+        timeZone: 'Asia/Shanghai',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      });
+    }
     return String(v);
+  }
+  if (typeof v === 'string' || typeof v === 'boolean') return String(v);
   if (Array.isArray(v)) {
     return v
       .map((item) => {
@@ -31,6 +44,17 @@ function fieldToString(v: unknown): string {
     return JSON.stringify(v);
   }
   return String(v);
+}
+
+function applyFieldVars(tpl: string, fields: Record<string, unknown>): string {
+  const substituted = tpl.replace(/\$\{fields\.([^}]+)\}/g, (_, key: string) =>
+    fieldToString(fields[key] ?? ''),
+  );
+  // 值为空时整行隐藏（匹配"标签：<空>"形式的行）
+  return substituted
+    .split('\n')
+    .filter((line) => !/：\s*$/.test(line))
+    .join('\n');
 }
 
 export interface DbSceneConfig {
@@ -139,28 +163,51 @@ export class DatabaseDrivenScene implements BotScene {
   }
 
   /**
-   * 简易模板引擎：支持 ${intent}、${summary}、${fieldList}、${count} 变量
+   * 模板引擎：
+   * - 全局变量：${intent} ${summary} ${count} ${sceneName}
+   * - 单字段：${fields.xxx}（CREATE/UPDATE 取当条记录，QUERY 在 each 块内使用）
+   * - 查询循环：<!--each-->...<!--/each--> 对每条记录展开，多条时自动加【第N条】序号
+   * - 兼容旧变量：${fieldList}（输出所有字段的 key：value 列表）
    */
   private applyReplyTemplate(
     intent: ParsedIntent,
     result: ExecuteResult,
   ): string {
-    const fields = result.record?.fields ?? result.records?.[0]?.fields ?? {};
-    const fieldList = Object.entries(fields)
+    if (!this.replyTemplate) return '✅ 操作完成';
+
+    const records = result.records ?? (result.record ? [result.record] : []);
+    const firstFields = records[0]?.fields ?? {};
+
+    const fieldList = Object.entries(firstFields)
       .map(([k, v]) => [k, fieldToString(v)] as const)
       .filter(([, v]) => v !== '')
       .map(([k, v]) => `${k}：${v}`)
       .join('\n');
 
-    if (!this.replyTemplate) return '✅ 操作完成';
-    // biome-ignore-start lint/suspicious/noTemplateCurlyInString: 字面占位符，由 replaceAll 在 runtime 替换
-    return this.replyTemplate
+    // biome-ignore-start lint/suspicious/noTemplateCurlyInString: 字面占位符，runtime 替换
+    let tpl = this.replyTemplate
       .replaceAll('${intent}', intent.intent)
       .replaceAll('${summary}', intent.summary)
       .replaceAll('${fieldList}', fieldList)
-      .replaceAll('${count}', String(result.records?.length ?? 1))
+      .replaceAll('${count}', String(records.length))
       .replaceAll('${sceneName}', this.name);
     // biome-ignore-end lint/suspicious/noTemplateCurlyInString: end
+
+    // <!--each-->...<!--/each--> 循环块
+    const eachMatch = tpl.match(/<!--each-->([\s\S]*?)<!--\/each-->/);
+    if (eachMatch) {
+      const rowTpl = eachMatch[1] ?? '';
+      const rows = records.map((r, i) => {
+        const prefix = records.length > 1 ? `【第 ${i + 1} 条】\n` : '';
+        return prefix + applyFieldVars(rowTpl, r.fields);
+      });
+      tpl = tpl.replace(/<!--each-->[\s\S]*?<!--\/each-->/, rows.join('\n'));
+    } else {
+      // 无 each 块时直接对第一条记录展开（CREATE/UPDATE）
+      tpl = applyFieldVars(tpl, firstFields);
+    }
+
+    return tpl.trim();
   }
 }
 

@@ -169,7 +169,18 @@ filters 的每个键对应一个字段，值有两种形式：
 
 const REPLY_TEMPLATE = `\${summary}
 
-\${fieldList}`;
+<!--each-->
+商品：\${fields.productName}
+买家：\${fields.customerName}
+平台：\${fields.sellPlatform}
+收入：\${fields.incomeAmount} 元
+支出：\${fields.expenseAmount} 元
+分类：\${fields.expenseCategory}
+状态：\${fields.orderStatus}
+快递：\${fields.trackingNumber}
+日期：\${fields.date}
+备注：\${fields.remark}
+<!--/each-->`;
 
 const conn = postgres(process.env.DATABASE_URL);
 const db = drizzle(conn);
