@@ -91,7 +91,7 @@ function dateStringToMs(s: string, end = false): number {
 function buildFilterConditions(
   fieldName: string,
   raw: unknown,
-): Array<{ field_name: string; operator: string; value: unknown[] }> {
+): Array<{ field_name: string; operator: string; value: string[] }> {
   // 高级对象语法
   if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
     const obj = raw as { op?: string; value?: unknown };
@@ -103,34 +103,38 @@ function buildFilterConditions(
       obj.value.length === 2
     ) {
       const [start, end] = obj.value as [unknown, unknown];
-      const startMs =
+      const startVal =
         typeof start === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(start)
-          ? dateStringToMs(start, false)
-          : start;
-      const endMs =
+          ? String(dateStringToMs(start, false))
+          : String(start);
+      const endVal =
         typeof end === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(end)
-          ? dateStringToMs(end, true)
-          : end;
+          ? String(dateStringToMs(end, true))
+          : String(end);
       return [
-        { field_name: fieldName, operator: 'isGreaterEqual', value: [startMs] },
-        { field_name: fieldName, operator: 'isLessEqual', value: [endMs] },
+        {
+          field_name: fieldName,
+          operator: 'isGreaterEqual',
+          value: [startVal],
+        },
+        { field_name: fieldName, operator: 'isLessEqual', value: [endVal] },
       ];
     }
 
     const op = OP_ALIASES[opKey];
     if (!op) {
-      // 未知 op 退化为精确匹配
-      return [{ field_name: fieldName, operator: 'is', value: [obj.value] }];
+      return [
+        { field_name: fieldName, operator: 'is', value: [String(obj.value)] },
+      ];
     }
     if (op === 'isEmpty' || op === 'isNotEmpty') {
       return [{ field_name: fieldName, operator: op, value: [] }];
     }
     let v: unknown = obj.value;
     if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)) {
-      // 单值日期：根据 op 选 0 点还是 23:59:59
       v = dateStringToMs(v, op === 'isLess' || op === 'isLessEqual');
     }
-    return [{ field_name: fieldName, operator: op, value: [v] }];
+    return [{ field_name: fieldName, operator: op, value: [String(v)] }];
   }
 
   // 简单值：YYYY-MM-DD → 当天范围
@@ -139,17 +143,17 @@ function buildFilterConditions(
       {
         field_name: fieldName,
         operator: 'isGreaterEqual',
-        value: [dateStringToMs(raw, false)],
+        value: [String(dateStringToMs(raw, false))],
       },
       {
         field_name: fieldName,
         operator: 'isLessEqual',
-        value: [dateStringToMs(raw, true)],
+        value: [String(dateStringToMs(raw, true))],
       },
     ];
   }
 
-  return [{ field_name: fieldName, operator: 'is', value: [raw] }];
+  return [{ field_name: fieldName, operator: 'is', value: [String(raw)] }];
 }
 
 function reverseMapFields(
