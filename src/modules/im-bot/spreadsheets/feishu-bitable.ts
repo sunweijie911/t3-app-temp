@@ -123,17 +123,18 @@ function buildFilterConditions(
         typeof end === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(end)
           ? dateStringToMs(end, true)
           : Number(end);
-      // 飞书 datetime 字段不支持 isGreaterEqual/isLessEqual，用 isGreater/isLess ±1ms 模拟
+      // 飞书 datetime 字段：value 必须为 ["ExactDate", "<毫秒>"] 双元素；
+      // 且不支持 isGreaterEqual/isLessEqual，用 isGreater/isLess ±1ms 模拟
       return [
         {
           field_name: fieldName,
           operator: 'isGreater',
-          value: [String(startMs - 1)],
+          value: ['ExactDate', String(startMs - 1)],
         },
         {
           field_name: fieldName,
           operator: 'isLess',
-          value: [String(endMs + 1)],
+          value: ['ExactDate', String(endMs + 1)],
         },
       ];
     }
@@ -147,17 +148,18 @@ function buildFilterConditions(
     if (op === 'isEmpty' || op === 'isNotEmpty') {
       return [{ field_name: fieldName, operator: op, value: [] }];
     }
-    let v: unknown = obj.value;
-    if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)) {
+    const rawV: unknown = obj.value;
+    if (typeof rawV === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(rawV)) {
       const isEnd = op === 'isLess' || op === 'isLessEqual';
-      const ms = dateStringToMs(v, isEnd);
-      // 飞书 datetime 字段不支持 isGreaterEqual/isLessEqual，降级为 isGreater/isLess ±1ms
+      const ms = dateStringToMs(rawV, isEnd);
+      // 飞书 datetime 字段：value 必须 ["ExactDate", "<毫秒>"] 双元素；
+      // 且不支持 isGreaterEqual/isLessEqual，降级为 isGreater/isLess ±1ms
       if (op === 'isGreaterEqual') {
         return [
           {
             field_name: fieldName,
             operator: 'isGreater',
-            value: [String(ms - 1)],
+            value: ['ExactDate', String(ms - 1)],
           },
         ];
       }
@@ -166,16 +168,24 @@ function buildFilterConditions(
           {
             field_name: fieldName,
             operator: 'isLess',
-            value: [String(ms + 1)],
+            value: ['ExactDate', String(ms + 1)],
           },
         ];
       }
-      v = ms;
+      return [
+        {
+          field_name: fieldName,
+          operator: op,
+          value: ['ExactDate', String(ms)],
+        },
+      ];
     }
-    return [{ field_name: fieldName, operator: op, value: [String(v)] }];
+    return [{ field_name: fieldName, operator: op, value: [String(rawV)] }];
   }
 
-  // 简单值：YYYY-MM-DD → 当天范围（飞书 datetime 字段不支持 isGreaterEqual/isLessEqual，用 ±1ms 严格不等式）
+  // 简单值：YYYY-MM-DD → 当天范围
+  // 飞书 datetime 字段：value 必须 ["ExactDate", "<毫秒>"] 双元素；
+  // 且不支持 isGreaterEqual/isLessEqual，用 isGreater/isLess ±1ms 严格不等式
   if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw)) {
     const startMs = dateStringToMs(raw, false);
     const endMs = dateStringToMs(raw, true);
@@ -183,9 +193,13 @@ function buildFilterConditions(
       {
         field_name: fieldName,
         operator: 'isGreater',
-        value: [String(startMs - 1)],
+        value: ['ExactDate', String(startMs - 1)],
       },
-      { field_name: fieldName, operator: 'isLess', value: [String(endMs + 1)] },
+      {
+        field_name: fieldName,
+        operator: 'isLess',
+        value: ['ExactDate', String(endMs + 1)],
+      },
     ];
   }
 
