@@ -2,6 +2,7 @@ import { and, count, desc, eq, gte, lt, lte, min, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { adminProcedure, createTRPCRouter } from '@/server/api/trpc';
+import { feishuTokenManager } from '../auth/feishu-token';
 import { BOT_EVENT_RESULT_ENUM, BOT_PLATFORM_ENUM } from '../constants';
 import {
   botEventLogs,
@@ -10,6 +11,22 @@ import {
   botTableMappings,
 } from '../schema';
 import { reloadBotConfig } from '../services/bot-engine';
+
+/**
+ * 根据飞书 ui_type 推断 fieldMapping 建议类型。
+ * - SingleLink/DuplexLink   → link（需要再选 displayField）
+ * - MultiSelect             → multiSelect
+ * - Text/Number/SingleSelect/Date 等 → plain
+ * - 名字含敏感关键字时再叠加 sensitive=true（前端兜底）
+ */
+function suggestMappingType(
+  uiType: string | undefined,
+  multiple: boolean | undefined,
+): 'plain' | 'link' | 'multiSelect' {
+  if (uiType === 'SingleLink' || uiType === 'DuplexLink') return 'link';
+  if (uiType === 'MultiSelect' || multiple === true) return 'multiSelect';
+  return 'plain';
+}
 
 export const imBotAdminRouter = createTRPCRouter({
   listScenes: adminProcedure.query(async ({ ctx }) => {
@@ -156,7 +173,32 @@ export const imBotAdminRouter = createTRPCRouter({
         platform: BOT_PLATFORM_ENUM,
         workspaceId: z.string().min(1),
         tableId: z.string().min(1),
-        fieldMapping: z.record(z.string(), z.string()).default({}),
+        fieldMapping: z
+          .record(
+            z.string(),
+            z.union([
+              z.string(),
+              z.object({
+                name: z.string(),
+                type: z.literal('link'),
+                linkTableId: z.string(),
+                displayField: z.string(),
+                sensitive: z.boolean().optional(),
+              }),
+              z.object({
+                name: z.string(),
+                type: z.literal('multiSelect'),
+                sensitive: z.boolean().optional(),
+              }),
+              z.object({
+                name: z.string(),
+                type: z.literal('plain'),
+                sensitive: z.boolean().optional(),
+              }),
+            ]),
+          )
+          .default({}),
+        uniqueKey: z.string().max(64).optional(),
         isActive: z.boolean().default(true),
       }),
     )
@@ -171,6 +213,7 @@ export const imBotAdminRouter = createTRPCRouter({
           workspaceId: input.workspaceId,
           tableId: input.tableId,
           fieldMapping: input.fieldMapping,
+          uniqueKey: input.uniqueKey,
           isActive: input.isActive,
         })
         .onConflictDoUpdate({
@@ -179,6 +222,7 @@ export const imBotAdminRouter = createTRPCRouter({
             workspaceId: input.workspaceId,
             tableId: input.tableId,
             fieldMapping: input.fieldMapping,
+            uniqueKey: input.uniqueKey,
             isActive: input.isActive,
           },
         });
@@ -194,6 +238,59 @@ export const imBotAdminRouter = createTRPCRouter({
         .where(eq(botTableMappings.id, input.id));
       reloadBotConfig();
       return { success: true };
+    }),
+
+  /**
+   * 从飞书拉取指定多维表的字段列表，供 admin UI 勾选生成 fieldMapping。
+   * 仅 feishu 平台；workspaceId=app_token，tableId 必填。
+   */
+  fetchBitableFields: adminProcedure
+    .input(
+      z.object({
+        workspaceId: z.string().min(1),
+        tableId: z.string().min(1),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const token = await feishuTokenManager.getToken();
+      const res = await fetch(
+        `https://open.feishu.cn/open-apis/bitable/v1/apps/${input.workspaceId}/tables/${input.tableId}/fields?page_size=100`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          signal: AbortSignal.timeout(10_000),
+        },
+      );
+      if (!res.ok) {
+        throw new Error(`飞书 API HTTP 错误: ${res.status} ${res.statusText}`);
+      }
+      const data = (await res.json()) as {
+        code: number;
+        msg?: string;
+        data?: {
+          items?: Array<{
+            field_id: string;
+            field_name: string;
+            type: number;
+            ui_type?: string;
+            property?: { multiple?: boolean };
+          }>;
+        };
+      };
+      if (data.code !== 0) {
+        throw new Error(`飞书 API 错误: ${data.msg ?? data.code}`);
+      }
+      const items = data.data?.items ?? [];
+      // ui_type 参考 飞书 OpenAPI；这里只用到几个常见值映射建议类型
+      return items.map((it) => ({
+        fieldId: it.field_id,
+        fieldName: it.field_name,
+        uiType: it.ui_type ?? '',
+        // 给前端的建议映射类型；admin 仍可手动覆盖
+        suggestedType: suggestMappingType(it.ui_type, it.property?.multiple),
+      }));
     }),
 
   listEventLogs: adminProcedure

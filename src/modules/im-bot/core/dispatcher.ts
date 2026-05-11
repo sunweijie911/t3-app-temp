@@ -69,12 +69,13 @@ export class Dispatcher {
           return;
         }
         // 无法识别的输入：提示用户并保留 PendingAction，不走正常流程
-        await channelAdapter.reply(
-          msg,
-          pendingAction.type === 'confirm_delete'
-            ? '请回复"确认删除"执行，或回复"取消"放弃'
-            : `请回复序号(1~${pendingAction.candidates.length})选择，或回复"取消"放弃`,
-        );
+        const promptByType: Record<PendingAction['type'], string> = {
+          confirm_delete: '请回复"确认删除"执行，或回复"取消"放弃',
+          confirm_upsert:
+            '请回复"确认更新"合并到现有记录，"强制新建"创建新记录，或"取消"放弃',
+          select_record: `请回复序号(1~${pendingAction.candidates.length})选择，或回复"取消"放弃`,
+        };
+        await channelAdapter.reply(msg, promptByType[pendingAction.type]);
         logEvent({ sceneId: pendingAction.sceneId, result: 'ignored' });
         return;
       }
@@ -207,6 +208,29 @@ export class Dispatcher {
         const fields = tableConfig.fieldMapping.operator
           ? { ...parsed.fields, operator: msg.senderName }
           : parsed.fields;
+
+        // 唯一键查重：命中已有记录时挂起 PendingAction，等用户确认转 UPDATE
+        const uniqueKey = tableConfig.uniqueKey;
+        const uniqueValue = uniqueKey ? fields[uniqueKey] : undefined;
+        if (uniqueKey && uniqueValue != null && uniqueValue !== '') {
+          const existing = await adapter.queryRecords(tableConfig, {
+            [uniqueKey]: uniqueValue,
+          });
+          if (existing.length > 0) {
+            this.pending.set(msg.chatId, msg.senderId, {
+              sceneId: scene.id,
+              type: 'confirm_upsert',
+              candidates: existing,
+              message: msg,
+              updateFields: fields,
+            });
+            return {
+              success: false,
+              error: `已存在 ${existing.length} 条「${uniqueKey}=${String(uniqueValue)}」的记录。回复"确认更新"将合并到第 1 条；回复"取消"放弃；回复"强制新建"仍按新记录创建`,
+            };
+          }
+        }
+
         const record = await adapter.createRecord(tableConfig, fields);
         return {
           success: true,
@@ -308,6 +332,51 @@ export class Dispatcher {
         `✅ 已删除 ${action.candidates.length} 条记录`,
       );
       return true;
+    }
+
+    if (action.type === 'confirm_upsert') {
+      if (content.includes('确认更新') || content.includes('更新')) {
+        this.pending.delete(msg.chatId, msg.senderId);
+        const target = action.candidates[0];
+        if (!target) return false;
+        const updated = await adapter.updateRecord(
+          tableConfig,
+          target.recordId,
+          action.updateFields ?? {},
+        );
+        const reply =
+          scene?.formatReply(
+            {
+              intent: 'UPDATE',
+              fields: action.updateFields ?? {},
+              confidence: 1,
+              summary: '已合并到现有记录',
+            },
+            { success: true, record: updated },
+          ) ?? '✅ 已更新记录';
+        await channelAdapter.reply(msg, reply);
+        return true;
+      }
+      if (content.includes('强制新建') || content.includes('新建')) {
+        this.pending.delete(msg.chatId, msg.senderId);
+        const record = await adapter.createRecord(
+          tableConfig,
+          action.updateFields ?? {},
+        );
+        const reply =
+          scene?.formatReply(
+            {
+              intent: 'CREATE',
+              fields: action.updateFields ?? {},
+              confidence: 1,
+              summary: '强制新建',
+            },
+            { success: true, record },
+          ) ?? '✅ 已新建记录';
+        await channelAdapter.reply(msg, reply);
+        return true;
+      }
+      return false;
     }
 
     if (action.type === 'select_record') {

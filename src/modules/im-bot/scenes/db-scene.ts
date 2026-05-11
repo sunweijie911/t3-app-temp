@@ -3,9 +3,46 @@ import type { BotScene } from './types';
 
 const DATE_MS_MIN = 946684800000; // 2000-01-01
 const DATE_MS_MAX = 4102444800000; // 2100-01-01
+const FIELD_DISPLAY_MAX_LEN = 200;
+const REPLY_TOTAL_MAX_LEN = 20_000;
 
-/** 将飞书多维表格等平台返回的复杂字段值转为可读字符串 */
-function fieldToString(v: unknown): string {
+/**
+ * 字段名启发式：含"密码/密钥/秘钥/password/secret/token/api_key/凭证/敏感"
+ * 等关键字时，输出前自动脱敏。即使 admin 错把敏感字段配进 fieldMapping，
+ * 也不会泄漏到群里。
+ */
+const SENSITIVE_KEY_PATTERN =
+  /密码|密钥|秘钥|password|passwd|secret|token|api[_-]?key|凭证|敏感/i;
+
+function maskSensitive(key: string, value: string): string {
+  if (!value) return value;
+  if (SENSITIVE_KEY_PATTERN.test(key)) return '***（已脱敏）';
+  return value;
+}
+
+/**
+ * 群消息总长兜底截断 — 主表字段多 / 子表汇总字段大时，
+ * 累计可能超飞书 IM 文本上限（~30K），保留前缀 + 提示尾部。
+ */
+function clampReply(s: string): string {
+  if (s.length <= REPLY_TOTAL_MAX_LEN) return s;
+  return `${s.slice(0, REPLY_TOTAL_MAX_LEN)}\n\n…（消息过长已截断，详见多维表）`;
+}
+
+/**
+ * 单字段展示截断，避免长文本（如发版步骤、备注）撑爆群消息且污染 LLM 上下文。
+ * 仅用于面向用户的最终输出，不影响内部值传递。
+ */
+function truncateForDisplay(s: string): string {
+  if (s.length <= FIELD_DISPLAY_MAX_LEN) return s;
+  return `${s.slice(0, FIELD_DISPLAY_MAX_LEN)}…（已截断，共 ${s.length} 字，详见多维表）`;
+}
+
+/**
+ * 内部递归版本：把飞书多维表格等平台返回的复杂字段值转为字符串，不做截断。
+ * 给数组/对象内部展开使用。
+ */
+function fieldToStringRaw(v: unknown): string {
   if (v == null || v === '') return '';
   if (typeof v === 'number') {
     if (v >= DATE_MS_MIN && v <= DATE_MS_MAX) {
@@ -26,7 +63,7 @@ function fieldToString(v: unknown): string {
           const obj = item as Record<string, unknown>;
           if (typeof obj.text === 'string') return obj.text;
           if (typeof obj.name === 'string') return obj.name;
-          return fieldToString(item);
+          return fieldToStringRaw(item);
         }
         return String(item);
       })
@@ -39,11 +76,21 @@ function fieldToString(v: unknown): string {
     if (typeof obj.text === 'string') return obj.text;
     // 飞书类型包装字段: {type: N, value: [...]}
     if ('value' in obj && Array.isArray(obj.value)) {
-      return fieldToString(obj.value);
+      return fieldToStringRaw(obj.value);
     }
     return JSON.stringify(v);
   }
   return String(v);
+}
+
+/** 面向用户输出的字段转字符串：含长文本截断 */
+function fieldToString(v: unknown): string {
+  return truncateForDisplay(fieldToStringRaw(v));
+}
+
+/** 面向用户输出 + 敏感字段脱敏，按字段名启发式匹配 */
+function maskedFieldToString(key: string, v: unknown): string {
+  return maskSensitive(key, fieldToString(v));
 }
 
 function applyFieldVars(tpl: string, fields: Record<string, unknown>): string {
@@ -56,7 +103,7 @@ function applyFieldVars(tpl: string, fields: Record<string, unknown>): string {
         /\$\{fields\.([^}]+)\}/g,
         (_, key: string) => {
           hasPlaceholder = true;
-          const val = fieldToString(fields[key] ?? '');
+          const val = maskedFieldToString(key, fields[key] ?? '');
           if (val) allEmpty = false;
           return val;
         },
@@ -142,16 +189,16 @@ export class DatabaseDrivenScene implements BotScene {
 
     // 有自定义回复模板时使用模板
     if (this.replyTemplate) {
-      return this.applyReplyTemplate(intent, result);
+      return clampReply(this.applyReplyTemplate(intent, result));
     }
 
     // 通用默认格式
     if (intent.intent === 'CREATE' && result.record) {
       const entries = Object.entries(result.record.fields)
-        .map(([k, v]) => [k, fieldToString(v)] as const)
+        .map(([k, v]) => [k, maskedFieldToString(k, v)] as const)
         .filter(([, v]) => v !== '')
         .map(([k, v]) => `${k}：${v}`);
-      return `✅ 已录入${this.name}\n\n${entries.join('\n')}`;
+      return clampReply(`✅ 已录入${this.name}\n\n${entries.join('\n')}`);
     }
 
     if (intent.intent === 'QUERY' && result.records) {
@@ -161,8 +208,9 @@ export class DatabaseDrivenScene implements BotScene {
       const displayed = result.records.slice(0, DISPLAY_LIMIT);
       const items = displayed.map((r, i) => {
         const lines = Object.entries(r.fields)
-          .map(([k, v]) => [k, fieldToString(v)] as const)
-          .map(([k, v]) => `  ${k}：${v || '—'}`);
+          .map(([k, v]) => [k, maskedFieldToString(k, v)] as const)
+          .filter(([, v]) => v !== '')
+          .map(([k, v]) => `  ${k}：${v}`);
         const header =
           (result.records?.length ?? 0) > 1 ? `【第 ${i + 1} 条】\n` : '';
         return `${header}${lines.join('\n')}`;
@@ -171,7 +219,9 @@ export class DatabaseDrivenScene implements BotScene {
         result.records.length > DISPLAY_LIMIT
           ? `\n…（共 ${result.records.length} 条，仅展示前 ${DISPLAY_LIMIT} 条）`
           : '';
-      return `📊 查询结果 (共 ${result.records.length} 条)\n\n${items.join('\n\n')}${truncated}`;
+      return clampReply(
+        `📊 查询结果 (共 ${result.records.length} 条)\n\n${items.join('\n\n')}${truncated}`,
+      );
     }
 
     if (intent.intent === 'UPDATE') return `✅ 已更新${this.name}`;
@@ -196,7 +246,7 @@ export class DatabaseDrivenScene implements BotScene {
     const firstFields = records[0]?.fields ?? {};
 
     const fieldList = Object.entries(firstFields)
-      .map(([k, v]) => [k, fieldToString(v)] as const)
+      .map(([k, v]) => [k, maskedFieldToString(k, v)] as const)
       .filter(([, v]) => v !== '')
       .map(([k, v]) => `${k}：${v}`)
       .join('\n');

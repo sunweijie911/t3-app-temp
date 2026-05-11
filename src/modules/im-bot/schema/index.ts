@@ -74,6 +74,11 @@ export const botTableMappings = createTable(
     workspaceId: d.varchar({ length: 256 }).notNull(),
     tableId: d.varchar({ length: 256 }).notNull(),
     fieldMapping: jsonb().notNull().default({}),
+    /**
+     * 唯一键逻辑字段名（如 "项目名称"）。配置后 CREATE 前先按此键查重，
+     * 命中则走 PendingAction 二次确认改为 UPDATE，避免重复新建。
+     */
+    uniqueKey: d.varchar({ length: 64 }),
     isActive: d.boolean().notNull().default(true),
     createdAt: d
       .timestamp({ withTimezone: true })

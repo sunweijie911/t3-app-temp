@@ -1,5 +1,11 @@
 import { feishuTokenManager } from '../auth/feishu-token';
-import type { SpreadsheetRecord, SpreadsheetTableConfig } from '../core/types';
+import type {
+  FieldMappingValue,
+  LinkFieldMapping,
+  MultiSelectFieldMapping,
+  SpreadsheetRecord,
+  SpreadsheetTableConfig,
+} from '../core/types';
 import type { SpreadsheetAdapter } from './types';
 
 async function feishuApi(path: string, method: string, body?: unknown) {
@@ -38,6 +44,90 @@ async function feishuApi(path: string, method: string, body?: unknown) {
   return data.data;
 }
 
+// ── Link 字段反查 (displayValue → record_id) ──────────────
+// 进程内 LRU 缓存。命中 5min；找不到（负缓存）30s — 避免"先建子表→再写主表"流程被卡 5min。
+// key 形如 `${baseToken}:${linkTableId}:${displayField}=${displayValue}`
+const LINK_CACHE_TTL_MS = 5 * 60 * 1000;
+const LINK_CACHE_NEG_TTL_MS = 30 * 1000;
+const LINK_CACHE_MAX = 1000;
+const linkResolveCache = new Map<
+  string,
+  { recordId: string | null; expiresAt: number }
+>();
+
+function cacheGet(key: string): string | null | undefined {
+  const entry = linkResolveCache.get(key);
+  if (!entry) return undefined;
+  if (entry.expiresAt < Date.now()) {
+    linkResolveCache.delete(key);
+    return undefined;
+  }
+  // LRU：命中后移到队尾
+  linkResolveCache.delete(key);
+  linkResolveCache.set(key, entry);
+  return entry.recordId;
+}
+
+function cacheSet(key: string, recordId: string | null) {
+  if (linkResolveCache.size >= LINK_CACHE_MAX) {
+    const oldest = linkResolveCache.keys().next().value;
+    if (oldest) linkResolveCache.delete(oldest);
+  }
+  const ttl = recordId === null ? LINK_CACHE_NEG_TTL_MS : LINK_CACHE_TTL_MS;
+  linkResolveCache.set(key, {
+    recordId,
+    expiresAt: Date.now() + ttl,
+  });
+}
+
+/**
+ * 在 link 子表中按 displayField=displayValue 反查一条 record_id。
+ * 找不到返回 null，调用方根据上下文决定抛错或忽略。
+ */
+async function resolveLinkRecordId(
+  workspaceId: string,
+  link: LinkFieldMapping,
+  displayValue: string,
+): Promise<string | null> {
+  const cacheKey = `${workspaceId}:${link.linkTableId}:${link.displayField}=${displayValue}`;
+  const cached = cacheGet(cacheKey);
+  if (cached !== undefined) return cached;
+
+  const data = (await feishuApi(
+    `/apps/${workspaceId}/tables/${link.linkTableId}/records/search?page_size=1`,
+    'POST',
+    {
+      filter: {
+        conjunction: 'and',
+        conditions: [
+          {
+            field_name: link.displayField,
+            operator: 'is',
+            value: [displayValue],
+          },
+        ],
+      },
+    },
+  )) as { items?: Array<{ record_id: string }> };
+  const recordId = data.items?.[0]?.record_id ?? null;
+  cacheSet(cacheKey, recordId);
+  return recordId;
+}
+
+function isLinkMapping(v: FieldMappingValue): v is LinkFieldMapping {
+  return typeof v === 'object' && v.type === 'link';
+}
+
+function isMultiSelectMapping(
+  v: FieldMappingValue,
+): v is MultiSelectFieldMapping {
+  return typeof v === 'object' && v.type === 'multiSelect';
+}
+
+function platformKeyOf(mapping: FieldMappingValue): string {
+  return typeof mapping === 'string' ? mapping : mapping.name;
+}
+
 /**
  * 把 LLM 返回的 YYYY-MM-DD 字符串转成飞书日期字段要求的毫秒时间戳
  * （CST 当天 12:00，避免时区误差跨日）。
@@ -50,13 +140,55 @@ function coerceFieldValue(value: unknown): unknown {
   return value;
 }
 
-function mapFields(
+/**
+ * 把 LLM 输出的 link 字段显示值（字符串或字符串数组）解析为飞书需要的 record_id 数组。
+ * 找不到的 displayValue 抛错（CREATE/UPDATE 时让用户先去子表创建）。
+ */
+async function resolveLinkValueForWrite(
+  workspaceId: string,
+  link: LinkFieldMapping,
+  raw: unknown,
+): Promise<string[]> {
+  const values = Array.isArray(raw) ? raw : [raw];
+  const recordIds: string[] = [];
+  for (const v of values) {
+    if (v == null || v === '') continue;
+    const displayValue = String(v);
+    const recordId = await resolveLinkRecordId(workspaceId, link, displayValue);
+    if (!recordId) {
+      throw new Error(
+        `「${link.name}」未找到关联记录：${displayValue}（请先在子表「${link.linkTableId}」创建该记录）`,
+      );
+    }
+    recordIds.push(recordId);
+  }
+  return recordIds;
+}
+
+async function mapFieldsForWrite(
   fields: Record<string, unknown>,
-  mapping: Record<string, string>,
-): Record<string, unknown> {
+  config: SpreadsheetTableConfig,
+): Promise<Record<string, unknown>> {
   const result: Record<string, unknown> = {};
   for (const [logicalKey, value] of Object.entries(fields)) {
-    const platformKey = mapping[logicalKey] ?? logicalKey;
+    const mapping = config.fieldMapping[logicalKey];
+    if (mapping && isLinkMapping(mapping)) {
+      result[mapping.name] = await resolveLinkValueForWrite(
+        config.workspaceId,
+        mapping,
+        value,
+      );
+      continue;
+    }
+    if (mapping && isMultiSelectMapping(mapping)) {
+      // 飞书多选字段写入需要 string[]；兼容标量、数组、null
+      const arr = Array.isArray(value) ? value : value == null ? [] : [value];
+      result[mapping.name] = arr
+        .filter((v) => v != null && v !== '')
+        .map((v) => String(v));
+      continue;
+    }
+    const platformKey = platformKeyOf(mapping ?? logicalKey);
     result[platformKey] = coerceFieldValue(value);
   }
   return result;
@@ -206,12 +338,41 @@ function buildFilterConditions(
   return [{ field_name: fieldName, operator: 'is', value: [String(raw)] }];
 }
 
+/**
+ * 为 link 字段构造 filter conditions：先把 displayValue 反查为 record_id，
+ * 再用飞书 link 字段支持的 contains 操作符匹配。
+ * 反查不到返回特殊 condition 让结果集为空，避免误匹配整表。
+ */
+async function buildLinkFilterConditions(
+  workspaceId: string,
+  link: LinkFieldMapping,
+  raw: unknown,
+): Promise<Array<{ field_name: string; operator: string; value: string[] }>> {
+  // 提取实际值；支持 { op, value } 和裸值
+  let value: unknown = raw;
+  if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
+    const obj = raw as { value?: unknown };
+    if ('value' in obj) value = obj.value;
+  }
+  if (value == null || value === '') {
+    return [{ field_name: link.name, operator: 'isEmpty', value: [] }];
+  }
+  const recordId = await resolveLinkRecordId(workspaceId, link, String(value));
+  if (!recordId) {
+    // 反查不到：用一个不可能成立的条件让结果集为空
+    return [
+      { field_name: link.name, operator: 'is', value: ['__not_found__'] },
+    ];
+  }
+  return [{ field_name: link.name, operator: 'contains', value: [recordId] }];
+}
+
 function reverseMapFields(
   fields: Record<string, unknown>,
-  mapping: Record<string, string>,
+  mapping: Record<string, FieldMappingValue>,
 ): Record<string, unknown> {
   const reverse = Object.fromEntries(
-    Object.entries(mapping).map(([k, v]) => [v, k]),
+    Object.entries(mapping).map(([k, v]) => [platformKeyOf(v), k]),
   );
   const result: Record<string, unknown> = {};
   for (const [platformKey, value] of Object.entries(fields)) {
@@ -219,6 +380,35 @@ function reverseMapFields(
     result[logicalKey] = value;
   }
   return result;
+}
+
+/**
+ * 多选字段过滤构造：simple value 用 contains（飞书多选字段不支持 is）。
+ * 数组：每元素一个 contains 条件，由调用方决定 conjunction（默认 and）。
+ * 高级 {op, value} 语法继续走通用 buildFilterConditions。
+ */
+function buildMultiSelectFilterConditions(
+  fieldName: string,
+  raw: unknown,
+): Array<{ field_name: string; operator: string; value: string[] }> {
+  if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
+    return buildFilterConditions(fieldName, raw);
+  }
+  if (Array.isArray(raw)) {
+    return raw
+      .filter((v) => v != null && v !== '')
+      .map((v) => ({
+        field_name: fieldName,
+        operator: 'contains',
+        value: [String(v)],
+      }));
+  }
+  if (raw == null || raw === '') {
+    return [{ field_name: fieldName, operator: 'isEmpty', value: [] }];
+  }
+  return [
+    { field_name: fieldName, operator: 'contains', value: [String(raw)] },
+  ];
 }
 
 export class FeishuBitableAdapter implements SpreadsheetAdapter {
@@ -231,7 +421,7 @@ export class FeishuBitableAdapter implements SpreadsheetAdapter {
     const data = (await feishuApi(
       `/apps/${config.workspaceId}/tables/${config.tableId}/records`,
       'POST',
-      { fields: mapFields(fields, config.fieldMapping) },
+      { fields: await mapFieldsForWrite(fields, config) },
     )) as { record: { record_id: string; fields: Record<string, unknown> } };
     return {
       recordId: data.record.record_id,
@@ -247,7 +437,7 @@ export class FeishuBitableAdapter implements SpreadsheetAdapter {
     const data = (await feishuApi(
       `/apps/${config.workspaceId}/tables/${config.tableId}/records/${recordId}`,
       'PUT',
-      { fields: mapFields(fields, config.fieldMapping) },
+      { fields: await mapFieldsForWrite(fields, config) },
     )) as { record: { record_id: string; fields: Record<string, unknown> } };
     return {
       recordId: data.record.record_id,
@@ -259,14 +449,39 @@ export class FeishuBitableAdapter implements SpreadsheetAdapter {
     config: SpreadsheetTableConfig,
     filters: Record<string, unknown>,
   ): Promise<SpreadsheetRecord[]> {
-    const conditions = Object.entries(filters).flatMap(([key, value]) => {
-      const platformKey = config.fieldMapping[key] ?? key;
-      return buildFilterConditions(platformKey, value);
-    });
+    // _conjunction 协议：默认 and；'or' 时多条件以 OR 连接
+    const conjunction = filters._conjunction === 'or' ? 'or' : 'and';
+    const conditions: Array<{
+      field_name: string;
+      operator: string;
+      value: string[];
+    }> = [];
+    for (const [key, value] of Object.entries(filters)) {
+      // 跳过保留键（以 _ 开头）
+      if (key.startsWith('_')) continue;
+      const mapping = config.fieldMapping[key];
+      if (mapping && isLinkMapping(mapping)) {
+        conditions.push(
+          ...(await buildLinkFilterConditions(
+            config.workspaceId,
+            mapping,
+            value,
+          )),
+        );
+      } else if (mapping && isMultiSelectMapping(mapping)) {
+        conditions.push(
+          ...buildMultiSelectFilterConditions(mapping.name, value),
+        );
+      } else {
+        conditions.push(
+          ...buildFilterConditions(platformKeyOf(mapping ?? key), value),
+        );
+      }
+    }
 
     const baseBody: Record<string, unknown> = {};
     if (conditions.length > 0) {
-      baseBody.filter = { conjunction: 'and', conditions };
+      baseBody.filter = { conjunction, conditions };
     }
 
     // 翻页拉取，避免飞书默认 20 条上限漏数据；用 PAGE_SIZE=200 + MAX_PAGES=5 上限保护

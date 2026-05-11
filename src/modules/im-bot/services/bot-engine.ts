@@ -7,7 +7,11 @@ import type { ChannelAdapter } from '../channels/types';
 import { WecomChannelAdapter } from '../channels/wecom';
 import type { BotPlatform } from '../constants';
 import { Dispatcher } from '../core/dispatcher';
-import type { BotEvent, SpreadsheetTableConfig } from '../core/types';
+import type {
+  BotEvent,
+  LinkFieldMapping,
+  SpreadsheetTableConfig,
+} from '../core/types';
 import { DatabaseDrivenScene, parseKeywords } from '../scenes/db-scene';
 import { botEventLogs, botScenes, botTableMappings } from '../schema';
 import { resetCredentialsCache } from './credentials';
@@ -36,7 +40,9 @@ async function loadTableMappings(): Promise<
       platform: m.platform,
       workspaceId: m.workspaceId,
       tableId: m.tableId,
-      fieldMapping: (m.fieldMapping as Record<string, string>) ?? {},
+      fieldMapping:
+        (m.fieldMapping as Record<string, string | LinkFieldMapping>) ?? {},
+      uniqueKey: m.uniqueKey ?? undefined,
     });
   }
   return map;
