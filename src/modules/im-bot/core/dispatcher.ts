@@ -176,8 +176,13 @@ export class Dispatcher {
       // 7. 执行 CRUD
       const result = await this.executeCrud(scene, parsed, msg);
 
-      // 8. 回复
-      const reply = scene.formatReply(parsed, result);
+      // 8. 回复（fieldMapping 用于渲染时取 label / displayType；缺失时退化为 logicalKey）
+      const tableConfig = this.config.getTableConfig(scene.id, msg.platform);
+      const reply = scene.formatReply(
+        parsed,
+        result,
+        tableConfig?.fieldMapping,
+      );
       await channelAdapter.reply(msg, reply);
       logEvent({
         sceneId: scene.id,
@@ -399,6 +404,7 @@ export class Dispatcher {
               summary: '已合并到现有记录',
             },
             { success: true, record: updated },
+            tableConfig.fieldMapping,
           ) ?? '✅ 已更新记录';
         await channelAdapter.reply(msg, reply);
         return true;
@@ -418,6 +424,7 @@ export class Dispatcher {
               summary: '强制新建',
             },
             { success: true, record },
+            tableConfig.fieldMapping,
           ) ?? '✅ 已新建记录';
         await channelAdapter.reply(msg, reply);
         return true;
@@ -446,6 +453,7 @@ export class Dispatcher {
             summary: '更新记录',
           },
           { success: true, record: updated },
+          tableConfig.fieldMapping,
         ) ?? '✅ 已更新记录';
       await channelAdapter.reply(msg, reply);
       return true;

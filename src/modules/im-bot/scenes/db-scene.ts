@@ -1,4 +1,9 @@
-import type { ExecuteResult, ParsedIntent, SceneContext } from '../core/types';
+import type {
+  ExecuteResult,
+  FieldMappingValue,
+  ParsedIntent,
+  SceneContext,
+} from '../core/types';
 import type { BotScene } from './types';
 
 const DATE_MS_MIN = 946684800000; // 2000-01-01
@@ -38,21 +43,30 @@ function truncateForDisplay(s: string): string {
   return `${s.slice(0, FIELD_DISPLAY_MAX_LEN)}…（已截断，共 ${s.length} 字，详见多维表）`;
 }
 
+type DisplayType = 'number' | 'date';
+
+function formatDateMs(v: number): string {
+  return new Date(v).toLocaleDateString('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+}
+
 /**
  * 内部递归版本：把飞书多维表格等平台返回的复杂字段值转为字符串，不做截断。
- * 给数组/对象内部展开使用。
+ * displayType:
+ * - 'number'：数字原样输出（避免金额/版本号被误格式化为日期）
+ * - 'date'：数字始终格式化为日期
+ * - 未指定：保留旧启发式（毫秒值落在 2000~2100 年区间时按日期渲染）
  */
-function fieldToStringRaw(v: unknown): string {
+function fieldToStringRaw(v: unknown, displayType?: DisplayType): string {
   if (v == null || v === '') return '';
   if (typeof v === 'number') {
-    if (v >= DATE_MS_MIN && v <= DATE_MS_MAX) {
-      return new Date(v).toLocaleDateString('zh-CN', {
-        timeZone: 'Asia/Shanghai',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-      });
-    }
+    if (displayType === 'number') return String(v);
+    if (displayType === 'date') return formatDateMs(v);
+    if (v >= DATE_MS_MIN && v <= DATE_MS_MAX) return formatDateMs(v);
     return String(v);
   }
   if (typeof v === 'string' || typeof v === 'boolean') return String(v);
@@ -63,7 +77,7 @@ function fieldToStringRaw(v: unknown): string {
           const obj = item as Record<string, unknown>;
           if (typeof obj.text === 'string') return obj.text;
           if (typeof obj.name === 'string') return obj.name;
-          return fieldToStringRaw(item);
+          return fieldToStringRaw(item, displayType);
         }
         return String(item);
       })
@@ -72,28 +86,48 @@ function fieldToStringRaw(v: unknown): string {
   }
   if (typeof v === 'object') {
     const obj = v as Record<string, unknown>;
-    // 飞书 URL/富文本字段: {text: "...", link?: "..."}
     if (typeof obj.text === 'string') return obj.text;
-    // 飞书类型包装字段: {type: N, value: [...]}
     if ('value' in obj && Array.isArray(obj.value)) {
-      return fieldToStringRaw(obj.value);
+      return fieldToStringRaw(obj.value, displayType);
     }
     return JSON.stringify(v);
   }
   return String(v);
 }
 
-/** 面向用户输出的字段转字符串：含长文本截断 */
-function fieldToString(v: unknown): string {
-  return truncateForDisplay(fieldToStringRaw(v));
+function fieldToString(v: unknown, displayType?: DisplayType): string {
+  return truncateForDisplay(fieldToStringRaw(v, displayType));
 }
 
-/** 面向用户输出 + 敏感字段脱敏，按字段名启发式匹配 */
-function maskedFieldToString(key: string, v: unknown): string {
-  return maskSensitive(key, fieldToString(v));
+function maskedFieldToString(
+  key: string,
+  v: unknown,
+  displayType?: DisplayType,
+): string {
+  return maskSensitive(key, fieldToString(v, displayType));
 }
 
-function applyFieldVars(tpl: string, fields: Record<string, unknown>): string {
+/**
+ * 单字段渲染入口：综合 fieldMapping 中的 label（用户友好名）和 displayType
+ * （数字/日期渲染策略），返回展示用的 label 和 value。
+ */
+function renderFieldEntry(
+  key: string,
+  value: unknown,
+  fieldMapping?: Record<string, FieldMappingValue>,
+): { label: string; display: string } {
+  const m = fieldMapping?.[key];
+  const label = typeof m === 'object' && m.label ? m.label : key;
+  const displayType =
+    typeof m === 'object' && m.type === 'plain' ? m.displayType : undefined;
+  return { label, display: maskedFieldToString(key, value, displayType) };
+}
+
+function applyFieldVars(
+  tpl: string,
+  fields: Record<string, unknown>,
+  fieldMapping?: Record<string, FieldMappingValue>,
+): string {
   return tpl
     .split('\n')
     .flatMap((line) => {
@@ -103,12 +137,16 @@ function applyFieldVars(tpl: string, fields: Record<string, unknown>): string {
         /\$\{fields\.([^}]+)\}/g,
         (_, key: string) => {
           hasPlaceholder = true;
-          const val = maskedFieldToString(key, fields[key] ?? '');
+          const m = fieldMapping?.[key];
+          const dt =
+            typeof m === 'object' && m.type === 'plain'
+              ? m.displayType
+              : undefined;
+          const val = maskedFieldToString(key, fields[key] ?? '', dt);
           if (val) allEmpty = false;
           return val;
         },
       );
-      // 行内所有占位符都为空时整行隐藏（兼容"标签：${fields.x} 元"带单位后缀的情况）
       if (hasPlaceholder && allEmpty) return [];
       return [substituted];
     })
@@ -192,20 +230,24 @@ export class DatabaseDrivenScene implements BotScene {
     }
   }
 
-  formatReply(intent: ParsedIntent, result: ExecuteResult): string {
+  formatReply(
+    intent: ParsedIntent,
+    result: ExecuteResult,
+    fieldMapping?: Record<string, FieldMappingValue>,
+  ): string {
     if (!result.success) return `❌ 操作失败: ${result.error ?? '未知错误'}`;
 
     // 有自定义回复模板时使用模板
     if (this.replyTemplate) {
-      return clampReply(this.applyReplyTemplate(intent, result));
+      return clampReply(this.applyReplyTemplate(intent, result, fieldMapping));
     }
 
     // 通用默认格式
     if (intent.intent === 'CREATE' && result.record) {
       const entries = Object.entries(result.record.fields)
-        .map(([k, v]) => [k, maskedFieldToString(k, v)] as const)
-        .filter(([, v]) => v !== '')
-        .map(([k, v]) => `${k}：${v}`);
+        .map(([k, v]) => renderFieldEntry(k, v, fieldMapping))
+        .filter((e) => e.display !== '')
+        .map((e) => `${e.label}：${e.display}`);
       return clampReply(`✅ 已录入${this.name}\n\n${entries.join('\n')}`);
     }
 
@@ -233,12 +275,13 @@ export class DatabaseDrivenScene implements BotScene {
             ([k, v]) => !project.includes(k) && v != null && v !== '',
           );
           const labelStr = labelEntry
-            ? maskedFieldToString(labelEntry[0], labelEntry[1])
+            ? renderFieldEntry(labelEntry[0], labelEntry[1], fieldMapping)
+                .display
             : '';
           const cols = project
-            .map((f) => [f, maskedFieldToString(f, r.fields[f] ?? '')] as const)
-            .filter(([, v]) => v !== '')
-            .map(([k, v]) => `${k}：${v}`)
+            .map((f) => renderFieldEntry(f, r.fields[f] ?? '', fieldMapping))
+            .filter((e) => e.display !== '')
+            .map((e) => `${e.label}：${e.display}`)
             .join('  ');
           return labelStr ? `${labelStr} → ${cols || '（该字段为空）'}` : cols;
         });
@@ -265,9 +308,9 @@ export class DatabaseDrivenScene implements BotScene {
       const displayed = result.records.slice(0, DISPLAY_LIMIT);
       const items = displayed.map((r, i) => {
         const lines = Object.entries(r.fields)
-          .map(([k, v]) => [k, maskedFieldToString(k, v)] as const)
-          .filter(([, v]) => v !== '')
-          .map(([k, v]) => `  ${k}：${v}`);
+          .map(([k, v]) => renderFieldEntry(k, v, fieldMapping))
+          .filter((e) => e.display !== '')
+          .map((e) => `  ${e.label}：${e.display}`);
         const header =
           (result.records?.length ?? 0) > 1 ? `【第 ${i + 1} 条】\n` : '';
         return `${header}${lines.join('\n')}`;
@@ -285,9 +328,9 @@ export class DatabaseDrivenScene implements BotScene {
       // 复用 CREATE 的字段渲染，让用户看清楚更新后的实际值
       if (result.record) {
         const entries = Object.entries(result.record.fields)
-          .map(([k, v]) => [k, maskedFieldToString(k, v)] as const)
-          .filter(([, v]) => v !== '')
-          .map(([k, v]) => `${k}：${v}`);
+          .map(([k, v]) => renderFieldEntry(k, v, fieldMapping))
+          .filter((e) => e.display !== '')
+          .map((e) => `${e.label}：${e.display}`);
         if (entries.length > 0) {
           return clampReply(`✅ 已更新${this.name}\n\n${entries.join('\n')}`);
         }
@@ -308,6 +351,7 @@ export class DatabaseDrivenScene implements BotScene {
   private applyReplyTemplate(
     intent: ParsedIntent,
     result: ExecuteResult,
+    fieldMapping?: Record<string, FieldMappingValue>,
   ): string {
     if (!this.replyTemplate) return '✅ 操作完成';
 
@@ -315,9 +359,9 @@ export class DatabaseDrivenScene implements BotScene {
     const firstFields = records[0]?.fields ?? {};
 
     const fieldList = Object.entries(firstFields)
-      .map(([k, v]) => [k, maskedFieldToString(k, v)] as const)
-      .filter(([, v]) => v !== '')
-      .map(([k, v]) => `${k}：${v}`)
+      .map(([k, v]) => renderFieldEntry(k, v, fieldMapping))
+      .filter((e) => e.display !== '')
+      .map((e) => `${e.label}：${e.display}`)
       .join('\n');
 
     // biome-ignore-start lint/suspicious/noTemplateCurlyInString: 字面占位符，runtime 替换
@@ -335,13 +379,13 @@ export class DatabaseDrivenScene implements BotScene {
       const rowTpl = eachMatch[1] ?? '';
       const rows = records.map((r, i) => {
         const prefix = records.length > 1 ? `【第 ${i + 1} 条】\n` : '';
-        return prefix + applyFieldVars(rowTpl, r.fields);
+        return prefix + applyFieldVars(rowTpl, r.fields, fieldMapping);
       });
       const joined = rows.join('\n');
       tpl = tpl.replace(/<!--each-->[\s\S]*?<!--\/each-->/, () => joined);
     } else {
       // 无 each 块时直接对第一条记录展开（CREATE/UPDATE）
-      tpl = applyFieldVars(tpl, firstFields);
+      tpl = applyFieldVars(tpl, firstFields, fieldMapping);
     }
 
     return tpl.trim();

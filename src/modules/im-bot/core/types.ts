@@ -66,6 +66,8 @@ export interface LinkFieldMapping {
   displayField: string;
   /** true 时该字段在群消息回复中被脱敏 */
   sensitive?: boolean;
+  /** 群消息回复时展示的字段名；未配置则用 fieldMapping 的 logicalKey */
+  label?: string;
 }
 
 /**
@@ -76,6 +78,7 @@ export interface MultiSelectFieldMapping {
   name: string;
   type: 'multiSelect';
   sensitive?: boolean;
+  label?: string;
 }
 
 /**
@@ -85,6 +88,14 @@ export interface PlainFieldMapping {
   name: string;
   type: 'plain';
   sensitive?: boolean;
+  label?: string;
+  /**
+   * 数字字段展示类型：
+   * - 'number'：原样输出数字（金额、数量、版本号等）
+   * - 'date'：始终按日期格式化
+   * - 未设置：按毫秒值是否落在 2000~2100 年自动判定（兼容旧行为，但会误判大金额）
+   */
+  displayType?: 'number' | 'date';
 }
 
 /** fieldMapping value 联合类型 */

@@ -112,7 +112,8 @@
     "wbout",
     "openxmlformats",
     "officedocument",
-    "spreadsheetml"
+    "spreadsheetml",
+    "cooldown"
   ],
   "patterns": [
     {

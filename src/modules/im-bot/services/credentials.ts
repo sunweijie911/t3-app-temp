@@ -10,15 +10,23 @@ export interface FeishuCredentials {
   verificationToken?: string;
 }
 
+/**
+ * 凭证缓存 TTL：10 分钟。
+ * - 凭证轮换时多实例部署里其它实例无法收到 reloadBotConfig 广播，靠 TTL 兜底
+ * - DB 单次 select 开销可忽略，但 webhook 高频调用时仍值得缓存
+ */
+const CREDENTIALS_TTL_MS = 10 * 60 * 1000;
+
 let feishuCache: FeishuCredentials | null = null;
+let feishuCacheExpiresAt = 0;
 let feishuPromise: Promise<FeishuCredentials> | null = null;
 
 /**
  * 读取飞书凭证：优先 DB（botPlatforms.credentials），缺失字段回退到 env。
- * 配置变更时通过 resetCredentialsCache() 失效。
+ * 配置变更时通过 resetCredentialsCache() 立即失效；同时有 10 分钟 TTL 兜底。
  */
 export async function getFeishuCredentials(): Promise<FeishuCredentials> {
-  if (feishuCache) return feishuCache;
+  if (feishuCache && Date.now() < feishuCacheExpiresAt) return feishuCache;
   if (feishuPromise) return feishuPromise;
 
   feishuPromise = (async () => {
@@ -42,6 +50,7 @@ export async function getFeishuCredentials(): Promise<FeishuCredentials> {
     };
 
     feishuCache = merged;
+    feishuCacheExpiresAt = Date.now() + CREDENTIALS_TTL_MS;
     return merged;
   })().finally(() => {
     feishuPromise = null;
@@ -52,4 +61,5 @@ export async function getFeishuCredentials(): Promise<FeishuCredentials> {
 
 export function resetCredentialsCache() {
   feishuCache = null;
+  feishuCacheExpiresAt = 0;
 }
