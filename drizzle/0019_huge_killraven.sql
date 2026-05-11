@@ -1,0 +1,1 @@
+ALTER TABLE "pg-drizzle_bot_table_mapping" ADD COLUMN "uniqueKey" varchar(64);

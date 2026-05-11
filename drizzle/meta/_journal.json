@@ -134,6 +134,13 @@
       "when": 1775184432667,
       "tag": "0018_new_chamber",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1778464796223,
+      "tag": "0019_huge_killraven",
+      "breakpoints": true
     }
   ]
 }
