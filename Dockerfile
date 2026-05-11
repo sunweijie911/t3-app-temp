@@ -42,6 +42,12 @@ RUN pnpm exec esbuild scripts/seed-im-bot-sales.ts \
     --external:postgres \
     --tsconfig=tsconfig.json
 
+RUN pnpm exec esbuild scripts/seed-im-bot-devops.ts \
+    --bundle --platform=node --format=esm \
+    --outfile=seed-im-bot-devops.mjs \
+    --external:postgres \
+    --tsconfig=tsconfig.json
+
 ##### NGINX - serve 静态文件 + 反代 Next.js
 FROM nginx:alpine AS nginx
 
@@ -76,6 +82,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/migrate.mjs ./migrate.mjs
 COPY --from=builder --chown=nextjs:nodejs /app/seed.mjs ./seed.mjs
 COPY --from=builder --chown=nextjs:nodejs /app/seed-admin.mjs ./seed-admin.mjs
 COPY --from=builder --chown=nextjs:nodejs /app/seed-im-bot-sales.mjs ./seed-im-bot-sales.mjs
+COPY --from=builder --chown=nextjs:nodejs /app/seed-im-bot-devops.mjs ./seed-im-bot-devops.mjs
 
 USER nextjs
 
@@ -84,4 +91,4 @@ EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 
-CMD ["sh", "-c", "node migrate.mjs && if [ \"$RUN_SEEDS\" = 'true' ]; then node seed.mjs; fi && if [ -n \"$SEED_ADMIN_EMAIL\" ]; then node seed-admin.mjs; fi && if [ \"$SEED_IM_BOT_SALES\" = 'true' ]; then node seed-im-bot-sales.mjs; fi && node server.js"]
+CMD ["sh", "-c", "node migrate.mjs && if [ \"$RUN_SEEDS\" = 'true' ]; then node seed.mjs; fi && if [ -n \"$SEED_ADMIN_EMAIL\" ]; then node seed-admin.mjs; fi && if [ \"$SEED_IM_BOT_SALES\" = 'true' ]; then node seed-im-bot-sales.mjs; fi && if [ \"$SEED_IM_BOT_DEVOPS\" = 'true' ]; then node seed-im-bot-devops.mjs; fi && node server.js"]
