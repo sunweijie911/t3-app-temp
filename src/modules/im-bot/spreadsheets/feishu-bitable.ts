@@ -133,7 +133,7 @@ function platformKeyOf(mapping: FieldMappingValue): string {
  * （CST 当天 12:00，避免时区误差跨日）。
  * 非日期字符串原样返回。
  */
-function coerceFieldValue(value: unknown): unknown {
+export function coerceFieldValue(value: unknown): unknown {
   if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
     return new Date(`${value}T12:00:00+08:00`).getTime();
   }
@@ -165,7 +165,7 @@ async function resolveLinkValueForWrite(
   return recordIds;
 }
 
-async function mapFieldsForWrite(
+export async function mapFieldsForWrite(
   fields: Record<string, unknown>,
   config: SpreadsheetTableConfig,
 ): Promise<Record<string, unknown>> {
@@ -235,7 +235,7 @@ function dateStringToMs(s: string, end = false): number {
  * - { op: 'between', value: ['2026-05-01', '2026-05-31'] } → 日期段
  * - { op: 'isEmpty' } / { op: 'isNotEmpty' }
  */
-function buildFilterConditions(
+export function buildFilterConditions(
   fieldName: string,
   raw: unknown,
 ): Array<{ field_name: string; operator: string; value: string[] }> {
@@ -370,7 +370,7 @@ async function buildLinkFilterConditions(
   return [{ field_name: link.name, operator: 'contains', value: [recordId] }];
 }
 
-function reverseMapFields(
+export function reverseMapFields(
   fields: Record<string, unknown>,
   mapping: Record<string, FieldMappingValue>,
 ): Record<string, unknown> {
