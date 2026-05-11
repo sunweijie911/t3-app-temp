@@ -22,6 +22,11 @@ export interface ParsedIntent {
    * （'or' | 'and'，默认 and），用于支持「业务域=门户 OR 业务域=督导」类查询。
    */
   filters?: Record<string, unknown>;
+  /**
+   * 投影字段（仅 QUERY 生效）。非空时回复只渲染这几列 + 主标识，避免一次性丢出整行 20 字段。
+   * 字段名使用 fieldMapping 的逻辑 key（与 filters 的 key 同名空间）。
+   */
+  projectFields?: string[];
   confidence: number;
   summary: string;
 }

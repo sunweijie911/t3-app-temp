@@ -166,10 +166,18 @@ export class DatabaseDrivenScene implements BotScene {
       const intent = obj.intent as string;
       if (!['CREATE', 'UPDATE', 'QUERY', 'DELETE', 'UNKNOWN'].includes(intent))
         return null;
+      const rawProject = obj.projectFields;
+      const projectFields = Array.isArray(rawProject)
+        ? (rawProject as unknown[]).filter(
+            (s): s is string => typeof s === 'string' && s.length > 0,
+          )
+        : undefined;
       return {
         intent: intent as ParsedIntent['intent'],
         fields: (obj.fields as Record<string, unknown>) ?? {},
         filters: (obj.filters as Record<string, unknown>) ?? undefined,
+        projectFields:
+          projectFields && projectFields.length > 0 ? projectFields : undefined,
         confidence: Number(obj.confidence) || 0,
         summary: String(obj.summary ?? ''),
       };
@@ -204,6 +212,55 @@ export class DatabaseDrivenScene implements BotScene {
     if (intent.intent === 'QUERY' && result.records) {
       if (result.records.length === 0)
         return `📊 查询结果: 未找到匹配的${this.name}`;
+
+      // 飞书 adapter 单次查询硬上限：PAGE_SIZE(200) × MAX_PAGES(5) = 1000。
+      // 命中上限说明真实匹配可能更多被静默截断，提示用户缩窄条件
+      const HIT_HARD_LIMIT = 1000;
+      const hitLimit = result.records.length >= HIT_HARD_LIMIT;
+      const limitHint = hitLimit
+        ? `\n\n⚠️ 已达查询上限 ${HIT_HARD_LIMIT} 条，可能还有未展示的数据，请缩窄筛选条件`
+        : '';
+
+      // 投影模式：LLM 标记了 projectFields → 只渲染主标识 + 指定列，
+      // 避免对大表（20 字段）查询时一次性刷屏
+      const project = intent.projectFields ?? [];
+      if (project.length > 0) {
+        const DISPLAY_LIMIT = 20; // 投影模式更紧凑，可多显示几条
+        const displayed = result.records.slice(0, DISPLAY_LIMIT);
+        const lines = displayed.map((r) => {
+          // 主标识：取记录第一个非空字段（fieldMapping 第一列通常是名称类）
+          const labelEntry = Object.entries(r.fields).find(
+            ([k, v]) => !project.includes(k) && v != null && v !== '',
+          );
+          const labelStr = labelEntry
+            ? maskedFieldToString(labelEntry[0], labelEntry[1])
+            : '';
+          const cols = project
+            .map((f) => [f, maskedFieldToString(f, r.fields[f] ?? '')] as const)
+            .filter(([, v]) => v !== '')
+            .map(([k, v]) => `${k}：${v}`)
+            .join('  ');
+          return labelStr ? `${labelStr} → ${cols || '（该字段为空）'}` : cols;
+        });
+
+        // 单条单字段：最干净的一句话回复
+        if (result.records.length === 1 && project.length === 1) {
+          return clampReply(`📊 ${lines[0]}`);
+        }
+        // 多条：列表
+        const truncated =
+          result.records.length > DISPLAY_LIMIT
+            ? `\n…（共 ${result.records.length} 条，仅展示前 ${DISPLAY_LIMIT} 条）`
+            : '';
+        const numbered =
+          result.records.length > 1
+            ? lines.map((l, i) => `${i + 1}. ${l}`).join('\n')
+            : lines.join('\n');
+        return clampReply(
+          `📊 共 ${result.records.length} 条\n${numbered}${truncated}${limitHint}`,
+        );
+      }
+
       const DISPLAY_LIMIT = 10;
       const displayed = result.records.slice(0, DISPLAY_LIMIT);
       const items = displayed.map((r, i) => {
@@ -220,11 +277,23 @@ export class DatabaseDrivenScene implements BotScene {
           ? `\n…（共 ${result.records.length} 条，仅展示前 ${DISPLAY_LIMIT} 条）`
           : '';
       return clampReply(
-        `📊 查询结果 (共 ${result.records.length} 条)\n\n${items.join('\n\n')}${truncated}`,
+        `📊 查询结果 (共 ${result.records.length} 条)\n\n${items.join('\n\n')}${truncated}${limitHint}`,
       );
     }
 
-    if (intent.intent === 'UPDATE') return `✅ 已更新${this.name}`;
+    if (intent.intent === 'UPDATE') {
+      // 复用 CREATE 的字段渲染，让用户看清楚更新后的实际值
+      if (result.record) {
+        const entries = Object.entries(result.record.fields)
+          .map(([k, v]) => [k, maskedFieldToString(k, v)] as const)
+          .filter(([, v]) => v !== '')
+          .map(([k, v]) => `${k}：${v}`);
+        if (entries.length > 0) {
+          return clampReply(`✅ 已更新${this.name}\n\n${entries.join('\n')}`);
+        }
+      }
+      return `✅ 已更新${this.name}`;
+    }
     if (intent.intent === 'DELETE') return `✅ 已删除${this.name}`;
     return '✅ 操作完成';
   }

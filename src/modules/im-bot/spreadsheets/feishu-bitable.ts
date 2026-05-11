@@ -157,7 +157,7 @@ async function resolveLinkValueForWrite(
     const recordId = await resolveLinkRecordId(workspaceId, link, displayValue);
     if (!recordId) {
       throw new Error(
-        `「${link.name}」未找到关联记录：${displayValue}（请先在子表「${link.linkTableId}」创建该记录）`,
+        `「${link.name}」未找到关联记录：${displayValue}（请先在「${link.name}」对应的子表中创建该记录）`,
       );
     }
     recordIds.push(recordId);
@@ -171,6 +171,9 @@ async function mapFieldsForWrite(
 ): Promise<Record<string, unknown>> {
   const result: Record<string, unknown> = {};
   for (const [logicalKey, value] of Object.entries(fields)) {
+    // 跳过 null/undefined：飞书 Bitable 收到 {字段: null} 会清空该字段，
+    // LLM 幻觉输出无关字段为 null 时不能让它静默删数据
+    if (value === null || value === undefined) continue;
     const mapping = config.fieldMapping[logicalKey];
     if (mapping && isLinkMapping(mapping)) {
       result[mapping.name] = await resolveLinkValueForWrite(

@@ -9,7 +9,7 @@ import type { BotPlatform } from '../constants';
 import { Dispatcher } from '../core/dispatcher';
 import type {
   BotEvent,
-  LinkFieldMapping,
+  FieldMappingValue,
   SpreadsheetTableConfig,
 } from '../core/types';
 import { DatabaseDrivenScene, parseKeywords } from '../scenes/db-scene';
@@ -40,8 +40,7 @@ async function loadTableMappings(): Promise<
       platform: m.platform,
       workspaceId: m.workspaceId,
       tableId: m.tableId,
-      fieldMapping:
-        (m.fieldMapping as Record<string, string | LinkFieldMapping>) ?? {},
+      fieldMapping: (m.fieldMapping as Record<string, FieldMappingValue>) ?? {},
       uniqueKey: m.uniqueKey ?? undefined,
     });
   }

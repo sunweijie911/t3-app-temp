@@ -33,20 +33,19 @@ export class SceneRegistry {
     if (this.scenes.length === 0) return null;
 
     const scenesDesc = this.scenes
-      .map((s) => `- ${s.id}: ${s.description}`)
+      .map((s) => `- ${s.id}: ${s.name} — ${s.description}`)
       .join('\n');
+    const validIds = this.scenes.map((s) => s.id).join(' | ');
 
-    const systemPrompt = `你是一个意图分类器。根据用户消息判断属于哪个业务场景。
+    const systemPrompt = `你是一个意图分类器。根据用户消息判断属于下面哪个业务场景。
 
 ## 可用场景
 ${scenesDesc}
 
 ## 规则
-- 只返回场景 id，不要解释
-- 消息中提到商品名称、价格、快递、客户、订单等信息时，归类为 sales
-- 消息中提到任务、负责人、排期、进度、上线等信息时，归类为 tasks
-- 查看/查询/修改/删除某个具体事物的数据时，根据事物类型判断场景
-- 只有完全无法判断时才返回 "none"`;
+- 只返回场景 id（必须是 ${validIds} 之一）或 "none"，不要解释、不要加引号
+- 仅根据场景的「name + description」判断，不要凭空想象其它分类
+- 完全无法判断时返回 none`;
 
     let result: string;
     try {

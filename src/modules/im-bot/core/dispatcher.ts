@@ -56,7 +56,15 @@ export class Dispatcher {
     };
 
     try {
-      // 1. PendingAction
+      // 1. 去重（PendingAction 之前先去重，否则飞书重试同一 eventId 时
+      //    pendingAction 已被处理删除，会走到正常场景匹配链白白消耗 LLM token）
+      if (this.dedup.has(msg.eventId)) {
+        logEvent({ result: 'ignored' });
+        return;
+      }
+      this.dedup.set(msg.eventId);
+
+      // 2. PendingAction
       const pendingAction = this.pending.get(msg.chatId, msg.senderId);
       if (pendingAction) {
         const handled = await this.handlePendingAction(
@@ -79,13 +87,6 @@ export class Dispatcher {
         logEvent({ sceneId: pendingAction.sceneId, result: 'ignored' });
         return;
       }
-
-      // 2. 去重
-      if (this.dedup.has(msg.eventId)) {
-        logEvent({ result: 'ignored' });
-        return;
-      }
-      this.dedup.set(msg.eventId);
 
       // 3. 场景匹配
       let scene = this.registry.matchByKeyword(msg.content);
@@ -153,6 +154,21 @@ export class Dispatcher {
           intent: parsed.intent,
           result: 'error',
           errorMsg: '置信度不足',
+        });
+        return;
+      }
+
+      // 6.5 UNKNOWN 意图：高置信但 LLM 也没拿准 → 给引导而非走到 executeCrud 落 default 错误
+      if (parsed.intent === 'UNKNOWN') {
+        await channelAdapter.reply(
+          msg,
+          `🤔 暂时不知道您想做什么：${parsed.summary || '没拿到具体操作'}\n\n可以试试：\n• 查询：「${scene.name} ...的 xxx」\n• 新增：「新增/记录 ...」\n• 更新：「把 ... 改成 ...」\n• 删除：「删除 ...」`,
+        );
+        logEvent({
+          sceneId: scene.id,
+          intent: parsed.intent,
+          result: 'ignored',
+          errorMsg: 'UNKNOWN 意图',
         });
         return;
       }
@@ -318,24 +334,54 @@ export class Dispatcher {
       action.sceneId,
       msg.platform,
     );
-    if (!tableConfig) return false;
+    if (!tableConfig) {
+      // 表格映射在 PendingAction 窗口内被管理员删除：主动清掉 pending 并提示，
+      // 避免用户卡在等待态直到 TTL 超时（60s 内所有消息都被拦截）
+      this.pending.delete(msg.chatId, msg.senderId);
+      await channelAdapter.reply(
+        msg,
+        '⚠️ 表格配置已变更，刚才的操作已作废，请重新发送指令',
+      );
+      return true;
+    }
     const adapter = getSpreadsheetAdapter(msg.platform);
     const scene = this.registry.getById(action.sceneId);
 
     if (action.type === 'confirm_delete' && content.includes('确认删除')) {
       this.pending.delete(msg.chatId, msg.senderId);
-      for (const record of action.candidates) {
-        await adapter.deleteRecord(tableConfig, record.recordId);
-      }
-      await channelAdapter.reply(
-        msg,
-        `✅ 已删除 ${action.candidates.length} 条记录`,
+      // 并发删除并汇总成功/失败：串行 await 中途抛错会让已删的记录无法回滚、
+      // 未删的记录留在表里、用户却只能看到兜底的"服务繁忙"
+      const results = await Promise.allSettled(
+        action.candidates.map((record) =>
+          adapter.deleteRecord(tableConfig, record.recordId),
+        ),
       );
+      const failed = results.filter((r) => r.status === 'rejected');
+      const okCount = results.length - failed.length;
+      if (failed.length === 0) {
+        await channelAdapter.reply(msg, `✅ 已删除 ${okCount} 条记录`);
+      } else {
+        const firstErr =
+          failed[0]?.status === 'rejected'
+            ? String((failed[0] as PromiseRejectedResult).reason)
+            : '';
+        console.error('[Dispatcher] 批量删除部分失败:', failed);
+        await channelAdapter.reply(
+          msg,
+          `⚠️ 已删除 ${okCount}/${results.length} 条，${failed.length} 条失败${firstErr ? `（首条原因：${firstErr.slice(0, 100)}）` : ''}`,
+        );
+      }
       return true;
     }
 
     if (action.type === 'confirm_upsert') {
-      if (content.includes('确认更新') || content.includes('更新')) {
+      // 仅匹配精确确认词组，避免吞掉用户的正常业务消息
+      // （如"等下，把今天进度更新到表里" 会包含"更新"二字）
+      if (
+        content.includes('确认更新') ||
+        content.includes('确认合并') ||
+        content === '合并'
+      ) {
         this.pending.delete(msg.chatId, msg.senderId);
         const target = action.candidates[0];
         if (!target) return false;
@@ -357,7 +403,7 @@ export class Dispatcher {
         await channelAdapter.reply(msg, reply);
         return true;
       }
-      if (content.includes('强制新建') || content.includes('新建')) {
+      if (content.includes('强制新建') || content.includes('新建一条')) {
         this.pending.delete(msg.chatId, msg.senderId);
         const record = await adapter.createRecord(
           tableConfig,
