@@ -297,31 +297,35 @@ export default function ImBotTableMappingsPage() {
                 />
               </Form.Item>
               <Form.Item
-                label={
-                  <Space>
-                    <span>字段映射 (JSON: 逻辑字段 → 平台字段)</span>
-                    <Button
-                      disabled={
-                        !editing.workspaceId ||
-                        !editing.tableId ||
-                        editing.platform !== 'feishu'
-                      }
-                      loading={fetchFields.isPending}
-                      onClick={() =>
-                        fetchFields.mutate({
-                          workspaceId: editing.workspaceId,
-                          tableId: editing.tableId,
-                        })
-                      }
-                      size="small"
-                    >
-                      从飞书拉取字段…
-                    </Button>
-                  </Space>
-                }
+                label="字段映射 (JSON: 逻辑字段 → 平台字段)"
                 required
                 tooltip="普通字段值用字符串。Link 字段值用对象，声明 type/linkTableId/displayField 后可用显示值（如学校名）查询/写入。multiSelect 字段须用 {type:'multiSelect'} 让查询自动用 contains。敏感字段加 sensitive:true 在群消息中脱敏"
               >
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'flex-end',
+                    marginBottom: 4,
+                  }}
+                >
+                  <Button
+                    disabled={
+                      !editing.workspaceId ||
+                      !editing.tableId ||
+                      editing.platform !== 'feishu'
+                    }
+                    loading={fetchFields.isPending}
+                    onClick={() =>
+                      fetchFields.mutate({
+                        workspaceId: editing.workspaceId,
+                        tableId: editing.tableId,
+                      })
+                    }
+                    size="small"
+                  >
+                    从飞书拉取字段…
+                  </Button>
+                </div>
                 <Input.TextArea
                   onChange={(e) =>
                     setEditing({ ...editing, fieldMappingStr: e.target.value })
