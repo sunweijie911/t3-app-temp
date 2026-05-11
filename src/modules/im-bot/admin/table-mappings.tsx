@@ -123,12 +123,18 @@ export default function ImBotTableMappingsPage() {
       dataIndex: 'fieldMapping',
       ellipsis: true,
       render: (val: unknown) => {
-        const obj = (val ?? {}) as Record<string, string>;
-        return Object.entries(obj).map(([k, v]) => (
-          <Tag key={k}>
-            {k} → {v}
-          </Tag>
-        ));
+        const obj = (val ?? {}) as Record<string, unknown>;
+        return Object.entries(obj).map(([k, v]) => {
+          const display =
+            v !== null && typeof v === 'object' && 'name' in v
+              ? `${(v as { name: string }).name} [${(v as { type?: string }).type ?? ''}]`
+              : String(v ?? '');
+          return (
+            <Tag key={k}>
+              {k} → {display}
+            </Tag>
+          );
+        });
       },
     },
     {
