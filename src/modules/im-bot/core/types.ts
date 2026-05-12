@@ -118,7 +118,11 @@ export interface SpreadsheetTableConfig {
 /** 有状态交互 */
 export interface PendingAction {
   sceneId: string;
-  type: 'confirm_delete' | 'select_record' | 'confirm_upsert';
+  type:
+    | 'confirm_delete'
+    | 'select_record'
+    | 'confirm_upsert'
+    | 'confirm_update';
   candidates: SpreadsheetRecord[];
   message: UnifiedMessage;
   updateFields?: Record<string, unknown>;

@@ -1,3 +1,4 @@
+// cspell:ignore cooldown
 import { eq } from 'drizzle-orm';
 import { db } from '@/server/db';
 import { feishuTokenManager } from '../auth/feishu-token';
@@ -24,6 +25,10 @@ const channelAdapters: Record<BotPlatform, ChannelAdapter> = {
 
 let dispatcher: Dispatcher | null = null;
 let initPromise: Promise<Dispatcher> | null = null;
+// init 失败短期熔断：DB 抖动时若每条 webhook 都重新发起一次全量加载，
+// 会被飞书重试机制放大成 N 倍 DB 压力。失败后 30s 内直接抛缓存错误。
+const INIT_FAILURE_COOLDOWN_MS = 30_000;
+let lastInitError: { error: unknown; expiresAt: number } | null = null;
 
 async function loadTableMappings(): Promise<
   Map<string, SpreadsheetTableConfig>
@@ -71,6 +76,9 @@ function logBotEvent(event: BotEvent) {
 async function getDispatcher(): Promise<Dispatcher> {
   if (dispatcher) return dispatcher;
   if (initPromise) return initPromise;
+  if (lastInitError && Date.now() < lastInitError.expiresAt) {
+    throw lastInitError.error;
+  }
 
   initPromise = (async () => {
     const [tableMappings, scenes] = await Promise.all([
@@ -99,16 +107,26 @@ async function getDispatcher(): Promise<Dispatcher> {
     }
 
     dispatcher = d;
+    lastInitError = null;
     return d;
-  })().finally(() => {
-    initPromise = null;
-  });
+  })()
+    .catch((err) => {
+      lastInitError = {
+        error: err,
+        expiresAt: Date.now() + INIT_FAILURE_COOLDOWN_MS,
+      };
+      throw err;
+    })
+    .finally(() => {
+      initPromise = null;
+    });
 
   return initPromise;
 }
 
 export function reloadBotConfig() {
   dispatcher = null;
+  lastInitError = null;
   resetCredentialsCache();
   feishuTokenManager.reset();
 }

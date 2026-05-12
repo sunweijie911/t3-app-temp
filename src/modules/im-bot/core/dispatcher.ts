@@ -79,6 +79,7 @@ export class Dispatcher {
         // 无法识别的输入：提示用户并保留 PendingAction，不走正常流程
         const promptByType: Record<PendingAction['type'], string> = {
           confirm_delete: '请回复"确认删除"执行，或回复"取消"放弃',
+          confirm_update: '请回复"确认更新"执行，或回复"取消"放弃',
           confirm_upsert:
             '请回复"确认更新"合并到现有记录，"强制新建"创建新记录，或"取消"放弃',
           select_record: `请回复序号(1~${pendingAction.candidates.length})选择，或回复"取消"放弃`,
@@ -106,13 +107,19 @@ export class Dispatcher {
         chatName: msg.chatName,
       };
       const systemPrompt = scene.getSystemPrompt(ctx);
-      console.log('[Dispatcher] 场景:', scene.id, '消息:', msg.content);
-      console.log(
-        '[Dispatcher] System Prompt (前200字):',
-        systemPrompt.slice(0, 200),
-      );
+      // systemPrompt 来自 admin 配置可能含业务敏感规则；LLM 原始输出可能含用户内容回显，
+      // 仅在非 production 输出便于调试，避免日志采集系统留存
+      if (process.env.NODE_ENV !== 'production') {
+        console.log('[Dispatcher] 场景:', scene.id, '消息:', msg.content);
+        console.log(
+          '[Dispatcher] System Prompt (前200字):',
+          systemPrompt.slice(0, 200),
+        );
+      }
       const llmOutput = await chatCompletion(systemPrompt, msg.content);
-      console.log('[Dispatcher] LLM 原始输出:', llmOutput.slice(0, 500));
+      if (process.env.NODE_ENV !== 'production') {
+        console.log('[Dispatcher] LLM 原始输出:', llmOutput.slice(0, 500));
+      }
 
       // 5. JSON 提取 + 校验
       const jsonStr = extractJson(llmOutput);
@@ -275,14 +282,24 @@ export class Dispatcher {
         if (records.length === 0)
           return { success: false, error: '未找到匹配记录' };
         if (records.length === 1) {
+          // 单条命中也走二次确认，避免 LLM 被 prompt 注入直接覆盖记录
+          // （与 DELETE 的 confirm_delete 流程对齐）
           const target = records[0];
           if (target) {
-            const updated = await adapter.updateRecord(
-              tableConfig,
-              target.recordId,
-              parsed.fields,
-            );
-            return { success: true, record: updated };
+            this.pending.set(msg.chatId, msg.senderId, {
+              sceneId: scene.id,
+              type: 'confirm_update',
+              candidates: [target],
+              message: msg,
+              updateFields: parsed.fields,
+            });
+            const changes = Object.entries(parsed.fields)
+              .map(([k, v]) => `  ${k}: ${JSON.stringify(v)}`)
+              .join('\n');
+            return {
+              success: false,
+              error: `确认更新 1 条记录？\n变更字段：\n${changes}\n\n回复"确认更新"执行，回复"取消"放弃`,
+            };
           }
         }
         this.pending.set(msg.chatId, msg.senderId, {
@@ -329,7 +346,8 @@ export class Dispatcher {
   ): Promise<boolean> {
     const content = msg.content.trim();
 
-    if (['取消', '算了', '不用了'].some((kw) => content.includes(kw))) {
+    // 精确匹配避免误吞业务消息（如"算了一下今天的销售额"被当成取消）
+    if (['取消', '算了', '不用了'].includes(content)) {
       this.pending.delete(msg.chatId, msg.senderId);
       await channelAdapter.reply(msg, '已取消操作');
       return true;
@@ -377,6 +395,34 @@ export class Dispatcher {
         );
       }
       return true;
+    }
+
+    if (action.type === 'confirm_update') {
+      // 与 confirm_delete 对齐：单条 UPDATE 必须显式"确认更新"才执行
+      if (content.includes('确认更新')) {
+        this.pending.delete(msg.chatId, msg.senderId);
+        const target = action.candidates[0];
+        if (!target) return false;
+        const updated = await adapter.updateRecord(
+          tableConfig,
+          target.recordId,
+          action.updateFields ?? {},
+        );
+        const reply =
+          scene?.formatReply(
+            {
+              intent: 'UPDATE',
+              fields: action.updateFields ?? {},
+              confidence: 1,
+              summary: '更新记录',
+            },
+            { success: true, record: updated },
+            tableConfig.fieldMapping,
+          ) ?? '✅ 已更新记录';
+        await channelAdapter.reply(msg, reply);
+        return true;
+      }
+      return false;
     }
 
     if (action.type === 'confirm_upsert') {

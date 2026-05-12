@@ -63,10 +63,12 @@ function PlatformCard({
     }
   }, [data]);
 
-  const webhookUrl =
-    typeof window !== 'undefined'
-      ? `${window.location.origin}/api/bot/${platform}/webhook`
-      : `/api/bot/${platform}/webhook`;
+  // 用 useEffect 在挂载后计算，避免 SSR(相对路径) 与 CSR(绝对路径) 不一致触发
+  // hydration warning（Antd 受控 Input.value 不一致还会有一次视觉闪烁）
+  const [webhookUrl, setWebhookUrl] = useState(`/api/bot/${platform}/webhook`);
+  useEffect(() => {
+    setWebhookUrl(`${window.location.origin}/api/bot/${platform}/webhook`);
+  }, [platform]);
 
   const disabled = platform !== 'feishu';
 

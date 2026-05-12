@@ -32,3 +32,18 @@ export const DEDUP_TTL_MS = 5 * 60 * 1000;
 
 /** PendingAction 超时 (ms) */
 export const PENDING_ACTION_TTL_MS = 60 * 1000;
+
+/**
+ * 各平台 credentials 中需要按 secret 处理的字段。
+ * - listPlatforms 返回前会把这些字段值替换为 CREDENTIAL_MASK，避免明文回传浏览器
+ * - upsertPlatform 收到值等于 CREDENTIAL_MASK 时保留 DB 原值，不覆盖
+ * 与前端 PLATFORM_FIELDS 中标记 `secret: true` 的字段保持一致。
+ */
+export const PLATFORM_SECRET_FIELDS: Record<BotPlatform, readonly string[]> = {
+  feishu: ['appSecret', 'encryptKey', 'verificationToken'],
+  dingtalk: ['appSecret', 'botSecret'],
+  wecom: ['botSecret', 'botToken', 'encodingAesKey'],
+};
+
+/** 替换 secret 字段值的掩码占位符。upsert 时若值等于此占位符则保留 DB 原值。 */
+export const CREDENTIAL_MASK = '********';

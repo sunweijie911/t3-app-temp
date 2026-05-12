@@ -33,11 +33,18 @@ async function feishuApi(path: string, method: string, body?: unknown) {
     msg?: string;
   };
   if (data.code !== 0) {
+    // 不打印 body 原文，避免用户写入的手机号/身份证等敏感字段值落进日志
+    const fieldNames =
+      body && typeof body === 'object' && 'fields' in body
+        ? Object.keys(
+            (body as { fields?: Record<string, unknown> }).fields ?? {},
+          )
+        : [];
     console.error('[FeishuBitable] API 错误', {
       path,
-      body: JSON.stringify(body),
       code: data.code,
       msg: data.msg,
+      fieldNames,
     });
     throw new Error(`飞书 Bitable API 错误: ${data.msg ?? data.code}`);
   }

@@ -3,7 +3,13 @@ import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { adminProcedure, createTRPCRouter } from '@/server/api/trpc';
 import { feishuTokenManager } from '../auth/feishu-token';
-import { BOT_EVENT_RESULT_ENUM, BOT_PLATFORM_ENUM } from '../constants';
+import {
+  BOT_EVENT_RESULT_ENUM,
+  BOT_PLATFORM_ENUM,
+  type BotPlatform,
+  CREDENTIAL_MASK,
+  PLATFORM_SECRET_FIELDS,
+} from '../constants';
 import {
   botEventLogs,
   botPlatforms,
@@ -11,6 +17,53 @@ import {
   botTableMappings,
 } from '../schema';
 import { reloadBotConfig } from '../services/bot-engine';
+
+/**
+ * 把 credentials 中的 secret 字段替换为 mask 占位符，避免明文回传浏览器。
+ */
+function maskCredentials(
+  platform: BotPlatform,
+  credentials: unknown,
+): Record<string, unknown> {
+  const src =
+    credentials && typeof credentials === 'object'
+      ? (credentials as Record<string, unknown>)
+      : {};
+  const secretKeys = new Set<string>(PLATFORM_SECRET_FIELDS[platform]);
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(src)) {
+    if (secretKeys.has(k)) {
+      out[k] = typeof v === 'string' && v.length > 0 ? CREDENTIAL_MASK : '';
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+/**
+ * 将前端提交的 credentials 与 DB 原值合并：secret 字段若提交值等于 mask 占位符，
+ * 说明前端只是回显未编辑，应保留 DB 原值。
+ */
+function mergeMaskedCredentials(
+  platform: BotPlatform,
+  incoming: Record<string, unknown>,
+  existing: Record<string, unknown>,
+): Record<string, unknown> {
+  const secretKeys = new Set<string>(PLATFORM_SECRET_FIELDS[platform]);
+  const out: Record<string, unknown> = { ...incoming };
+  for (const key of secretKeys) {
+    if (out[key] === CREDENTIAL_MASK) {
+      // 用 DB 原值替回，避免被占位符覆盖
+      if (key in existing) {
+        out[key] = existing[key];
+      } else {
+        delete out[key];
+      }
+    }
+  }
+  return out;
+}
 
 /**
  * 根据飞书 ui_type 推断 fieldMapping 建议类型。
@@ -125,7 +178,13 @@ export const imBotAdminRouter = createTRPCRouter({
     }),
 
   listPlatforms: adminProcedure.query(async ({ ctx }) => {
-    return ctx.db.select().from(botPlatforms);
+    const rows = await ctx.db.select().from(botPlatforms);
+    // 把 credentials 中的 secret 字段替换为 mask，避免明文回传浏览器
+    // (React Query 缓存 / DevTools / Network 面板都会留痕)
+    return rows.map((row) => ({
+      ...row,
+      credentials: maskCredentials(row.platform, row.credentials),
+    }));
   }),
 
   upsertPlatform: adminProcedure
@@ -140,20 +199,32 @@ export const imBotAdminRouter = createTRPCRouter({
     )
     .mutation(async ({ ctx, input }) => {
       const id = input.id ?? nanoid();
+      // 前端 listPlatforms 拿到的 secret 字段是 mask 占位符；保存时遇到 mask 值
+      // 应保留 DB 原值不覆盖，否则会把真实凭证被占位符覆盖掉
+      const existing = await ctx.db
+        .select({ credentials: botPlatforms.credentials })
+        .from(botPlatforms)
+        .where(eq(botPlatforms.platform, input.platform))
+        .limit(1);
+      const mergedCredentials = mergeMaskedCredentials(
+        input.platform,
+        input.credentials,
+        (existing[0]?.credentials as Record<string, unknown> | null) ?? {},
+      );
       await ctx.db
         .insert(botPlatforms)
         .values({
           id,
           platform: input.platform,
           name: input.name,
-          credentials: input.credentials,
+          credentials: mergedCredentials,
           isActive: input.isActive,
         })
         .onConflictDoUpdate({
           target: botPlatforms.platform,
           set: {
             name: input.name,
-            credentials: input.credentials,
+            credentials: mergedCredentials,
             isActive: input.isActive,
           },
         });
@@ -184,16 +255,20 @@ export const imBotAdminRouter = createTRPCRouter({
                 linkTableId: z.string(),
                 displayField: z.string(),
                 sensitive: z.boolean().optional(),
+                label: z.string().optional(),
               }),
               z.object({
                 name: z.string(),
                 type: z.literal('multiSelect'),
                 sensitive: z.boolean().optional(),
+                label: z.string().optional(),
               }),
               z.object({
                 name: z.string(),
                 type: z.literal('plain'),
                 sensitive: z.boolean().optional(),
+                label: z.string().optional(),
+                displayType: z.enum(['number', 'date']).optional(),
               }),
             ]),
           )
