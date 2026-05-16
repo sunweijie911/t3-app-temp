@@ -8,5 +8,5 @@ export default {
   dbCredentials: {
     url: env.DATABASE_URL,
   },
-  tablesFilter: ['pg-drizzle_*'],
+  tablesFilter: ['pg-drizzle_*', 'user', 'session', 'account', 'verification'],
 } satisfies Config;
