@@ -80,7 +80,7 @@ function PlatformCard({
       style={{ marginBottom: 16 }}
       title={`${PLATFORM_LABELS[platform]}${disabled ? ' (TODO: Phase 3)' : ''}`}
     >
-      <Form component={false} layout="vertical">
+      <Form autoComplete="off" layout="vertical">
         {fields.map((f) => (
           <Form.Item key={f.key} label={f.label}>
             {f.secret ? (
