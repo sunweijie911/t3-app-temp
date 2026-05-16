@@ -12,8 +12,8 @@ const specSchema = z.object({
 });
 
 const buttonSchema = z.object({
-  label: z.string().min(1).max(20),
-  link: z.string().min(1),
+  label: z.string().trim().min(1).max(20),
+  link: z.string().trim().min(1),
 });
 
 export const upsertInput = z.object({

@@ -62,4 +62,22 @@ describe('batterySwapAdminRouter.upsertInput.buttons', () => {
     const parsed = upsertInput.parse(withoutButtons);
     expect(parsed.buttons).toEqual([]);
   });
+
+  it('拒绝仅含空格的 label（trim 后空）', () => {
+    expect(() =>
+      upsertInput.parse({
+        ...baseValid,
+        buttons: [{ label: '   ', link: 'https://x' }],
+      }),
+    ).toThrow();
+  });
+
+  it('拒绝仅含空格的 link（trim 后空）', () => {
+    expect(() =>
+      upsertInput.parse({
+        ...baseValid,
+        buttons: [{ label: '立即购买', link: '   ' }],
+      }),
+    ).toThrow();
+  });
 });

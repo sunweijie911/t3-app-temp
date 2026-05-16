@@ -109,6 +109,8 @@ function SortableButtonRow({
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.5 : 1,
+    position: isDragging ? 'relative' : undefined,
+    zIndex: isDragging ? 1 : undefined,
   };
 
   return (
@@ -187,7 +189,7 @@ function rowToEditing(r: PackageRow): EditingPackage {
   };
 }
 
-const DEFAULT_EDITING: EditingPackage = {
+const STATIC_DEFAULT_EDITING_BASE: Omit<EditingPackage, 'buttons'> = {
   company: '',
   title: '',
   imageUrl: null,
@@ -203,8 +205,14 @@ const DEFAULT_EDITING: EditingPackage = {
   regionLimit: '',
   purchaseNotes: '上海仅限48V，60V慎拍',
   timeRange: null,
-  buttons: [{ key: nanoid(), label: '立即购买', link: '' }],
 };
+
+function buildDefaultEditing(): EditingPackage {
+  return {
+    ...STATIC_DEFAULT_EDITING_BASE,
+    buttons: [{ key: nanoid(), label: '立即购买', link: '' }],
+  };
+}
 
 // ── 主组件 ──────────────────────────────────────────────
 
@@ -578,7 +586,7 @@ export default function AdminBatterySwapPage() {
               {MODULE_NAME}管理
             </h1>
             <Button
-              onClick={() => setEditing({ ...DEFAULT_EDITING })}
+              onClick={() => setEditing(buildDefaultEditing())}
               type="primary"
             >
               新建套餐
