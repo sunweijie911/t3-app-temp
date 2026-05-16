@@ -97,6 +97,7 @@ function ConfigItem({ configKey, label, type }: ConfigDef) {
           />
         ) : type === 'password' ? (
           <Input.Password
+            autoComplete="off"
             onChange={(e) => setValue(e.target.value)}
             style={{ flex: 1 }}
             value={value as string}
