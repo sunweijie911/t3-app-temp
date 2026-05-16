@@ -11,7 +11,12 @@ const specSchema = z.object({
   price: z.number().int().min(0),
 });
 
-const upsertInput = z.object({
+const buttonSchema = z.object({
+  label: z.string().min(1).max(20),
+  link: z.string().min(1),
+});
+
+export const upsertInput = z.object({
   id: z.string().optional(),
   company: z.string().min(1),
   title: z.string().min(1),
@@ -26,7 +31,7 @@ const upsertInput = z.object({
   purchaseNotes: z.string().nullable().optional(),
   validFrom: z.string().nullable().optional(),
   validTo: z.string().nullable().optional(),
-  purchaseLink: z.string().nullable().optional(),
+  buttons: z.array(buttonSchema).max(4).default([]),
 });
 
 export const batterySwapAdminRouter = createTRPCRouter({
@@ -57,7 +62,7 @@ export const batterySwapAdminRouter = createTRPCRouter({
       purchaseNotes: input.purchaseNotes ?? null,
       validFrom: input.validFrom ? new Date(input.validFrom) : null,
       validTo: input.validTo ? new Date(input.validTo) : null,
-      purchaseLink: input.purchaseLink ?? null,
+      buttons: input.buttons,
     };
 
     // 使用显式 insert/update 代替 onConflictDoUpdate，避免 Drizzle hook 冲突

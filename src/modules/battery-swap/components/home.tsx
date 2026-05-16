@@ -44,6 +44,7 @@ export default function BatterySwapHome() {
 
         {packages?.map((pkg) => (
           <PackageCard
+            buttons={pkg.buttons}
             cardBgColor={pkg.cardBgColor}
             company={pkg.company}
             depositMethod={pkg.depositMethod}
@@ -52,7 +53,6 @@ export default function BatterySwapHome() {
             key={pkg.id}
             onBuy={handleBuy}
             originalPrice={pkg.originalPrice}
-            purchaseLink={pkg.purchaseLink}
             purchaseNotes={pkg.purchaseNotes}
             regionLimit={pkg.regionLimit}
             salePrice={pkg.salePrice}

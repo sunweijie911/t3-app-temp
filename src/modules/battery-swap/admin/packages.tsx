@@ -36,13 +36,14 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import type { Dayjs } from 'dayjs';
 import dayjs from 'dayjs';
+import { nanoid } from 'nanoid';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import {
   BANNER_CONFIG_KEY,
   MODULE_NAME,
 } from '@/modules/battery-swap/constants';
-import type { PackageSpec } from '@/modules/battery-swap/schema';
+import type { PackageButton, PackageSpec } from '@/modules/battery-swap/schema';
 import { formatPrice } from '@/modules/battery-swap/schema';
 import { ImageUploader } from '@/shared/components/admin/image-uploader';
 import { api } from '@/trpc/react';
@@ -85,7 +86,45 @@ function SortableRow({
   );
 }
 
+function SortableButtonRow({
+  buttonKey,
+  children,
+}: {
+  buttonKey: string;
+  children: (handleProps: {
+    attributes: ReturnType<typeof useSortable>['attributes'];
+    listeners: ReturnType<typeof useSortable>['listeners'];
+  }) => React.ReactNode;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: buttonKey });
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  return (
+    <div ref={setNodeRef} style={style}>
+      {children({ attributes, listeners })}
+    </div>
+  );
+}
+
 // ── 类型 ──────────────────────────────────────────────
+
+type EditingButton = {
+  key: string; // 前端拖拽用稳定 key，提交时丢弃
+  label: string;
+  link: string;
+};
 
 type EditingPackage = {
   id?: string;
@@ -101,7 +140,7 @@ type EditingPackage = {
   regionLimit: string;
   purchaseNotes: string;
   timeRange: [Dayjs, Dayjs] | null;
-  purchaseLink: string;
+  buttons: EditingButton[];
 };
 
 type PackageRow = {
@@ -119,7 +158,7 @@ type PackageRow = {
   purchaseNotes: string | null;
   validFrom: Date | null;
   validTo: Date | null;
-  purchaseLink: string | null;
+  buttons: PackageButton[];
   sortOrder: number;
   isActive: boolean;
 };
@@ -140,7 +179,11 @@ function rowToEditing(r: PackageRow): EditingPackage {
     purchaseNotes: r.purchaseNotes ?? '',
     timeRange:
       r.validFrom && r.validTo ? [dayjs(r.validFrom), dayjs(r.validTo)] : null,
-    purchaseLink: r.purchaseLink ?? '',
+    buttons: (r.buttons ?? []).map((b) => ({
+      key: nanoid(),
+      label: b.label,
+      link: b.link,
+    })),
   };
 }
 
@@ -160,7 +203,7 @@ const DEFAULT_EDITING: EditingPackage = {
   regionLimit: '',
   purchaseNotes: '上海仅限48V，60V慎拍',
   timeRange: null,
-  purchaseLink: '',
+  buttons: [{ key: nanoid(), label: '立即购买', link: '' }],
 };
 
 // ── 主组件 ──────────────────────────────────────────────
@@ -255,6 +298,13 @@ export default function AdminBatterySwapPage() {
       toast.error('请填写所有规格的电池型号');
       return;
     }
+    if (editing.buttons.some((b) => !b.label.trim() || !b.link.trim())) {
+      toast.error('请补齐所有按钮的文案与链接');
+      return;
+    }
+    if (editing.buttons.length === 0) {
+      toast.warning('未配置任何按钮，前台将无法跳转');
+    }
     upsertMutation.mutate({
       id: editing.id,
       company: editing.company,
@@ -273,7 +323,10 @@ export default function AdminBatterySwapPage() {
       purchaseNotes: editing.purchaseNotes || null,
       validFrom: editing.timeRange ? editing.timeRange[0].toISOString() : null,
       validTo: editing.timeRange ? editing.timeRange[1].toISOString() : null,
-      purchaseLink: editing.purchaseLink || null,
+      buttons: editing.buttons.map((b) => ({
+        label: b.label.trim(),
+        link: b.link.trim(),
+      })),
     });
   }
 
@@ -306,6 +359,43 @@ export default function AdminBatterySwapPage() {
     setEditing((prev) => {
       if (!prev || prev.specs.length <= 1) return prev;
       return { ...prev, specs: prev.specs.filter((_, i) => i !== index) };
+    });
+  }
+
+  function updateButton(index: number, field: 'label' | 'link', value: string) {
+    setEditing((prev) => {
+      if (!prev) return prev;
+      const buttons = [...prev.buttons];
+      const current = buttons[index];
+      if (current) buttons[index] = { ...current, [field]: value };
+      return { ...prev, buttons };
+    });
+  }
+
+  function addButton() {
+    setEditing((prev) => {
+      if (!prev || prev.buttons.length >= 4) return prev;
+      return {
+        ...prev,
+        buttons: [...prev.buttons, { key: nanoid(), label: '', link: '' }],
+      };
+    });
+  }
+
+  function removeButton(index: number) {
+    setEditing((prev) => {
+      if (!prev) return prev;
+      return { ...prev, buttons: prev.buttons.filter((_, i) => i !== index) };
+    });
+  }
+
+  function moveButton(fromKey: string, toKey: string) {
+    setEditing((prev) => {
+      if (!prev || fromKey === toKey) return prev;
+      const fromIdx = prev.buttons.findIndex((b) => b.key === fromKey);
+      const toIdx = prev.buttons.findIndex((b) => b.key === toKey);
+      if (fromIdx === -1 || toIdx === -1) return prev;
+      return { ...prev, buttons: arrayMove(prev.buttons, fromIdx, toIdx) };
     });
   }
 
@@ -739,15 +829,72 @@ export default function AdminBatterySwapPage() {
               />
             </Form.Item>
 
-            {/* 购买链接 */}
-            <Form.Item label="购买跳转链接">
-              <Input
-                onChange={(e) =>
-                  updateEditing({ purchaseLink: e.target.value })
-                }
-                placeholder="https://..."
-                value={editing.purchaseLink}
-              />
+            <Form.Item label="购买按钮（最多 4 个，可拖拽排序）">
+              <DndContext
+                id="battery-swap-buttons"
+                onDragEnd={(e) => {
+                  const { active, over } = e;
+                  if (over && active.id !== over.id) {
+                    moveButton(String(active.id), String(over.id));
+                  }
+                }}
+                sensors={sensors}
+              >
+                <SortableContext
+                  items={editing.buttons.map((b) => b.key)}
+                  strategy={verticalListSortingStrategy}
+                >
+                  {editing.buttons.map((btn, idx) => (
+                    <SortableButtonRow buttonKey={btn.key} key={btn.key}>
+                      {({ attributes, listeners }) => (
+                        <Space
+                          align="center"
+                          style={{ display: 'flex', marginBottom: 8 }}
+                        >
+                          <span {...attributes} {...listeners}>
+                            <HolderOutlined
+                              style={{ cursor: 'grab', color: '#999' }}
+                            />
+                          </span>
+                          <Input
+                            onChange={(e) =>
+                              updateButton(idx, 'label', e.target.value)
+                            }
+                            placeholder="按钮文案，如 立即购买"
+                            style={{ width: 180 }}
+                            value={btn.label}
+                          />
+                          <Input
+                            onChange={(e) =>
+                              updateButton(idx, 'link', e.target.value)
+                            }
+                            placeholder="https://..."
+                            style={{ width: 280 }}
+                            value={btn.link}
+                          />
+                          <Button
+                            danger
+                            icon={<DeleteOutlined />}
+                            onClick={() => removeButton(idx)}
+                            size="small"
+                            type="text"
+                          />
+                        </Space>
+                      )}
+                    </SortableButtonRow>
+                  ))}
+                </SortableContext>
+              </DndContext>
+              <Button
+                disabled={editing.buttons.length >= 4}
+                icon={<PlusOutlined />}
+                onClick={addButton}
+                size="small"
+                style={{ marginTop: 4 }}
+                type="dashed"
+              >
+                添加按钮
+              </Button>
             </Form.Item>
           </Form>
         )}

@@ -10,7 +10,7 @@ import {
 import { useState } from 'react';
 
 import { getAccentColor, hexToRgba } from '@/lib/color';
-import type { PackageSpec } from '@/modules/battery-swap/schema';
+import type { PackageButton, PackageSpec } from '@/modules/battery-swap/schema';
 import { formatPrice } from '@/modules/battery-swap/schema';
 
 export type PackageCardProps = {
@@ -25,7 +25,7 @@ export type PackageCardProps = {
   depositMethod: string | null;
   regionLimit: string | null;
   purchaseNotes: string | null;
-  purchaseLink: string | null;
+  buttons: PackageButton[];
   validFrom: Date | string | null;
   validTo: Date | string | null;
   onBuy: (link: string) => void;
@@ -59,7 +59,7 @@ export function PackageCard({
   depositMethod,
   regionLimit,
   purchaseNotes,
-  purchaseLink,
+  buttons,
   validFrom,
   validTo,
   onBuy,
@@ -206,19 +206,28 @@ export function PackageCard({
             </div>
           </div>
 
-          {/* 购买按钮 */}
-          <button
-            className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl py-2.5 font-bold text-sm text-white disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={!purchaseLink}
-            onClick={() => purchaseLink && onBuy(purchaseLink)}
-            style={{
-              backgroundColor: accent,
-              boxShadow: `0 10px 15px -3px ${hexToRgba(accent, 0.2)}`,
-            }}
-            type="button"
-          >
-            立即购买 ¥{formatPrice(salePrice)} 起
-          </button>
+          {/* 购买按钮（0~4 个，2×2 自适应） */}
+          {buttons.length > 0 && (
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              {buttons.map((b, i) => (
+                <button
+                  className={`flex items-center justify-center truncate rounded-xl px-2 py-2.5 font-bold text-sm text-white ${
+                    buttons.length === 1 ? 'col-span-2' : ''
+                  } ${buttons.length === 3 && i === 2 ? 'col-span-2' : ''}`}
+                  key={i}
+                  onClick={() => onBuy(b.link)}
+                  style={{
+                    backgroundColor: accent,
+                    boxShadow: `0 10px 15px -3px ${hexToRgba(accent, 0.2)}`,
+                  }}
+                  title={b.label}
+                  type="button"
+                >
+                  {b.label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 

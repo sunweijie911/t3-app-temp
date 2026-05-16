@@ -8,6 +8,12 @@ export type PackageSpec = {
   price: number; // 该规格价格（分）
 };
 
+// 购买按钮类型
+export type PackageButton = {
+  label: string; // 按钮文案
+  link: string; // 跳转链接
+};
+
 // 价格：分 → 元（展示用）
 export function formatPrice(fen: number) {
   return (fen / 100).toFixed(2);
@@ -31,7 +37,7 @@ export const batterySwapPackages = createTable(
     purchaseNotes: d.text(),
     validFrom: d.timestamp({ withTimezone: true }),
     validTo: d.timestamp({ withTimezone: true }),
-    purchaseLink: d.text(),
+    buttons: jsonb().$type<PackageButton[]>().notNull().default([]),
     sortOrder: d.integer().notNull().default(0),
     isActive: d.boolean().notNull().default(true),
     createdAt: d
