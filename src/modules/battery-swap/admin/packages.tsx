@@ -485,23 +485,6 @@ export default function AdminBatterySwapPage() {
         ),
     },
     {
-      title: '底色',
-      dataIndex: 'cardBgColor',
-      key: 'cardBgColor',
-      width: 48,
-      render: (color: string | null) => (
-        <div
-          style={{
-            width: 20,
-            height: 20,
-            borderRadius: 4,
-            backgroundColor: color ?? '#ffffff',
-            border: '1px solid #d9d9d9',
-          }}
-        />
-      ),
-    },
-    {
       title: '状态',
       key: 'isActive',
       width: 80,
