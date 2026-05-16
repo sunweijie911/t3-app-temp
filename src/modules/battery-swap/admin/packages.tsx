@@ -637,7 +637,9 @@ export default function AdminBatterySwapPage() {
         }
         onCancel={() => setEditing(null)}
         open={!!editing}
-        styles={{ body: { maxHeight: '80vh', overflowY: 'auto' } }}
+        styles={{
+          body: { maxHeight: '80vh', overflowX: 'hidden', overflowY: 'auto' },
+        }}
         title={editing?.id ? '编辑套餐' : '新建套餐'}
         width={700}
       >
