@@ -80,7 +80,7 @@ function PlatformCard({
       style={{ marginBottom: 16 }}
       title={`${PLATFORM_LABELS[platform]}${disabled ? ' (TODO: Phase 3)' : ''}`}
     >
-      <Form layout="vertical">
+      <Form layout="vertical" name={`platform-${platform}`}>
         {fields.map((f) => (
           <Form.Item key={f.key} label={f.label}>
             {f.secret ? (
@@ -95,6 +95,7 @@ function PlatformCard({
               />
             ) : (
               <Input
+                autoComplete="off"
                 disabled={disabled}
                 onChange={(e) =>
                   setCreds({ ...creds, [f.key]: e.target.value })
@@ -107,7 +108,7 @@ function PlatformCard({
         ))}
         <Form.Item label="Webhook URL (只读，复制后填入飞书开放平台)">
           <Flex gap={8}>
-            <Input readOnly value={webhookUrl} />
+            <Input autoComplete="off" readOnly value={webhookUrl} />
             <Tooltip title="复制">
               <Button
                 icon={<CopyOutlined />}

@@ -110,6 +110,7 @@ function ConfigItem({ configKey, label, type }: ConfigDef) {
           />
         ) : (
           <Input
+            autoComplete="off"
             onChange={(e) => setValue(e.target.value)}
             style={{ flex: 1 }}
             value={value as string}
