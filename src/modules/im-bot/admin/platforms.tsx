@@ -80,12 +80,12 @@ function PlatformCard({
       style={{ marginBottom: 16 }}
       title={`${PLATFORM_LABELS[platform]}${disabled ? ' (TODO: Phase 3)' : ''}`}
     >
-      <Form autoComplete="off" layout="vertical">
+      <Form layout="vertical">
         {fields.map((f) => (
           <Form.Item key={f.key} label={f.label}>
             {f.secret ? (
               <Input.Password
-                autoComplete="off"
+                autoComplete="new-password"
                 disabled={disabled}
                 onChange={(e) =>
                   setCreds({ ...creds, [f.key]: e.target.value })
