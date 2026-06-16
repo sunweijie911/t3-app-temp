@@ -17,9 +17,23 @@ import { createTable } from '@/server/db/table-creator';
 
 export type WheelUserInfo = {
   name: string | null;
-  phone: string | null;
+  contact: string | null;
   address: string | null;
 };
+
+/**
+ * 从快照读取联系方式，兼容旧快照（旧键名为 phone）。
+ */
+export function readUserInfoContact(
+  info:
+    | ({ contact?: string | null; phone?: string | null } & Record<
+        string,
+        unknown
+      >)
+    | null,
+): string | null {
+  return info?.contact ?? info?.phone ?? null;
+}
 
 // ============================================================
 // 枚举
@@ -131,7 +145,7 @@ export const wheelDrawRecords = createTable(
   ],
 );
 
-// 4. wheelExtraChances — admin-configured extra draws per phone number
+// 4. wheelExtraChances — admin-configured extra draws per identifier
 export const wheelExtraChances = createTable(
   'wheel_extra_chance',
   (d) => ({
@@ -140,7 +154,9 @@ export const wheelExtraChances = createTable(
       .varchar({ length: 36 })
       .notNull()
       .references(() => wheelActivities.id, { onDelete: 'cascade' }),
-    phone: text().notNull(),
+    // identifier: 录入当时 authMethod 对应的用户标识（手机号或邮箱）。
+    // 注意：切换登录方式会使按旧标识录入的历史配置失效。
+    identifier: text().notNull(),
     extraChances: integer().notNull().default(0),
     note: text(),
     createdAt: d
@@ -150,9 +166,9 @@ export const wheelExtraChances = createTable(
     updatedAt: d.timestamp({ withTimezone: true }).$onUpdate(() => new Date()),
   }),
   (t) => [
-    uniqueIndex('wheel_extra_chance_activity_phone_idx').on(
+    uniqueIndex('wheel_extra_chance_activity_identifier_idx').on(
       t.activityId,
-      t.phone,
+      t.identifier,
     ),
   ],
 );

@@ -3,9 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { authClient } from '@/lib/auth-client';
 import { authMethod } from '@/lib/auth-methods';
-import { PHONE_RE } from '@/modules/lucky-wheel/constants';
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+import { EMAIL_RE, PHONE_RE } from '@/modules/lucky-wheel/constants';
 
 /** 当前使用的 OTP 方式：email-otp 或 phone-otp，email-password 不适用于此场景 */
 const otpMode =

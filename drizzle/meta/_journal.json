@@ -148,6 +148,13 @@
       "when": 1778939881667,
       "tag": "0020_battery_swap_buttons",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1781622649380,
+      "tag": "0021_wooden_komodo",
+      "breakpoints": true
     }
   ]
 }

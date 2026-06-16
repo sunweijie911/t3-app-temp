@@ -21,10 +21,14 @@ import { useState } from 'react';
 import { toast } from 'sonner';
 import XLSX from 'xlsx-js-style';
 import {
+  IDENTIFIER_CONFIG,
   PRIZE_TYPE_LABELS,
   RECORD_STATUS_LABELS,
 } from '@/modules/lucky-wheel/constants';
-import type { WheelUserInfo } from '@/modules/lucky-wheel/schema';
+import {
+  readUserInfoContact,
+  type WheelUserInfo,
+} from '@/modules/lucky-wheel/schema';
 import { api, type RouterOutputs } from '@/trpc/react';
 
 type Filters = {
@@ -75,18 +79,22 @@ type ExportRecord = {
   isWin: boolean;
   status: string;
   userInfo: WheelUserInfo | null;
-  user?: { name?: string | null; phoneNumber?: string | null } | null;
+  user?: {
+    name?: string | null;
+    phoneNumber?: string | null;
+    email?: string | null;
+  } | null;
   activity?: { name?: string } | null;
   prize?: { name?: string; type?: string } | null;
 };
 
 function toExcel(records: ExportRecord[]): Blob {
   const headers = [
-    '用户手机',
+    `用户${IDENTIFIER_CONFIG.label}`,
     '奖品',
     '状态',
     '收件人',
-    '手机',
+    IDENTIFIER_CONFIG.label,
     '收货地址',
     '活动',
     '抽奖时间',
@@ -95,11 +103,11 @@ function toExcel(records: ExportRecord[]): Blob {
   const rows = records.map((r) => {
     const info = r.userInfo;
     return [
-      r.user?.phoneNumber ?? r.userId,
+      r.user?.[IDENTIFIER_CONFIG.userField] ?? r.userId,
       r.isWin ? (r.prize?.name ?? '') : '未中奖',
       RECORD_STATUS_LABELS[r.status] ?? r.status,
       info?.name ?? '',
-      info?.phone ?? '',
+      readUserInfoContact(info) ?? '',
       info?.address ?? '',
       r.activity?.name ?? '',
       dayjs(r.createdAt).format('YYYY-MM-DD HH:mm:ss'),
@@ -307,7 +315,7 @@ export default function AdminRecordsPage() {
           </Typography.Text>
           <br />
           <Typography.Text style={{ fontSize: 12 }} type="secondary">
-            {record.user?.phoneNumber ?? record.userId}
+            {record.user?.[IDENTIFIER_CONFIG.userField] ?? record.userId}
           </Typography.Text>
         </div>
       ),
@@ -353,7 +361,7 @@ export default function AdminRecordsPage() {
         return (
           <div>
             <Typography.Text strong style={{ fontSize: 13 }}>
-              {info.name} / {info.phone}
+              {info.name} / {readUserInfoContact(info)}
             </Typography.Text>
             <br />
             <Typography.Text
@@ -479,7 +487,7 @@ export default function AdminRecordsPage() {
                 enterButton="搜索"
                 onChange={(e) => setSearchInput(e.target.value)}
                 onSearch={(v) => applyFilters({ search: v })}
-                placeholder="姓名 / 手机号"
+                placeholder={`姓名 / ${IDENTIFIER_CONFIG.label}`}
                 style={{ width: 260 }}
                 value={searchInput}
               />

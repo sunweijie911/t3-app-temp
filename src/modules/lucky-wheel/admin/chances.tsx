@@ -19,12 +19,12 @@ import Link from 'next/link';
 import { use, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import XLSX from 'xlsx-js-style';
-import { PHONE_RE } from '@/modules/lucky-wheel/constants';
+import { IDENTIFIER_CONFIG } from '@/modules/lucky-wheel/constants';
 import { api } from '@/trpc/react';
 
 interface EditingChance {
   id?: string;
-  phone: string;
+  identifier: string;
   extraChances: number;
   note: string;
 }
@@ -97,7 +97,7 @@ export default function AdminChancesPage({ params }: Props) {
         upsertMutation.mutate({
           id: editing?.id,
           activityId,
-          phone: values.phone,
+          identifier: values.identifier,
           extraChances: values.extraChances,
           note: values.note || undefined,
         });
@@ -108,8 +108,12 @@ export default function AdminChancesPage({ params }: Props) {
   }
 
   function downloadTemplate() {
-    const headers = ['手机号', '额外次数', '备注'];
-    const example = ['13800138000', 1, 'VIP用户'];
+    const headers = [IDENTIFIER_CONFIG.label, '额外次数', '备注'];
+    const example = [
+      IDENTIFIER_CONFIG.kind === 'phone' ? '13800138000' : 'user@example.com',
+      1,
+      'VIP用户',
+    ];
     const ws = XLSX.utils.aoa_to_sheet([headers, example]);
     ws['!cols'] = [{ wch: 15 }, { wch: 10 }, { wch: 20 }];
     // 表头样式
@@ -156,7 +160,7 @@ export default function AdminChancesPage({ params }: Props) {
           .slice(1)
           .filter((row) => row[0])
           .map((row) => ({
-            phone: String(row[0]).trim(),
+            identifier: String(row[0]).trim(),
             extraChances: Number(row[1]) || 0,
             note: row[2] ? String(row[2]).trim() : undefined,
           }));
@@ -166,13 +170,15 @@ export default function AdminChancesPage({ params }: Props) {
           return;
         }
 
-        // 前端校验手机号格式
-        const invalid = items.filter((item) => !PHONE_RE.test(item.phone));
+        // 前端校验标识格式
+        const invalid = items.filter(
+          (item) => !IDENTIFIER_CONFIG.regex.test(item.identifier),
+        );
         if (invalid.length > 0) {
           toast.error(
-            `${invalid.length} 条手机号格式错误：${invalid
+            `${invalid.length} 条${IDENTIFIER_CONFIG.label}格式错误：${invalid
               .slice(0, 3)
-              .map((i) => i.phone)
+              .map((i) => i.identifier)
               .join('、')}${invalid.length > 3 ? '...' : ''}`,
           );
           return;
@@ -202,8 +208,8 @@ export default function AdminChancesPage({ params }: Props) {
 
   const columns: ColumnsType<ChanceRow> = [
     {
-      title: '手机号',
-      dataIndex: 'phone',
+      title: IDENTIFIER_CONFIG.label,
+      dataIndex: 'identifier',
       render: (val: string) => (
         <span style={{ fontFamily: 'monospace' }}>{val}</span>
       ),
@@ -234,7 +240,7 @@ export default function AdminChancesPage({ params }: Props) {
             onClick={() =>
               openModal({
                 id: row.id,
-                phone: row.phone,
+                identifier: row.identifier,
                 extraChances: row.extraChances,
                 note: row.note ?? '',
               })
@@ -294,7 +300,8 @@ export default function AdminChancesPage({ params }: Props) {
           }}
         >
           <p style={{ margin: 0, color: '#6b7280', fontSize: 14 }}>
-            为指定手机号配置额外抽奖次数（在基础次数之上叠加）
+            为指定{IDENTIFIER_CONFIG.label}
+            配置额外抽奖次数（在基础次数之上叠加）
           </p>
           <Space>
             <Button onClick={downloadTemplate}>下载模板</Button>
@@ -306,7 +313,7 @@ export default function AdminChancesPage({ params }: Props) {
             </Button>
             <Button
               onClick={() =>
-                openModal({ phone: '', extraChances: 1, note: '' })
+                openModal({ identifier: '', extraChances: 1, note: '' })
               }
               type="primary"
             >
@@ -376,15 +383,17 @@ export default function AdminChancesPage({ params }: Props) {
       >
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item
-            label="手机号"
-            name="phone"
-            rules={[{ required: true, message: '请输入手机号' }]}
+            label={IDENTIFIER_CONFIG.label}
+            name="identifier"
+            rules={[
+              { required: true, message: `请输入${IDENTIFIER_CONFIG.label}` },
+            ]}
           >
             <Input
               disabled={!!editing?.id}
-              inputMode="numeric"
-              maxLength={11}
-              placeholder="1xxxxxxxxxx"
+              inputMode={IDENTIFIER_CONFIG.inputMode}
+              maxLength={IDENTIFIER_CONFIG.maxLength}
+              placeholder={IDENTIFIER_CONFIG.placeholder}
             />
           </Form.Item>
           <Form.Item

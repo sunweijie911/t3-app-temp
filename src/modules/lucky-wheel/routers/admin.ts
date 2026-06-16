@@ -14,7 +14,7 @@ import {
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import {
-  PHONE_RE,
+  IDENTIFIER_CONFIG,
   PRIZE_TYPE_ENUM,
   RECORD_STATUS_ENUM,
 } from '@/modules/lucky-wheel/constants';
@@ -49,7 +49,13 @@ async function resolveRecordWhere(
     const matched = await dbInstance
       .select({ id: user.id })
       .from(user)
-      .where(or(ilike(user.name, term), ilike(user.phoneNumber, term)));
+      .where(
+        or(
+          ilike(user.name, term),
+          ilike(user.phoneNumber, term),
+          ilike(user.email, term),
+        ),
+      );
     userIds = matched.map((u) => u.id);
     if (userIds.length === 0) return null;
   }
@@ -557,7 +563,12 @@ export const luckyWheelAdminRouter = createTRPCRouter({
       z.object({
         id: z.string().optional(),
         activityId: z.string(),
-        phone: z.string().regex(PHONE_RE, '请输入有效的手机号'),
+        identifier: z
+          .string()
+          .regex(
+            IDENTIFIER_CONFIG.regex,
+            `请输入有效的${IDENTIFIER_CONFIG.label}`,
+          ),
         extraChances: z.number().int().min(0),
         note: z.string().optional(),
       }),
@@ -570,12 +581,12 @@ export const luckyWheelAdminRouter = createTRPCRouter({
         .values({
           id,
           activityId: input.activityId,
-          phone: input.phone,
+          identifier: input.identifier,
           extraChances: input.extraChances,
           note: input.note,
         })
         .onConflictDoUpdate({
-          target: [wheelExtraChances.activityId, wheelExtraChances.phone],
+          target: [wheelExtraChances.activityId, wheelExtraChances.identifier],
           set: {
             extraChances: input.extraChances,
             note: input.note ?? sql`${wheelExtraChances.note}`,
@@ -618,7 +629,12 @@ export const luckyWheelAdminRouter = createTRPCRouter({
         items: z
           .array(
             z.object({
-              phone: z.string().regex(PHONE_RE, '无效手机号'),
+              identifier: z
+                .string()
+                .regex(
+                  IDENTIFIER_CONFIG.regex,
+                  `无效${IDENTIFIER_CONFIG.label}`,
+                ),
               extraChances: z.number().int().min(0),
               note: z.string().optional(),
             }),
@@ -634,12 +650,15 @@ export const luckyWheelAdminRouter = createTRPCRouter({
             .values({
               id: nanoid(),
               activityId: input.activityId,
-              phone: item.phone,
+              identifier: item.identifier,
               extraChances: item.extraChances,
               note: item.note,
             })
             .onConflictDoUpdate({
-              target: [wheelExtraChances.activityId, wheelExtraChances.phone],
+              target: [
+                wheelExtraChances.activityId,
+                wheelExtraChances.identifier,
+              ],
               set: {
                 extraChances: item.extraChances,
                 note: item.note ?? sql`${wheelExtraChances.note}`,

@@ -1,6 +1,7 @@
 import { and, eq, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 
+import { IDENTIFIER_CONFIG } from '@/modules/lucky-wheel/constants';
 import {
   type WheelUserInfo,
   wheelActivities,
@@ -15,7 +16,7 @@ type Db = typeof dbType;
 
 /**
  * 解析用户在某活动中的总允许抽奖次数。
- * totalAllowed = activity.maxDrawsPerUser + extraChances（按手机号配置）
+ * totalAllowed = activity.maxDrawsPerUser + extraChances（按当前登录标识配置）
  * totalAllowed = 0 表示不限次数。
  */
 export async function resolveDrawLimit(
@@ -29,15 +30,16 @@ export async function resolveDrawLimit(
 
   const userRecord = await db.query.user.findFirst({
     where: eq(user.id, userId),
-    columns: { phoneNumber: true },
+    columns: { phoneNumber: true, email: true },
   });
-  const phone = userRecord?.phoneNumber ?? null;
+  // 按当前登录方式取标识：phone-otp 用手机号，邮箱模式用邮箱
+  const identifier = userRecord?.[IDENTIFIER_CONFIG.userField] ?? null;
 
-  const extraChancesRow = phone
+  const extraChancesRow = identifier
     ? await db.query.wheelExtraChances.findFirst({
         where: and(
           eq(wheelExtraChances.activityId, activityId),
-          eq(wheelExtraChances.phone, phone),
+          eq(wheelExtraChances.identifier, identifier),
         ),
       })
     : null;
@@ -62,7 +64,7 @@ interface DrawResult {
  *
  * Flow:
  * 1. Validate activity is active and within date range
- * 2. Resolve extra chances for the user's phone number
+ * 2. Resolve extra chances for the user's active login identifier
  * 3. Fetch active prizes and validate probability config
  * 4. Transaction (user row FOR UPDATE to prevent concurrent over-draw):
  *    a. Count check against totalAllowed
@@ -97,7 +99,7 @@ export async function executeDraw(
   }
 
   // 2. 解析总允许次数（事务外 — 只读）
-  // 【已知限制】extra chances 以手机号为 key 存储，若用户修改了手机号，旧号码的额外次数将不再生效。
+  // 【已知限制】extra chances 以当前登录标识为 key 存储，若用户修改了标识，旧标识的额外次数将不再生效。
   const totalAllowed = await resolveDrawLimit(
     db,
     activityId,

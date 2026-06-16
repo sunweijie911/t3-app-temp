@@ -1,6 +1,7 @@
 import { TRPCError } from '@trpc/server';
 import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
+import { IDENTIFIER_CONFIG } from '@/modules/lucky-wheel/constants';
 import {
   type WheelUserInfo,
   wheelActivities,
@@ -37,7 +38,10 @@ export const drawRouter = createTRPCRouter({
       // 构建 userInfo 快照，随抽奖记录一次性写入
       const userInfo: WheelUserInfo = {
         name: input.name ?? ctx.session.user.name,
-        phone: getUserPhone(ctx.session.user),
+        contact:
+          IDENTIFIER_CONFIG.kind === 'phone'
+            ? getUserPhone(ctx.session.user)
+            : (ctx.session.user.email ?? null),
         address: input.address ?? null,
       };
 
