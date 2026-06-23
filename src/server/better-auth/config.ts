@@ -23,7 +23,7 @@ if (method === 'email-otp') {
         await sendEmailOtp(email, otp);
       },
       otpLength: 6,
-      expiresIn: 300,
+      expiresIn: 600, // 10 分钟，留足邮件投递延迟余量
     }),
   );
 }
@@ -35,7 +35,7 @@ if (method === 'phone-otp') {
         await sendSmsOtp(phone, code);
       },
       otpLength: 6,
-      expiresIn: 300,
+      expiresIn: 600, // 10 分钟，留足短信投递延迟余量
       signUpOnVerification: {
         getTempEmail: (phone) => `${phone}@phone.local`,
         getTempName: (phone) => phone,

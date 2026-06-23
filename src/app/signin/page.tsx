@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { env } from '@/env';
 import { authClient } from '@/lib/auth-client';
+import { resolveAuthError } from '@/lib/auth-error';
 import { authMethod } from '@/lib/auth-methods';
 import { getModuleByPathname } from '@/modules/registry';
 import { useDefaultModuleId } from '@/shared/components/default-module-provider';
@@ -194,7 +195,7 @@ function EmailPasswordForm({
         password,
       });
       if (result.error) {
-        setError(result.error.message ?? '登录失败，请检查邮箱和密码');
+        setError(resolveAuthError(result.error, '登录失败，请检查邮箱和密码'));
         return;
       }
       onSuccess();
@@ -277,6 +278,8 @@ function EmailOtpForm({
   const [loading, setLoading] = useState(false);
   const { countdown, start, reset } = useCountdown();
   const formRef = useRef<HTMLFormElement>(null);
+  // 防止自动提交（验证码填满即触发 submit）与手动提交并发，导致同一验证码被二次消费而误报错误
+  const submittingRef = useRef(false);
 
   const code = digits.join('');
 
@@ -297,6 +300,8 @@ function EmailOtpForm({
       setError('请输入有效的邮箱地址');
       return;
     }
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setError('');
     setLoading(true);
     try {
@@ -305,7 +310,7 @@ function EmailOtpForm({
         type: 'sign-in',
       });
       if (result.error) {
-        setError(result.error.message ?? '发送失败，请稍后重试');
+        setError(resolveAuthError(result.error, '发送失败，请稍后重试'));
         return;
       }
       setStep('code');
@@ -314,6 +319,7 @@ function EmailOtpForm({
       setError('发送失败，请稍后重试');
     } finally {
       setLoading(false);
+      submittingRef.current = false;
     }
   };
 
@@ -323,6 +329,8 @@ function EmailOtpForm({
       setError('请输入6位验证码');
       return;
     }
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setError('');
     setLoading(true);
     try {
@@ -331,7 +339,7 @@ function EmailOtpForm({
         otp: code,
       });
       if (result.error) {
-        setError(result.error.message ?? '验证码错误，请重试');
+        setError(resolveAuthError(result.error, '验证码错误，请重试'));
         return;
       }
       onSuccess();
@@ -339,6 +347,7 @@ function EmailOtpForm({
       setError('验证失败，请稍后重试');
     } finally {
       setLoading(false);
+      submittingRef.current = false;
     }
   };
 
@@ -433,6 +442,8 @@ function PhoneOtpForm({
   const [loading, setLoading] = useState(false);
   const { countdown, start, reset } = useCountdown();
   const formRef = useRef<HTMLFormElement>(null);
+  // 防止自动提交（验证码填满即触发 submit）与手动提交并发，导致同一验证码被二次消费而误报错误
+  const submittingRef = useRef(false);
 
   const code = digits.join('');
 
@@ -453,6 +464,8 @@ function PhoneOtpForm({
       setError('请输入有效的手机号');
       return;
     }
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setError('');
     setLoading(true);
     try {
@@ -460,7 +473,7 @@ function PhoneOtpForm({
         phoneNumber: phone,
       });
       if (result.error) {
-        setError(result.error.message ?? '发送失败，请稍后重试');
+        setError(resolveAuthError(result.error, '发送失败，请稍后重试'));
         return;
       }
       setStep('code');
@@ -469,6 +482,7 @@ function PhoneOtpForm({
       setError('发送失败，请稍后重试');
     } finally {
       setLoading(false);
+      submittingRef.current = false;
     }
   };
 
@@ -478,6 +492,8 @@ function PhoneOtpForm({
       setError('请输入6位验证码');
       return;
     }
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setError('');
     setLoading(true);
     try {
@@ -486,7 +502,7 @@ function PhoneOtpForm({
         code,
       });
       if (result.error) {
-        setError(result.error.message ?? '验证码错误，请重试');
+        setError(resolveAuthError(result.error, '验证码错误，请重试'));
         return;
       }
       onSuccess();
@@ -494,6 +510,7 @@ function PhoneOtpForm({
       setError('验证失败，请稍后重试');
     } finally {
       setLoading(false);
+      submittingRef.current = false;
     }
   };
 

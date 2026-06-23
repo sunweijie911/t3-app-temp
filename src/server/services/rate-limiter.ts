@@ -91,6 +91,7 @@ let _cache: {
   dingtalkUserInfo: RateLimiter;
   globalIp: RateLimiter;
   authIp: RateLimiter;
+  otpSend: RateLimiter;
 } | null = null;
 
 function limiters() {
@@ -102,8 +103,9 @@ function limiters() {
     draw: rl(env.RATE_LIMIT_DRAW, 10, 60_000),
     upload: rl(env.RATE_LIMIT_UPLOAD, 5, 60_000),
     dingtalkUserInfo: rl(env.RATE_LIMIT_DINGTALK_USER_INFO, 30, 60_000),
-    globalIp: rl(env.RATE_LIMIT_GLOBAL_IP, 60, 60_000),
-    authIp: rl(env.RATE_LIMIT_AUTH_IP, 5, 60_000),
+    globalIp: rl(env.RATE_LIMIT_GLOBAL_IP, 120, 60_000),
+    authIp: rl(env.RATE_LIMIT_AUTH_IP, 20, 60_000),
+    otpSend: rl(env.RATE_LIMIT_OTP_SEND, 10, 60_000),
   };
   return _cache;
 }
@@ -138,7 +140,14 @@ export const globalIpLimiter = {
   check: (key: string) => limiters().globalIp.check(key),
 };
 
-// 登录接口限流（默认 5次/分钟）
+// 登录/验证接口限流（默认 20次/分钟）。仅覆盖登录与验证尝试，
+// 验证本身另有 better-auth allowedAttempts 兜底，阈值可宽松，避免共享 NAT 出口 IP 时误伤正常用户。
 export const authIpLimiter = {
   check: (key: string) => limiters().authIp.check(key),
+};
+
+// 验证码发送限流（默认 10次/分钟）。仅覆盖 send-otp 这类有成本（短信/邮件）的端点，
+// 与验证端点分离，防止「发送 1 次 + 验证 1 次」就占满登录额度。
+export const otpSendLimiter = {
+  check: (key: string) => limiters().otpSend.check(key),
 };

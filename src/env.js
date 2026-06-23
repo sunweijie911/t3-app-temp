@@ -56,8 +56,11 @@ export const env = createEnv({
     RATE_LIMIT_DRAW: z.string().default('10/60000'),
     RATE_LIMIT_UPLOAD: z.string().default('5/60000'),
     RATE_LIMIT_DINGTALK_USER_INFO: z.string().default('30/60000'),
-    RATE_LIMIT_GLOBAL_IP: z.string().default('60/60000'),
-    RATE_LIMIT_AUTH_IP: z.string().default('5/60000'),
+    RATE_LIMIT_GLOBAL_IP: z.string().default('120/60000'),
+    // 登录/验证端点限流（不含发送），宽松以免共享 NAT 出口 IP 时误伤
+    RATE_LIMIT_AUTH_IP: z.string().default('20/60000'),
+    // 验证码发送端点限流（有短信/邮件成本），单独严格
+    RATE_LIMIT_OTP_SEND: z.string().default('10/60000'),
 
     // IM Bot — LLM 服务
     IM_BOT_LLM_BASE_URL: z.string().default('https://api.deepseek.com'),
@@ -117,6 +120,7 @@ export const env = createEnv({
     CRON_SECRET: stripQuotes(process.env.CRON_SECRET),
     RATE_LIMIT_GLOBAL_IP: stripQuotes(process.env.RATE_LIMIT_GLOBAL_IP),
     RATE_LIMIT_AUTH_IP: stripQuotes(process.env.RATE_LIMIT_AUTH_IP),
+    RATE_LIMIT_OTP_SEND: stripQuotes(process.env.RATE_LIMIT_OTP_SEND),
     IM_BOT_LLM_BASE_URL: stripQuotes(process.env.IM_BOT_LLM_BASE_URL),
     IM_BOT_LLM_API_KEY: stripQuotes(process.env.IM_BOT_LLM_API_KEY),
     IM_BOT_LLM_MODEL: stripQuotes(process.env.IM_BOT_LLM_MODEL),

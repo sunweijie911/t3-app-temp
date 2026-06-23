@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { authClient } from '@/lib/auth-client';
+import { resolveAuthError } from '@/lib/auth-error';
 import { authMethod } from '@/lib/auth-methods';
 import { EMAIL_RE, PHONE_RE } from '@/modules/lucky-wheel/constants';
 
@@ -34,6 +35,8 @@ export function UserInfoModal({
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // 防止验证/发送请求并发重复提交（重复提交会让正确验证码被二次消费而误报错误）
+  const submittingRef = useRef(false);
 
   // modal 关闭时停止倒计时；组件卸载时清理 timer
   useEffect(() => {
@@ -113,6 +116,8 @@ export function UserInfoModal({
       setError('请填写收货地址');
       return;
     }
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setError('');
     setLoading(true);
     try {
@@ -122,7 +127,7 @@ export function UserInfoModal({
           type: 'sign-in',
         });
         if (result.error) {
-          setError(result.error.message ?? '发送失败，请稍后重试');
+          setError(resolveAuthError(result.error, '发送失败，请稍后重试'));
           return;
         }
       } else if (otpMode === 'phone-otp') {
@@ -130,7 +135,7 @@ export function UserInfoModal({
           phoneNumber: identifier,
         });
         if (result.error) {
-          setError(result.error.message ?? '发送失败，请稍后重试');
+          setError(resolveAuthError(result.error, '发送失败，请稍后重试'));
           return;
         }
       }
@@ -140,6 +145,7 @@ export function UserInfoModal({
       setError('发送失败，请稍后重试');
     } finally {
       setLoading(false);
+      submittingRef.current = false;
     }
   };
 
@@ -149,6 +155,8 @@ export function UserInfoModal({
       setError('请输入6位验证码');
       return;
     }
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setError('');
     setLoading(true);
     try {
@@ -158,7 +166,7 @@ export function UserInfoModal({
           otp: code,
         });
         if (result.error) {
-          setError(result.error.message ?? '验证码错误，请重试');
+          setError(resolveAuthError(result.error, '验证码错误，请重试'));
           return;
         }
       } else if (otpMode === 'phone-otp') {
@@ -167,7 +175,7 @@ export function UserInfoModal({
           code,
         });
         if (result.error) {
-          setError(result.error.message ?? '验证码错误，请重试');
+          setError(resolveAuthError(result.error, '验证码错误，请重试'));
           return;
         }
       }
@@ -176,6 +184,7 @@ export function UserInfoModal({
       setError('验证失败，请重试');
     } finally {
       setLoading(false);
+      submittingRef.current = false;
     }
   };
 
