@@ -183,6 +183,9 @@ jobs:
           host: ${{ secrets.DEPLOY_SERVER_HOST }}
           username: ${{ secrets.DEPLOY_SERVER_USER }}
           key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          # 远程 docker compose pull 从 GHCR 拉镜像可能较慢，
+          # 默认 command_timeout 仅 10m，会在拉取中途被掐断（Run Command Timeout）。
+          command_timeout: 30m
           script: |
             set -e
 
