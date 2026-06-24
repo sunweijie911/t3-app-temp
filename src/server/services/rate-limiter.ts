@@ -54,11 +54,13 @@ export class RateLimiter {
  * 解析 "次数/窗口毫秒" 格式的限流配置，如 "10/60000"。
  * 解析失败时使用提供的默认值。
  */
-function parseRateLimit(
-  value: string,
+export function parseRateLimit(
+  value: string | undefined,
   defaultMax: number,
   defaultWindowMs: number,
 ): [number, number] {
+  // 测试或跳过 env 校验时该值可能为 undefined，此处兜底默认值，避免 split 报错
+  if (!value) return [defaultMax, defaultWindowMs];
   const parts = value.split('/');
   if (parts.length !== 2) return [defaultMax, defaultWindowMs];
   // biome-ignore lint/style/noNonNullAssertion: 上一行 length === 2 已校验

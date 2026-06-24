@@ -61,6 +61,8 @@ export const env = createEnv({
     RATE_LIMIT_AUTH_IP: z.string().default('20/60000'),
     // 验证码发送端点限流（有短信/邮件成本），单独严格
     RATE_LIMIT_OTP_SEND: z.string().default('10/60000'),
+    // 验证码校验端点限流（覆盖 better-auth 内置过严/单位有误的默认规则），手输验证码需留余量
+    RATE_LIMIT_OTP_VERIFY: z.string().default('10/60000'),
 
     // IM Bot — LLM 服务
     IM_BOT_LLM_BASE_URL: z.string().default('https://api.deepseek.com'),
@@ -121,6 +123,7 @@ export const env = createEnv({
     RATE_LIMIT_GLOBAL_IP: stripQuotes(process.env.RATE_LIMIT_GLOBAL_IP),
     RATE_LIMIT_AUTH_IP: stripQuotes(process.env.RATE_LIMIT_AUTH_IP),
     RATE_LIMIT_OTP_SEND: stripQuotes(process.env.RATE_LIMIT_OTP_SEND),
+    RATE_LIMIT_OTP_VERIFY: stripQuotes(process.env.RATE_LIMIT_OTP_VERIFY),
     IM_BOT_LLM_BASE_URL: stripQuotes(process.env.IM_BOT_LLM_BASE_URL),
     IM_BOT_LLM_API_KEY: stripQuotes(process.env.IM_BOT_LLM_API_KEY),
     IM_BOT_LLM_MODEL: stripQuotes(process.env.IM_BOT_LLM_MODEL),
