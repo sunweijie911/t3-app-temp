@@ -32,6 +32,10 @@ if (method === 'email-otp') {
       },
       otpLength: 6,
       expiresIn: 600, // 10 分钟，留足邮件投递延迟余量
+      // 允许的错误次数：插件默认 3 太低，手输验证码很容易因几次手误就触顶。
+      // 注意：达到上限后插件会直接删除该验证码，之后即使输对也会判为「不正确」，
+      // 必须重新获取——这正是「输错几次后输对仍报错」问题的根源，由 env 统一放宽。
+      allowedAttempts: env.OTP_ALLOWED_ATTEMPTS,
     }),
   );
 }
@@ -44,6 +48,8 @@ if (method === 'phone-otp') {
       },
       otpLength: 6,
       expiresIn: 600, // 10 分钟，留足短信投递延迟余量
+      // 同 emailOTP：默认 3 太低，达到上限后验证码会被删除，由 env 统一放宽。
+      allowedAttempts: env.OTP_ALLOWED_ATTEMPTS,
       signUpOnVerification: {
         getTempEmail: (phone) => `${phone}@phone.local`,
         getTempName: (phone) => phone,

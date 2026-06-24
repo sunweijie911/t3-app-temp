@@ -62,3 +62,29 @@ export function resolveAuthError(
   // 其余英文/未知错误，统一用场景兜底文案，避免向用户暴露英文
   return fallback;
 }
+
+/**
+ * 判断该错误是否意味着「服务端的验证码已失效，旧码再输也没用，必须重新获取」。
+ *
+ * better-auth 在以下情况会直接删除验证码记录：
+ * - 错误次数达到 allowedAttempts 上限（TOO_MANY_ATTEMPTS）
+ * - 验证码已过期（OTP_EXPIRED）
+ * - 验证码不存在（OTP_NOT_FOUND）
+ *
+ * 命中后前端应清空输入框并放开「重新获取」，否则用户会卡在旧码上一直「不正确」。
+ */
+export function isOtpInvalidated(
+  error: AuthErrorLike | null | undefined,
+): boolean {
+  if (!error) return false;
+  const code = (error.code ?? '').toUpperCase();
+  const msg = (error.message ?? '').toLowerCase();
+  return (
+    code.includes('TOO_MANY_ATTEMPTS') ||
+    msg.includes('too many attempts') ||
+    code.includes('OTP_EXPIRED') ||
+    msg.includes('otp expired') ||
+    code.includes('OTP_NOT_FOUND') ||
+    msg.includes('otp not found')
+  );
+}

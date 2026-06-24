@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { env } from '@/env';
 import { authClient } from '@/lib/auth-client';
-import { resolveAuthError } from '@/lib/auth-error';
+import { isOtpInvalidated, resolveAuthError } from '@/lib/auth-error';
 import { authMethod } from '@/lib/auth-methods';
 import { getModuleByPathname } from '@/modules/registry';
 import { useDefaultModuleId } from '@/shared/components/default-module-provider';
@@ -340,6 +340,12 @@ function EmailOtpForm({
       });
       if (result.error) {
         setError(resolveAuthError(result.error, '验证码错误，请重试'));
+        // 验证码已被服务端作废（错误次数过多/过期/失效）：清空旧码并放开「重新获取」，
+        // 否则用户会卡在已失效的旧码上一直提示「不正确」。
+        if (isOtpInvalidated(result.error)) {
+          setDigits(Array(OTP_LENGTH).fill(''));
+          reset();
+        }
         return;
       }
       onSuccess();
@@ -503,6 +509,12 @@ function PhoneOtpForm({
       });
       if (result.error) {
         setError(resolveAuthError(result.error, '验证码错误，请重试'));
+        // 验证码已被服务端作废（错误次数过多/过期/失效）：清空旧码并放开「重新获取」，
+        // 否则用户会卡在已失效的旧码上一直提示「不正确」。
+        if (isOtpInvalidated(result.error)) {
+          setDigits(Array(OTP_LENGTH).fill(''));
+          reset();
+        }
         return;
       }
       onSuccess();

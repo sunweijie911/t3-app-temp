@@ -63,6 +63,9 @@ export const env = createEnv({
     RATE_LIMIT_OTP_SEND: z.string().default('10/60000'),
     // 验证码校验端点限流（覆盖 better-auth 内置过严/单位有误的默认规则），手输验证码需留余量
     RATE_LIMIT_OTP_VERIFY: z.string().default('10/60000'),
+    // 单个验证码允许的最大错误次数（达到后该验证码被作废，需重新获取）。
+    // better-auth 默认 3 太低，手输极易触顶，默认放宽到 5。
+    OTP_ALLOWED_ATTEMPTS: z.coerce.number().int().positive().default(5),
 
     // IM Bot — LLM 服务
     IM_BOT_LLM_BASE_URL: z.string().default('https://api.deepseek.com'),
@@ -124,6 +127,7 @@ export const env = createEnv({
     RATE_LIMIT_AUTH_IP: stripQuotes(process.env.RATE_LIMIT_AUTH_IP),
     RATE_LIMIT_OTP_SEND: stripQuotes(process.env.RATE_LIMIT_OTP_SEND),
     RATE_LIMIT_OTP_VERIFY: stripQuotes(process.env.RATE_LIMIT_OTP_VERIFY),
+    OTP_ALLOWED_ATTEMPTS: stripQuotes(process.env.OTP_ALLOWED_ATTEMPTS),
     IM_BOT_LLM_BASE_URL: stripQuotes(process.env.IM_BOT_LLM_BASE_URL),
     IM_BOT_LLM_API_KEY: stripQuotes(process.env.IM_BOT_LLM_API_KEY),
     IM_BOT_LLM_MODEL: stripQuotes(process.env.IM_BOT_LLM_MODEL),
