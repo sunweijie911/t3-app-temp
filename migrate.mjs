@@ -44,11 +44,15 @@ try {
         .map((s) => s.trim())
         .filter(Boolean);
 
-      for (const stmt of statements) {
-        await sql.unsafe(stmt);
-      }
-
-      await sql`INSERT INTO "__drizzle_migrations" (hash, created_at) VALUES (${hash}, ${Date.now()})`;
+      // 单个迁移文件的所有语句 + hash 写入包进同一事务，
+      // 保证原子性：中途任意一条失败则整体回滚，容器重启可安全重放，
+      // 避免出现 DDL 半应用但 hash 未记录、重跑必报 already exists 卡死的情况。
+      await sql.begin(async (tx) => {
+        for (const stmt of statements) {
+          await tx.unsafe(stmt);
+        }
+        await tx`INSERT INTO "__drizzle_migrations" (hash, created_at) VALUES (${hash}, ${Date.now()})`;
+      });
       console.log(`[migrate] Applied: ${entry.tag}`);
       applied++;
     }

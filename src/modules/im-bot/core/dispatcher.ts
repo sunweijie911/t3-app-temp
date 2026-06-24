@@ -23,6 +23,18 @@ interface DispatcherConfig {
   onEvent?: (event: BotEvent) => void;
 }
 
+/**
+ * 判断 filters 是否含有「有效」筛选键。
+ * 排除以 _ 开头的保留键（如 _conjunction），这些键会被下游 queryRecords 跳过，
+ * 不能作为筛选条件。用于 UPDATE/DELETE 前的空值守卫，防止保留键绕过判空导致全表命中。
+ */
+function hasEffectiveFilters(
+  filters: Record<string, unknown> | null | undefined,
+): boolean {
+  if (!filters) return false;
+  return Object.keys(filters).some((key) => !key.startsWith('_'));
+}
+
 export class Dispatcher {
   readonly registry = new SceneRegistry();
   private dedup = new MemoryDedupStore();
@@ -275,7 +287,10 @@ export class Dispatcher {
       }
 
       case 'UPDATE': {
-        if (!parsed.filters || Object.keys(parsed.filters).length === 0) {
+        // 仅统计有效筛选键（排除以 _ 开头的保留键，如 _conjunction），
+        // 否则 LLM 返回 {"_conjunction":"or"} 会绕过空判断，
+        // 下游 queryRecords 跳过保留键后 filter 为空 → 命中全表 → 全表挂入待更新。
+        if (!parsed.filters || !hasEffectiveFilters(parsed.filters)) {
           return { success: false, error: '更新操作需要指定筛选条件' };
         }
         const records = await adapter.queryRecords(tableConfig, parsed.filters);
@@ -316,7 +331,8 @@ export class Dispatcher {
       }
 
       case 'DELETE': {
-        if (!parsed.filters || Object.keys(parsed.filters).length === 0) {
+        // 同 UPDATE：排除保留键后再判空，防止保留键绕过守卫导致全表删除放大。
+        if (!parsed.filters || !hasEffectiveFilters(parsed.filters)) {
           return { success: false, error: '删除操作需要指定筛选条件' };
         }
         const records = await adapter.queryRecords(tableConfig, parsed.filters);

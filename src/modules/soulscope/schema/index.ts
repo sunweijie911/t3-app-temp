@@ -195,7 +195,9 @@ export const testResults = createTable(
       .varchar({ length: 36 })
       .notNull()
       .references(() => testTypes.id),
-    resultCode: d.varchar({ length: 64 }).notNull(),
+    // scale/composite 策略会把多维度名+分数拼成 resultCode（如 dimA:3.33,dimB:2.5,...），
+    // 多维度量表很容易超过原 64 长度导致 insert 报错、出结果失败，故放宽到 512。
+    resultCode: d.varchar({ length: 512 }).notNull(),
     resultLabel: d.varchar({ length: 256 }).notNull(),
     dimensionScores: jsonb().$type<Record<string, number>>().notNull(),
     summary: d.text().notNull(),

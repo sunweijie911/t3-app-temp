@@ -1,0 +1,1 @@
+ALTER TABLE "pg-drizzle_test_result" ALTER COLUMN "resultCode" SET DATA TYPE varchar(512);
