@@ -18,6 +18,24 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
+# NEXT_PUBLIC_* 必须在 build 阶段注入：Next.js 会把客户端段的 NEXT_PUBLIC_* 静态内联进
+# 客户端 bundle 与静态产物，运行时(.env/env_file)无法再覆盖。由 CI 通过 --build-arg 传入，
+# 未传入时为空串 —— build 阶段设了 SKIP_ENV_VALIDATION（不应用 zod 默认值），
+# 由各消费点的下游兜底回退到合理默认（parseAuthMethod→email-otp、SITE_NAME `|| 模块名`、
+# DEFAULT_MODULE `?? lucky-wheel` 等）。
+# 注意：app(runner) 与 nginx 两个目标都派生自本 builder，必须传入相同 build-arg，
+# 否则 nginx 提供的静态 JS 与 app 服务端读取的值会不一致。
+ARG NEXT_PUBLIC_SITE_NAME=""
+ARG NEXT_PUBLIC_MODULE_NAMES=""
+ARG NEXT_PUBLIC_DEFAULT_MODULE=""
+ARG NEXT_PUBLIC_ENABLED_MODULES=""
+ARG NEXT_PUBLIC_AUTH_METHOD=""
+ENV NEXT_PUBLIC_SITE_NAME=$NEXT_PUBLIC_SITE_NAME
+ENV NEXT_PUBLIC_MODULE_NAMES=$NEXT_PUBLIC_MODULE_NAMES
+ENV NEXT_PUBLIC_DEFAULT_MODULE=$NEXT_PUBLIC_DEFAULT_MODULE
+ENV NEXT_PUBLIC_ENABLED_MODULES=$NEXT_PUBLIC_ENABLED_MODULES
+ENV NEXT_PUBLIC_AUTH_METHOD=$NEXT_PUBLIC_AUTH_METHOD
+
 ENV SKIP_ENV_VALIDATION=1
 ENV NEXT_TELEMETRY_DISABLED=1
 
