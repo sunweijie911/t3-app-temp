@@ -54,8 +54,11 @@ ${scenesDesc}
       console.warn('[SceneRegistry] matchByLLM 失败，降级为无场景匹配:', err);
       return null;
     }
-    const sceneId = result.trim().toLowerCase();
-    if (sceneId === 'none') return null;
-    return this.scenes.find((s) => s.id === sceneId) ?? null;
+    const raw = result.trim();
+    if (raw.toLowerCase() === 'none') return null;
+    // 两侧不分大小写比较：sceneId 在 admin 允许大写，
+    // 不能因为 LLM 返回值小写化就匹配不上（否则静默退化为无场景）。
+    const sceneId = raw.toLowerCase();
+    return this.scenes.find((s) => s.id.toLowerCase() === sceneId) ?? null;
   }
 }

@@ -139,15 +139,46 @@ export const protectedProcedure = t.procedure
   });
 
 /**
- * 对输入参数进行脱敏，移除密码、token 等敏感字段。
+ * 判断字段名是否敏感（需脱敏）。
+ * 归一化（小写、去 _/-）后做子串匹配，以覆盖驼峰/下划线命名的嵌套凭证字段，
+ * 例如 appSecret / encryptKey / verificationToken / botToken / encodingAesKey。
+ * `code`、`pin` 这类容易与 zipCode/productCode 等无害字段混淆的，用精确匹配避免误伤。
  */
-function sanitizeInput(input: unknown): unknown {
+const SENSITIVE_SUBSTRINGS = [
+  'password',
+  'passwd',
+  'secret',
+  'token',
+  'apikey',
+  'aeskey',
+  'encryptkey',
+  'privatekey',
+  'credential',
+  'otp',
+];
+const SENSITIVE_EXACT = new Set(['code', 'pin']);
+
+export function isSensitiveKey(key: string): boolean {
+  const normalized = key.toLowerCase().replace(/[_-]/g, '');
+  if (SENSITIVE_EXACT.has(normalized)) return true;
+  return SENSITIVE_SUBSTRINGS.some((p) => normalized.includes(p));
+}
+
+/**
+ * 对输入参数进行脱敏，移除密码、token 等敏感字段（含嵌套对象/数组）。
+ */
+export function sanitizeInput(input: unknown): unknown {
   if (!input || typeof input !== 'object') return input;
   if (Array.isArray(input)) return input.map(sanitizeInput);
-  const sensitiveKeys = ['password', 'secret', 'token', 'otp', 'code'];
   const sanitized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
-    sanitized[key] = sensitiveKeys.includes(key) ? '***' : sanitizeInput(value);
+    // 容器始终递归逐字段脱敏（例如 credentials 对象内仅遮蔽 appSecret，
+    // 保留 appId 等非敏感字段以便审计）；只有敏感名的原始值才整体打码。
+    if (value && typeof value === 'object') {
+      sanitized[key] = sanitizeInput(value);
+    } else {
+      sanitized[key] = isSensitiveKey(key) ? '***' : value;
+    }
   }
   return sanitized;
 }

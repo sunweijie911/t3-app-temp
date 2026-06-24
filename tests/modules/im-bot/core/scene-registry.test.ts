@@ -86,6 +86,17 @@ describe('SceneRegistry.matchByLLM', () => {
     expect(out?.id).toBe('sales');
   });
 
+  it('含大写字母的 sceneId 也能匹配（不分大小写）', async () => {
+    const r = new SceneRegistry();
+    r.register(makeScene('DevLog', 0));
+    // LLM 按 prompt 返回 id 原值（含大写）
+    mockedChatCompletion.mockResolvedValueOnce('DevLog');
+    expect((await r.matchByLLM('hi'))?.id).toBe('DevLog');
+    // LLM 返回小写形态同样应命中
+    mockedChatCompletion.mockResolvedValueOnce('devlog');
+    expect((await r.matchByLLM('hi'))?.id).toBe('DevLog');
+  });
+
   it('LLM 返回 none 时返回 null', async () => {
     const r = new SceneRegistry();
     r.register(makeScene('sales', 0));
