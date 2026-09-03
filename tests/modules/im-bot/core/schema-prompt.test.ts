@@ -96,3 +96,19 @@ describe('renderResourceSchema', () => {
     expect(out).toContain('暂不支持任何操作');
   });
 });
+
+describe('资源类型标签（P1：doc 曾在 prompt 里自称"未实现"）', () => {
+  it('doc 资源不再对 LLM 声称未实现，同时给出可用动词', () => {
+    const out = renderResourceSchema([
+      sceneResourceOf({
+        ...tableBinding,
+        alias: '周报文档',
+        kind: 'doc',
+        fieldMapping: {},
+      }),
+    ]);
+    expect(out).toContain('「周报文档」— 文档');
+    expect(out).not.toContain('未实现');
+    expect(out).toContain('READ / APPEND / QUERY');
+  });
+});

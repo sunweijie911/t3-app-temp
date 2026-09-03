@@ -101,7 +101,7 @@ export function truncateForDisplay(s: string): string {
   return `${s.slice(0, FIELD_DISPLAY_MAX_LEN)}…（已截断，共 ${s.length} 字，详见多维表）`;
 }
 
-export type DisplayType = 'number' | 'date';
+export type DisplayType = 'number' | 'date' | 'text';
 
 function formatDateMs(v: number): string {
   return new Date(v).toLocaleDateString('zh-CN', {
@@ -115,7 +115,7 @@ function formatDateMs(v: number): string {
 /**
  * 把平台返回的复杂字段值转为字符串，不做截断。
  * displayType:
- * - 'number'：数字原样输出（避免金额/版本号被误格式化为日期）
+ * - 'number' / 'text'：原样输出（避免金额/版本号/文本被误格式化为日期）
  * - 'date'：数字始终格式化为日期
  * - 未指定：保留旧启发式（毫秒值落在 2000~2100 年区间时按日期渲染）
  */
@@ -125,7 +125,7 @@ export function fieldToStringRaw(
 ): string {
   if (v == null || v === '') return '';
   if (typeof v === 'number') {
-    if (displayType === 'number') return String(v);
+    if (displayType === 'number' || displayType === 'text') return String(v);
     if (displayType === 'date') return formatDateMs(v);
     if (v >= DATE_MS_MIN && v <= DATE_MS_MAX) return formatDateMs(v);
     return String(v);

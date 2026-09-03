@@ -177,12 +177,11 @@ export class DatabaseDrivenScene implements BotScene {
       return clampReply(`❌ 操作失败: ${result.error ?? '未知错误'}`);
     }
 
-    // 有自定义回复模板时使用模板
-    if (this.replyTemplate) {
-      return clampReply(this.applyReplyTemplate(intent, result, fieldMapping));
-    }
-
     // ── 文档能力 ───────────────────────────────────────────
+    // 必须排在 replyTemplate 之前：模板的变量全是表格取向的
+    // （${fields.xxx} / ${count} / each 块），文档结果里 records 为空，
+    // 套模板的结果是正文全丢、${count} 渲染成 0 —— 一场景同时绑表和
+    // 文档时（这正是多资源的典型用法）文档读取直接不可用。
     if (result.doc) {
       const { title, text, url } = result.doc;
       const link = url ? `\n🔗 ${url}` : '';
@@ -193,6 +192,11 @@ export class DatabaseDrivenScene implements BotScene {
       // READ / QUERY：正文可能很长，按群消息上限截断
       const body = text.trim() || '(文档为空)';
       return clampReply(`📄 《${title}》\n\n${body}${link}`);
+    }
+
+    // 有自定义回复模板时使用模板（表格结果专用）
+    if (this.replyTemplate) {
+      return clampReply(this.applyReplyTemplate(intent, result, fieldMapping));
     }
 
     // 通用默认格式

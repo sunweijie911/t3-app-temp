@@ -178,7 +178,8 @@ src/modules/im-bot/
 │   ├── dingtalk-token.ts       # v1.0/oauth2/accessToken（驼峰字段）
 │   ├── wecom-token.ts          # cgi-bin/gettoken
 │   ├── feishu-user.ts          # open_id → 姓名（带缓存）
-│   └── feishu-chat.ts          # chat_id → 群名（带缓存）
+│   ├── feishu-chat.ts          # chat_id → 群名（带缓存）
+│   └── feishu-bot.ts           # 机器人自身 open_id（群聊 @ 判定用，带缓存）
 │
 └── services/
     ├── bot-engine.ts           # 引擎装配、配置缓存、webhook 入口
@@ -295,7 +296,7 @@ body 丢掉，导致这两个平台的 `reply()` 根本写不出来。
 ```typescript
 type FieldMappingValue =
   | string
-  | { name; type: 'plain'; sensitive?; label?; displayType?: 'number' | 'date' }
+  | { name; type: 'plain'; sensitive?; label?; displayType?: 'number' | 'date' | 'text' }
   | { name; type: 'multiSelect'; sensitive?; label? }
   | { name; type: 'link'; linkTableId; displayField; sensitive?; label? }
 ```
@@ -304,8 +305,14 @@ type FieldMappingValue =
   反查（带正负缓存的进程内 LRU）；筛选用 `contains` + record_id。
 - `multiSelect`：写入要 `string[]`，筛选默认用 `contains`（多选字段不支持 `is`）。
 - `sensitive`：群消息回复中脱敏。**注意脱敏只作用于 IM 回复层**。
-- `displayType`：区分"金额 45000000" 与"日期毫秒值"，也决定 `between` 走
-  数值区间还是日期区间。
+- `displayType`：声明这一列的取值语义，三处生效 ——
+  渲染（区分"金额 45000000"与"日期毫秒值"）、`between`（数值区间还是日期区间）、
+  **写入**（`'2026-05-11'` 要不要转成毫秒时间戳）。
+  `'text'` 是必要的第三态：只有 `'number' | 'date'` 两态时，纯文本列只能留空，
+  而留空走的是"值像日期就当日期"的旧启发式 —— 文本列里合法的 `"2026-05-11"`
+  会被写成 `1778472000000`，筛选侧还会对文本列下 `ExactDate` 条件。
+  未声明时仍走旧启发式（历史配置不回归），新配置由后台字段选择器按飞书
+  `ui_type` 自动填好（DateTime→date / Number·Currency·Progress→number / 其余→text）。
 
 ### 接口契约
 
@@ -345,6 +352,8 @@ interface SpreadsheetAdapter {
   createRecord(config, fields): Promise<SpreadsheetRecord>
   updateRecord(config, recordId, fields): Promise<SpreadsheetRecord>
   queryRecords(config, filters): Promise<SpreadsheetRecord[]>
+  // 同上，但额外上报拉取是否撞上翻页上限（见「查询与筛选」）
+  queryRecordsWithMeta?(config, filters): Promise<{ records; truncated }>
   deleteRecord(config, recordId): Promise<void>
 }
 ```
@@ -410,14 +419,22 @@ flowchart TD
 | 机制 | 值 | 说明 |
 |------|----|------|
 | 筛选条件必填 | — | UPDATE / DELETE 无有效筛选键直接拒绝；判空时排除 `_` 开头的保留键，防止 `{_conjunction:'or'}` 绕过守卫命中全表 |
+| 变更字段必填 | — | UPDATE 解析不出任何变更字段时直接拒绝，不查表也不挂确认 —— 否则会挂出一条"变更字段：（空）"的提示，用户确认后再对平台发一次空 `fields` 的写请求 |
+| 序号严格匹配 | — | 选序号只认整条消息就是一个序号（`2` / `第2条`）。宽松的 `parseInt` 会截取前缀数字，让待选状态下的正常业务消息「2条记录都改成完成」变成"选第 2 条"，静默改掉用户没选的记录 |
 | 单次上限 | `MAX_DESTRUCTIVE_BATCH = 20` | 超过直接拒绝，不给"一句确认删掉上千条"的机会 |
 | 二次确认 | `PENDING_ACTION_TTL_MS = 60s` | DELETE、单条 UPDATE、唯一键撞车、多条选序号四条路径 |
 | 并发闸门 | `DESTRUCTIVE_CONCURRENCY = 5` | 飞书写接口 QPS 约 20，一次性 `Promise.all` 会大面积 429 |
 | 候选展示 | `MAX_CANDIDATE_DISPLAY = 10` | 只把展示出来的候选存进 pending，序号不会越界到用户没见过的记录 |
+| 配置失效即作废 | — | 确认阶段取不到绑定**或场景**（被停用/删除/改了 sceneId）时清掉 pending 并提示重发。场景侧必须 fail-closed：写成 `if (scene && !scene.allowsWrite(...))` 会让权限复查被短路，场景刚停用、60s 窗口内的"确认删除"照样删 |
 
 二次确认走 `success: false + awaitingConfirmation: true`，`error` 字段承载提示
 文案：回复用 `⏳` 前缀而非"操作失败"，审计日志记 `pending` 而非 `error`
 ——否则每次 DELETE 都会计一次错误，错误率彻底失去意义。
+
+反过来，**确认之后真的执行失败要记 error**：`handlePendingAction` 返回
+`{ handled, errorMsg }` 而不是裸 boolean，批量删除部分/全部失败时把原因带回
+调用方。以前这条路径无论结果一律记 success，用户看到"已删除 0/1 条"、
+统计面板上却是成功，错误率恰好漏掉最该被发现的那类失败。
 
 ## Prompt 组装
 
@@ -492,8 +509,15 @@ dispatcher 在候选列表、确认提示里也要把记录摆到群里，那条
 并按 record id 去重——游标 / offset 若不被支持，第二页会原样回第一页，
 去重后发现无新记录即止，不会重复计数。
 
-`queryHardLimit` 由 adapter 自己声明，撞上时回复里提示可能被截断
-（早期这个数硬编码成飞书的 1000，对另外两个平台本来就是错的）。
+**截断由 adapter 上报**（`queryRecordsWithMeta` 的 `truncated`），不能在
+dispatcher 里用「返回条数 >= `queryHardLimit`」判断：钉钉/企微没有服务端
+filter，截断发生在**内存过滤之前** —— 拉满 5000 行、过滤后剩 1 条时那个判据
+恒为 false，用户拿到的是一个静默不完整的答案。QUERY 撞上时提示缩窄条件，
+UPDATE / DELETE 的确认提示里也要说明"命中集可能不全"。
+
+`queryHardLimit` 仍由 adapter 声明，用于没实现 `queryRecordsWithMeta` 的
+外部实现/测试替身的退化判据（早期这个数硬编码成飞书的 1000，对另外两个平台
+本来就是错的）。
 
 ### 飞书 datetime 字段的筛选语义
 
@@ -536,7 +560,7 @@ dispatcher 在候选列表、确认提示里也要把记录摆到群里，那条
 | 场景 + 资源绑定 | `bot_scene` / `bot_resource_binding` | Dispatcher 实例，60s TTL | `reloadBotConfig()` |
 | 平台凭证 | `bot_platform.credentials`（飞书可 env 兜底） | 10min TTL | `reloadPlatformCredentials(platform?)` |
 | access_token | 各平台换取接口 | 到期前 5min 复用 | 同上 |
-| 用户名 / 群名 | 飞书通讯录 / 群信息 API | 1h | 同上 |
+| 用户名 / 群名 / 机器人自身 open_id | 飞书通讯录 / 群信息 / `bot/v3/info` | 1h（失败 1min 负缓存） | 同上 |
 | LLM 凭证 | 仅环境变量 | — | — |
 
 `reloadBotConfig()` 只清场景与绑定；凭证与 token 的失效分到
@@ -572,7 +596,7 @@ IM_BOT_FEISHU_VERIFICATION_TOKEN # 必填（DB 或 env 二选一），缺失则�
 |------|------|---------|
 | 场景管理 | `/admin/im-bot` | 列表 / dnd-kit 拖拽排序 / 启停；Modal 编辑 sceneId、关键词 Tags、system prompt、回复模板、两张权限白名单 |
 | 平台配置 | `/admin/im-bot/platforms` | 三平台凭证；secret 字段以 `********` 回显，提交时等于占位符则保留 DB 原值；展示应填的回调地址 |
-| 资源绑定 | `/admin/im-bot/resource-bindings` | 场景 × 别名 → 资源；**从飞书拉取字段**后勾选生成 `fieldMapping`（按 ui_type 建议 plain/link/multiSelect，敏感名自动勾脱敏） |
+| 资源绑定 | `/admin/im-bot/resource-bindings` | 场景 × 别名 → 资源；**从飞书拉取字段**后勾选生成 `fieldMapping`（按 ui_type 建议 plain/link/multiSelect 与「取值语义」text/number/date，敏感名自动勾脱敏）。plain 一律输出为对象：裸字符串放不下 `displayType`，等于让运行时继续靠值猜类型 |
 | 事件日志 | `/admin/im-bot/event-logs` | 按平台/场景/结果/时间筛选；统计卡片；共享状态观测（待确认堆积说明有用户卡在等待态）；过期记录与历史日志清理 |
 
 tRPC 过程一览（全部 `adminProcedure`）：`listScenes` `upsertScene`
@@ -607,14 +631,15 @@ tRPC 过程一览（全部 `adminProcedure`）：`listScenes` `upsertScene`
 | **审计日志留存原文** | `content` 存用户原始消息；`resultData` 已只存摘要，但脱敏仍只作用于 IM 回复层 |
 | **LLM 准确率** | 靠 confidence 阈值 + 自动注入的字段清单 + 二次确认 + 未知字段守卫四道兜底 |
 | **平台 API 维护成本** | 三家各自迭代；`queryHardLimit`、`maxReplyBytes`、翻页字段名等平台常量集中在各 adapter 顶部便于调整 |
-| **群聊 @ 判定** | 飞书侧只检查 `mentions` 非空，未校验被 @ 的是否是机器人自己；标准权限下平台只推送 @机器人 的消息，开通"接收群里所有消息"后需要补这层判定 |
+| **群聊 @ 判定 fail-open** | 已校验 `mentions` 里含机器人自身 open_id（`bot/v3/info` 查得、带缓存），能挡住开通"接收群里所有消息"后 @ 别人的消息。但拿不到自身 open_id 时**退回"只要有 @ 就处理"** —— 这是刻意的：拿不到就丢掉全部群消息等于机器人整体失联，比偶尔多答一句更糟 |
 
 ## 测试
 
-`tests/modules/im-bot/` 下按目录镜像源码结构，覆盖加解密往返、验签、消息解码、
-字段渲染与脱敏、日期边界、客户端过滤、翻页续拉与去重、回复截断、场景匹配与
-作用域、意图解析、以及 dispatcher 的全流程编排（含权限、未知字段守卫、
-二次确认四条路径、审计事件）。
+`tests/modules/im-bot/` 下按目录镜像源码结构（416 个用例），覆盖加解密往返、
+验签、消息解码、字段渲染与脱敏、日期边界、客户端过滤、翻页续拉与去重与截断
+上报、回复截断、场景匹配与作用域、意图解析、`displayType` 的写入/筛选分流、
+文档结果与回复模板的优先级、以及 dispatcher 的全流程编排（含权限、未知字段
+守卫、二次确认四条路径、序号严格匹配、配置失效作废、审计事件）。
 
 本地真机联调用仓库根目录的 `simulate-feishu.mts`：构造合法的飞书加密回调 POST
 给本地 webhook，走完整处理链，回复会真的发到群里。

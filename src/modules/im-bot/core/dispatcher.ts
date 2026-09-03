@@ -8,6 +8,7 @@ import {
 import { documentConfigOf, getDocumentAdapter } from '../documents/factory';
 import type { BotScene } from '../scenes/types';
 import { getSpreadsheetAdapter } from '../spreadsheets/factory';
+import type { SpreadsheetAdapter } from '../spreadsheets/types';
 import { MemoryDedupStore } from './dedup';
 import { renderRecordSummary } from './field-render';
 import { chatCompletion, extractJson } from './llm';
@@ -25,6 +26,7 @@ import type {
   SceneContext,
   SceneResource,
   SpreadsheetRecord,
+  SpreadsheetTableConfig,
   UnifiedMessage,
 } from './types';
 import {
@@ -184,6 +186,26 @@ function renderCandidateList(
   return lines.join('\n') + rest;
 }
 
+/**
+ * 待确认交互的处理结果。
+ *
+ * - `handled: false` —— 输入不是确认/取消/序号，调用方提示后**保留** pending
+ * - `errorMsg` —— 已执行但执行出错（如批量删除部分失败）。审计日志据此记
+ *   error：以前无论结果统一记 success，用户看到"已删除 0/1 条"而统计面板
+ *   显示成功，错误率把真正失败的破坏性操作漏掉了
+ */
+interface PendingOutcome {
+  handled: boolean;
+  errorMsg?: string;
+}
+
+/**
+ * 拉取撞上翻页上限时，附在 UPDATE / DELETE 提示后面的说明。
+ * 命中集本身可能不全，破坏性操作必须让用户知道。
+ */
+const TRUNCATED_MATCH_HINT =
+  '\n⚠️ 数据量已达单次拉取上限，可能还有未列出的匹配记录，建议缩窄条件后再操作';
+
 /** 带并发上限地跑完一批任务，返回与输入同序的 settled 结果 */
 async function runWithConcurrency<T>(
   tasks: Array<() => Promise<T>>,
@@ -262,13 +284,17 @@ export class Dispatcher {
       const pendingKey = pendingKeyOf(msg);
       const pendingAction = await this.pending.get(pendingKey);
       if (pendingAction) {
-        const handled = await this.handlePendingAction(
+        const outcome = await this.handlePendingAction(
           msg,
           pendingAction,
           channelAdapter,
         );
-        if (handled) {
-          await logEvent({ sceneId: pendingAction.sceneId, result: 'success' });
+        if (outcome.handled) {
+          await logEvent({
+            sceneId: pendingAction.sceneId,
+            result: outcome.errorMsg ? 'error' : 'success',
+            errorMsg: outcome.errorMsg,
+          });
           return;
         }
         // 无法识别的输入：提示用户并保留 PendingAction，不走正常流程
@@ -450,6 +476,26 @@ export class Dispatcher {
     }
   }
 
+  /**
+   * 查询记录并取回「拉取是否被截断」。
+   *
+   * 不能在这里用「返回条数 >= queryHardLimit」判截断：钉钉/企微没有服务端
+   * filter，截断发生在**内存过滤之前**，拉满 5000 行、过滤后剩 1 条时这个
+   * 判据恒为 false，用户拿到的是静默不完整的答案。所以由 adapter 上报。
+   * adapter 没实现 queryRecordsWithMeta（如测试替身）时退化为旧判据。
+   */
+  private async query(
+    adapter: SpreadsheetAdapter,
+    config: SpreadsheetTableConfig,
+    filters: Record<string, unknown>,
+  ): Promise<{ records: SpreadsheetRecord[]; truncated: boolean }> {
+    if (adapter.queryRecordsWithMeta) {
+      return adapter.queryRecordsWithMeta(config, filters);
+    }
+    const records = await adapter.queryRecords(config, filters);
+    return { records, truncated: records.length >= adapter.queryHardLimit };
+  }
+
   /** 场景绑定的资源描述，喂给 prompt。listBindings 缺省时退化为默认资源 */
   private resourcesOf(sceneId: string): SceneResource[] {
     const bindings = this.config.listBindings
@@ -612,12 +658,16 @@ export class Dispatcher {
       }
 
       case 'QUERY': {
-        const records = await adapter.queryRecords(tableConfig, filters);
+        const { records, truncated } = await this.query(
+          adapter,
+          tableConfig,
+          filters,
+        );
         return {
           success: true,
           records,
           droppedFields,
-          hitQueryLimit: records.length >= adapter.queryHardLimit,
+          hitQueryLimit: truncated,
         };
       }
 
@@ -628,9 +678,25 @@ export class Dispatcher {
         if (!hasEffectiveFilters(filters)) {
           return { success: false, error: '更新操作需要指定筛选条件' };
         }
-        const records = await adapter.queryRecords(tableConfig, filters);
+        // 没有变更字段的 UPDATE 不能往下走：会挂出一条"变更字段：（空）"的
+        // 确认提示，用户确认后再对平台发一次空 fields 的写请求
+        if (Object.keys(fields).length === 0) {
+          return {
+            success: false,
+            error:
+              droppedFields.length > 0
+                ? `「${droppedFields.join('、')}」不是「${binding.alias}」里的字段，没有可更新的内容。可用字段：${Object.keys(mapping).join('、')}`
+                : '没有解析出要更新成什么，请把要改的字段和新值说清楚（例如「把 X 的状态改成已完成」）',
+          };
+        }
+        const { records, truncated } = await this.query(
+          adapter,
+          tableConfig,
+          filters,
+        );
+        const limitWarning = truncated ? TRUNCATED_MATCH_HINT : '';
         if (records.length === 0)
-          return { success: false, error: '未找到匹配记录' };
+          return { success: false, error: `未找到匹配记录${limitWarning}` };
         if (records.length === 1) {
           // 单条命中也走二次确认，避免 LLM 被 prompt 注入直接覆盖记录
           // （与 DELETE 的 confirm_delete 流程对齐）
@@ -650,7 +716,7 @@ export class Dispatcher {
             return {
               success: false,
               awaitingConfirmation: true,
-              error: `确认更新 1 条记录？\n变更字段：\n${changes}\n\n回复"确认更新"执行，回复"取消"放弃`,
+              error: `确认更新 1 条记录？\n变更字段：\n${changes}${limitWarning}\n\n回复"确认更新"执行，回复"取消"放弃`,
             };
           }
         }
@@ -674,7 +740,7 @@ export class Dispatcher {
         return {
           success: false,
           awaitingConfirmation: true,
-          error: `找到 ${records.length} 条匹配记录，请回复序号选择：\n${renderCandidateList(records, tableConfig.fieldMapping)}`,
+          error: `找到 ${records.length} 条匹配记录，请回复序号选择：\n${renderCandidateList(records, tableConfig.fieldMapping)}${limitWarning}`,
         };
       }
 
@@ -683,9 +749,14 @@ export class Dispatcher {
         if (!hasEffectiveFilters(filters)) {
           return { success: false, error: '删除操作需要指定筛选条件' };
         }
-        const records = await adapter.queryRecords(tableConfig, filters);
+        const { records, truncated } = await this.query(
+          adapter,
+          tableConfig,
+          filters,
+        );
+        const limitWarning = truncated ? TRUNCATED_MATCH_HINT : '';
         if (records.length === 0)
-          return { success: false, error: '未找到匹配记录' };
+          return { success: false, error: `未找到匹配记录${limitWarning}` };
         // 删除无法回滚：超过上限直接拒绝，不给"一句确认删掉上千条"的机会
         if (records.length > MAX_DESTRUCTIVE_BATCH) {
           return {
@@ -703,7 +774,7 @@ export class Dispatcher {
         return {
           success: false,
           awaitingConfirmation: true,
-          error: `确认删除以下 ${records.length} 条记录？\n${renderCandidateList(records, tableConfig.fieldMapping)}\n\n回复"确认删除"执行，回复"取消"放弃`,
+          error: `确认删除以下 ${records.length} 条记录？\n${renderCandidateList(records, tableConfig.fieldMapping)}${limitWarning}\n\n回复"确认删除"执行，回复"取消"放弃`,
         };
       }
 
@@ -716,14 +787,14 @@ export class Dispatcher {
     msg: UnifiedMessage,
     action: PendingAction,
     channelAdapter: ChannelAdapter,
-  ): Promise<boolean> {
+  ): Promise<PendingOutcome> {
     const content = msg.content.trim();
 
     // 精确匹配避免误吞业务消息（如"算了一下今天的销售额"被当成取消）
     if (['取消', '算了', '不用了'].includes(content)) {
       await this.pending.delete(pendingKeyOf(msg));
       await channelAdapter.reply(msg, '已取消操作');
-      return true;
+      return { handled: true };
     }
 
     // 复用挂起时记录的 alias，确认阶段不会漂到别的资源上
@@ -736,21 +807,33 @@ export class Dispatcher {
         msg,
         '⚠️ 表格配置已变更，刚才的操作已作废，请重新发送指令',
       );
-      return true;
+      return { handled: true };
     }
     const tableConfig = tableConfigOf(binding);
     const adapter = getSpreadsheetAdapter(binding.provider);
     const scene = this.registry.getById(action.sceneId);
 
     // 挂起的四种交互全是写操作。挂起时已校验过写权限，这里再查一次
-    // 是为了覆盖 TTL 窗口内被管理员撤权的情形
-    if (scene && !scene.allowsWrite(msg.senderId)) {
+    // 是为了覆盖 TTL 窗口内被管理员撤权的情形。
+    //
+    // 场景取不到（被停用/删除/改了 sceneId）时必须一并作废：写成
+    // `if (scene && !scene.allowsWrite(...))` 会让整段校验被短路 ——
+    // 场景刚被停用，60s 窗口内的"确认删除"照样把记录删掉。
+    if (!scene) {
+      await this.pending.delete(pendingKeyOf(msg));
+      await channelAdapter.reply(
+        msg,
+        '⚠️ 场景配置已变更，刚才的操作已作废，请重新发送指令',
+      );
+      return { handled: true };
+    }
+    if (!scene.allowsWrite(msg.senderId)) {
       await this.pending.delete(pendingKeyOf(msg));
       await channelAdapter.reply(
         msg,
         '🔒 你的写入权限已变更，刚才的操作已作废',
       );
-      return true;
+      return { handled: true };
     }
 
     if (action.type === 'confirm_delete' && content.includes('确认删除')) {
@@ -778,8 +861,12 @@ export class Dispatcher {
           msg,
           `⚠️ 已删除 ${okCount}/${results.length} 条，${failed.length} 条失败${firstErr ? `（首条原因：${firstErr.slice(0, 100)}）` : ''}`,
         );
+        return {
+          handled: true,
+          errorMsg: `批量删除 ${failed.length}/${results.length} 条失败：${firstErr.slice(0, 200)}`,
+        };
       }
-      return true;
+      return { handled: true };
     }
 
     if (action.type === 'confirm_update') {
@@ -787,27 +874,26 @@ export class Dispatcher {
       if (content.includes('确认更新')) {
         await this.pending.delete(pendingKeyOf(msg));
         const target = action.candidates[0];
-        if (!target) return false;
+        if (!target) return { handled: false };
         const updated = await adapter.updateRecord(
           tableConfig,
           target.recordId,
           action.updateFields ?? {},
         );
-        const reply =
-          scene?.formatReply(
-            {
-              intent: 'UPDATE',
-              fields: action.updateFields ?? {},
-              confidence: 1,
-              summary: '更新记录',
-            },
-            { success: true, record: updated },
-            tableConfig.fieldMapping,
-          ) ?? '✅ 已更新记录';
+        const reply = scene.formatReply(
+          {
+            intent: 'UPDATE',
+            fields: action.updateFields ?? {},
+            confidence: 1,
+            summary: '更新记录',
+          },
+          { success: true, record: updated },
+          tableConfig.fieldMapping,
+        );
         await channelAdapter.reply(msg, reply);
-        return true;
+        return { handled: true };
       }
-      return false;
+      return { handled: false };
     }
 
     if (action.type === 'confirm_upsert') {
@@ -820,25 +906,24 @@ export class Dispatcher {
       ) {
         await this.pending.delete(pendingKeyOf(msg));
         const target = action.candidates[0];
-        if (!target) return false;
+        if (!target) return { handled: false };
         const updated = await adapter.updateRecord(
           tableConfig,
           target.recordId,
           action.updateFields ?? {},
         );
-        const reply =
-          scene?.formatReply(
-            {
-              intent: 'UPDATE',
-              fields: action.updateFields ?? {},
-              confidence: 1,
-              summary: '已合并到现有记录',
-            },
-            { success: true, record: updated },
-            tableConfig.fieldMapping,
-          ) ?? '✅ 已更新记录';
+        const reply = scene.formatReply(
+          {
+            intent: 'UPDATE',
+            fields: action.updateFields ?? {},
+            confidence: 1,
+            summary: '已合并到现有记录',
+          },
+          { success: true, record: updated },
+          tableConfig.fieldMapping,
+        );
         await channelAdapter.reply(msg, reply);
-        return true;
+        return { handled: true };
       }
       if (content.includes('强制新建') || content.includes('新建一条')) {
         await this.pending.delete(pendingKeyOf(msg));
@@ -846,27 +931,31 @@ export class Dispatcher {
           tableConfig,
           action.updateFields ?? {},
         );
-        const reply =
-          scene?.formatReply(
-            {
-              intent: 'CREATE',
-              fields: action.updateFields ?? {},
-              confidence: 1,
-              summary: '强制新建',
-            },
-            { success: true, record },
-            tableConfig.fieldMapping,
-          ) ?? '✅ 已新建记录';
+        const reply = scene.formatReply(
+          {
+            intent: 'CREATE',
+            fields: action.updateFields ?? {},
+            confidence: 1,
+            summary: '强制新建',
+          },
+          { success: true, record },
+          tableConfig.fieldMapping,
+        );
         await channelAdapter.reply(msg, reply);
-        return true;
+        return { handled: true };
       }
-      return false;
+      return { handled: false };
     }
 
     if (action.type === 'select_record') {
-      const num = Number.parseInt(content, 10);
-      if (Number.isNaN(num) || num < 1 || num > action.candidates.length)
-        return false;
+      // 整条消息必须**只**是一个序号（允许「第2条」这类写法）。
+      // 以前直接 Number.parseInt(content)：宽松解析会截取前缀数字，
+      // 于是待选状态下一句正常业务消息「2条记录都改成完成」被当成
+      // "选第 2 条"，静默更新了用户根本没选的那条记录。
+      const picked = /^第?(\d+)\s*条?$/.exec(content);
+      if (!picked?.[1]) return { handled: false };
+      const num = Number.parseInt(picked[1], 10);
+      if (num < 1 || num > action.candidates.length) return { handled: false };
       await this.pending.delete(pendingKeyOf(msg));
       // biome-ignore lint/style/noNonNullAssertion: num 已校验在 [1, candidates.length] 范围内
       const target = action.candidates[num - 1]!;
@@ -875,22 +964,21 @@ export class Dispatcher {
         target.recordId,
         action.updateFields ?? {},
       );
-      const reply =
-        scene?.formatReply(
-          {
-            intent: 'UPDATE',
-            fields: action.updateFields ?? {},
-            confidence: 1,
-            summary: '更新记录',
-          },
-          { success: true, record: updated },
-          tableConfig.fieldMapping,
-        ) ?? '✅ 已更新记录';
+      const reply = scene.formatReply(
+        {
+          intent: 'UPDATE',
+          fields: action.updateFields ?? {},
+          confidence: 1,
+          summary: '更新记录',
+        },
+        { success: true, record: updated },
+        tableConfig.fieldMapping,
+      );
       await channelAdapter.reply(msg, reply);
-      return true;
+      return { handled: true };
     }
 
-    return false;
+    return { handled: false };
   }
 
   private getHelpText(chatId?: string): string {

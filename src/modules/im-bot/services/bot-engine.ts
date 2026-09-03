@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { after } from 'next/server';
 import { db } from '@/server/db';
 import { dingtalkTokenManager } from '../auth/dingtalk-token';
+import { resetFeishuBotOpenIdCache } from '../auth/feishu-bot';
 import { resetFeishuChatNameCache } from '../auth/feishu-chat';
 import { feishuTokenManager } from '../auth/feishu-token';
 import { wecomTokenManager } from '../auth/wecom-token';
@@ -194,8 +195,10 @@ export function reloadPlatformCredentials(platform?: BotPlatform) {
   resetCredentialsCache();
   if (!platform || platform === 'feishu') {
     feishuTokenManager.reset();
-    // 群名缓存是用飞书 token 拉的，凭证换了要一并作废
+    // 群名与机器人自身 ID 都是用飞书 token 拉的，凭证换了要一并作废
+    // （换了 app 就是换了机器人，旧 open_id 会让群聊 @ 判定全部落空）
     resetFeishuChatNameCache();
+    resetFeishuBotOpenIdCache();
   }
   if (!platform || platform === 'wecom') wecomTokenManager.reset();
   if (!platform || platform === 'dingtalk') dingtalkTokenManager.reset();

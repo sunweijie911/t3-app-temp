@@ -107,3 +107,28 @@ describe('mapFieldsFromRead', () => {
     expect(out.a).toBe('');
   });
 });
+
+describe('displayType 决定值是否按日期解释（P1）', () => {
+  it("声明 'text' / 'number' 的列不转时间戳", () => {
+    expect(toDingtalkValue('2026-05-11', 'text')).toBe('2026-05-11');
+    expect(toDingtalkValue('2026-05-11', 'number')).toBe('2026-05-11');
+  });
+
+  it("声明 'date' 的列仍转 CST 12:00 毫秒值", () => {
+    expect(toDingtalkValue('2026-05-11', 'date')).toBe(
+      new Date('2026-05-11T12:00:00+08:00').getTime(),
+    );
+  });
+
+  it('mapFieldsForWrite 按每列声明分别处理', () => {
+    const out = mapFieldsForWrite(
+      { 期号: '2026-05-11', 上线日期: '2026-05-11' },
+      makeConfig({
+        期号: { name: '期号', type: 'plain', displayType: 'text' },
+        上线日期: { name: '上线日期', type: 'plain', displayType: 'date' },
+      }),
+    );
+    expect(out.期号).toBe('2026-05-11');
+    expect(typeof out.上线日期).toBe('number');
+  });
+});

@@ -527,3 +527,55 @@ describe('DatabaseDrivenScene.getSystemPrompt — 字段清单自动注入', () 
     );
   });
 });
+
+// biome-ignore-start lint/suspicious/noTemplateCurlyInString: 字面占位符
+describe('文档结果不被表格取向的回复模板吃掉（P1）', () => {
+  const docIntent: ParsedIntent = {
+    ...intentBase,
+    intent: 'READ',
+    fields: {},
+  };
+
+  it('配了 replyTemplate 的场景读文档，仍然渲染标题与正文', () => {
+    const s = makeScene({
+      replyTemplate: '共 ${count} 条\n${fieldList}',
+    });
+
+    const out = s.formatReply(docIntent, {
+      success: true,
+      doc: { title: '周报', text: '本周进展：完成三件事', url: 'https://x' },
+    });
+
+    expect(out).toContain('周报');
+    expect(out).toContain('本周进展：完成三件事');
+    expect(out).not.toContain('共 0 条');
+  });
+
+  it('APPEND 同理：回显写入内容而不是套模板', () => {
+    const s = makeScene({ replyTemplate: '共 ${count} 条' });
+
+    const out = s.formatReply(
+      { ...intentBase, intent: 'APPEND', fields: {} },
+      {
+        success: true,
+        doc: { title: '周报', text: '', url: 'https://x' },
+        appendedText: '新增一行',
+      },
+    );
+
+    expect(out).toContain('已写入《周报》');
+    expect(out).toContain('新增一行');
+  });
+
+  it('表格结果仍然走模板（不影响原有行为）', () => {
+    const s = makeScene({ replyTemplate: '共 ${count} 条' });
+
+    const out = s.formatReply(
+      { ...intentBase, intent: 'QUERY', fields: {} },
+      { success: true, records: [{ recordId: 'r1', fields: { a: 'x' } }] },
+    );
+
+    expect(out).toBe('共 1 条');
+  });
+});
+// biome-ignore-end lint/suspicious/noTemplateCurlyInString: end

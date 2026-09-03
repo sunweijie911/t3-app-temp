@@ -10,7 +10,13 @@ vi.mock('@/modules/im-bot/auth/feishu-chat', () => ({
   getFeishuChatName: vi.fn(),
   resetFeishuChatNameCache: vi.fn(),
 }));
+// 不 mock 的话 decode 会真的去打 /bot/v3/info（凭证是 mock 的，但 fetch 是真的）
+vi.mock('@/modules/im-bot/auth/feishu-bot', () => ({
+  getFeishuBotOpenId: vi.fn(),
+  resetFeishuBotOpenIdCache: vi.fn(),
+}));
 
+import { getFeishuBotOpenId } from '@/modules/im-bot/auth/feishu-bot';
 import { getFeishuChatName } from '@/modules/im-bot/auth/feishu-chat';
 import { getFeishuUserName } from '@/modules/im-bot/auth/feishu-user';
 import { FeishuChannelAdapter } from '@/modules/im-bot/channels/feishu';
@@ -19,6 +25,7 @@ import { getFeishuCredentials } from '@/modules/im-bot/services/credentials';
 const mockCreds = vi.mocked(getFeishuCredentials);
 const mockUserName = vi.mocked(getFeishuUserName);
 const mockChatName = vi.mocked(getFeishuChatName);
+const mockBotOpenId = vi.mocked(getFeishuBotOpenId);
 
 const adapter = new FeishuChannelAdapter();
 
@@ -65,6 +72,9 @@ beforeEach(() => {
   mockCreds.mockReset();
   mockUserName.mockReset();
   mockChatName.mockReset();
+  mockBotOpenId.mockReset();
+  // 默认拿不到自身 open_id → fail-open，与加这层判定之前的行为一致
+  mockBotOpenId.mockResolvedValue(null);
   mockCreds.mockResolvedValue({
     appId: 'a',
     appSecret: 'b',
@@ -185,5 +195,82 @@ describe('FeishuChannelAdapter.decode — 消息解析', () => {
     const r = await adapter.decode(makeReq(makeEvent({})));
     if (r.kind !== 'ok') throw new Error('expected ok');
     expect(r.message.chatName).toBeUndefined();
+  });
+});
+
+describe('群聊 @ 判定：被 @ 的必须是机器人自己（P2）', () => {
+  const botOpenId = 'ou_bot';
+
+  it('@ 的是机器人 → 正常处理', async () => {
+    mockBotOpenId.mockResolvedValue(botOpenId);
+
+    const r = await adapter.decode(
+      makeReq(
+        makeEvent({
+          mentions: [{ key: '@_user_1', id: { open_id: botOpenId } }],
+        }),
+      ),
+    );
+
+    expect(r.kind).toBe('ok');
+  });
+
+  it('@ 的是别人 → 忽略（开通"接收群里所有消息"后才会遇到）', async () => {
+    mockBotOpenId.mockResolvedValue(botOpenId);
+
+    const r = await adapter.decode(
+      makeReq(
+        makeEvent({
+          mentions: [{ key: '@_user_1', id: { open_id: 'ou_someone' } }],
+          text: '@_user_1 帮我看下这个',
+        }),
+      ),
+    );
+
+    expect(r.kind).toBe('ignored');
+    if (r.kind === 'ignored') expect(r.reason).toContain('不是机器人');
+  });
+
+  it('同时 @ 了机器人和别人 → 仍然处理', async () => {
+    mockBotOpenId.mockResolvedValue(botOpenId);
+
+    const r = await adapter.decode(
+      makeReq(
+        makeEvent({
+          mentions: [
+            { key: '@_user_1', id: { open_id: 'ou_someone' } },
+            { key: '@_user_2', id: { open_id: botOpenId } },
+          ],
+        }),
+      ),
+    );
+
+    expect(r.kind).toBe('ok');
+  });
+
+  it('拿不到自身 open_id → fail-open，不因此把群消息全丢掉', async () => {
+    mockBotOpenId.mockResolvedValue(null);
+
+    const r = await adapter.decode(
+      makeReq(
+        makeEvent({
+          mentions: [{ key: '@_user_1', id: { open_id: 'ou_someone' } }],
+        }),
+      ),
+    );
+
+    expect(r.kind).toBe('ok');
+  });
+
+  it('单聊不做这层判定（本来就没有 mentions）', async () => {
+    mockBotOpenId.mockResolvedValue(botOpenId);
+
+    const r = await adapter.decode(
+      makeReq(
+        makeEvent({ chatType: 'p2p', mentions: [], text: '查一下项目 A' }),
+      ),
+    );
+
+    expect(r.kind).toBe('ok');
   });
 });

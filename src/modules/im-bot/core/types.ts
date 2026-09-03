@@ -20,7 +20,7 @@ export interface UnifiedMessage {
    *
    * 必须保留：飞书用 tenant token 主动发消息，不依赖回调内容；但
    * - 钉钉群机器人回复要用 body 里的 `sessionWebhook`（一次性、有时效）
-   * - 企微要用回调里的 `AgentID` / `ToUserName`
+   * - 企微智能机器人回复要用 body 里的 `webhook_url`（同样是一次性的）
    * 以前 parse() 把原始 body 丢掉，导致这两个平台的 reply() 根本写不出来。
    */
   raw?: unknown;
@@ -252,12 +252,15 @@ export interface PlainFieldMapping {
   sensitive?: boolean;
   label?: string;
   /**
-   * 数字字段展示类型：
+   * 字段展示与写入类型：
    * - 'number'：原样输出数字（金额、数量、版本号等）
-   * - 'date'：始终按日期格式化
-   * - 未设置：按毫秒值是否落在 2000~2100 年自动判定（兼容旧行为，但会误判大金额）
+   * - 'date'：始终按日期格式化；写入时把 YYYY-MM-DD 转成毫秒时间戳
+   * - 'text'：纯文本列。**写入时不做日期转换** —— 文本列里合法的
+   *   "2026-05-11" 曾被无条件转成 1778472000000 写进平台
+   * - 未设置：兼容旧配置的启发式（值像日期就转、毫秒值落在 2000~2100 年就按日期渲染），
+   *   会误判大金额与文本日期，新配置由后台字段选择器显式写明
    */
-  displayType?: 'number' | 'date';
+  displayType?: 'number' | 'date' | 'text';
 }
 
 /** fieldMapping value 联合类型 */

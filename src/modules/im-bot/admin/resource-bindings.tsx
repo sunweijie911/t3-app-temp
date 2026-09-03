@@ -24,11 +24,14 @@ import {
 } from '../constants';
 import type { ResourceKind } from '../core/types';
 
+type DisplayTypeOption = 'date' | 'number' | 'text';
+
 type FetchedField = {
   fieldId: string;
   fieldName: string;
   uiType: string;
   suggestedType: 'plain' | 'link' | 'multiSelect';
+  suggestedDisplayType: DisplayTypeOption;
 };
 
 type FieldPickerSelection = Record<
@@ -37,6 +40,13 @@ type FieldPickerSelection = Record<
     selected: boolean;
     type: 'plain' | 'link' | 'multiSelect';
     sensitive: boolean;
+    /**
+     * plain 列的取值语义。必须显式写进 fieldMapping：
+     * 'text' 挡掉「文本列里的 2026-05-11 被写成时间戳」，
+     * 'number' 挡掉「金额被按毫秒渲染成日期、区间查询走成日期段」，
+     * 'date' 让 prompt 里带上日期格式提示。
+     */
+    displayType: DisplayTypeOption;
     linkTableId?: string;
     displayField?: string;
   }
@@ -84,6 +94,31 @@ export default function ImBotResourceBindingsPage() {
   const [pickerSelection, setPickerSelection] = useState<FieldPickerSelection>(
     {},
   );
+
+  /**
+   * 更新某个字段的勾选项。缺省值统一取拉取时的建议类型 ——
+   * 原先每列各自展开旧值再补字段，加一个必填项就要改五处。
+   */
+  const patchSelection = (
+    f: FetchedField,
+    patch: Partial<FieldPickerSelection[string]>,
+  ) => {
+    setPickerSelection((prev) => {
+      const cur = prev[f.fieldName];
+      return {
+        ...prev,
+        [f.fieldName]: {
+          selected: cur?.selected ?? true,
+          type: cur?.type ?? f.suggestedType,
+          sensitive: cur?.sensitive ?? false,
+          displayType: cur?.displayType ?? f.suggestedDisplayType,
+          linkTableId: cur?.linkTableId,
+          displayField: cur?.displayField,
+          ...patch,
+        },
+      };
+    });
+  };
   const fetchFields = api.imBot.admin.fetchBitableFields.useMutation({
     onSuccess: (fields) => {
       setPickerFields(fields);
@@ -94,6 +129,7 @@ export default function ImBotResourceBindingsPage() {
           selected: true,
           type: f.suggestedType,
           sensitive: SENSITIVE_KEY_PATTERN.test(f.fieldName),
+          displayType: f.suggestedDisplayType,
         };
       }
       setPickerSelection(init);
@@ -418,7 +454,9 @@ export default function ImBotResourceBindingsPage() {
                     setEditing({ ...editing, fieldMappingStr: e.target.value })
                   }
                   placeholder={`{
-  "项目名称": "项目名称",
+  "项目名称": { "name": "项目名称", "type": "plain", "displayType": "text" },
+  "上线日期": { "name": "上线日期", "type": "plain", "displayType": "date" },
+  "预算": { "name": "预算", "type": "plain", "displayType": "number" },
   "业务域": { "name": "业务域", "type": "multiSelect" },
   "部署学校": {
     "name": "部署学校",
@@ -445,9 +483,17 @@ export default function ImBotResourceBindingsPage() {
             for (const f of pickerFields) {
               const sel = pickerSelection[f.fieldName];
               if (!sel?.selected) continue;
-              if (sel.type === 'plain' && !sel.sensitive) {
-                // 简单字段且无敏感标记 → 直接字符串映射
-                result[f.fieldName] = f.fieldName;
+              if (sel.type === 'plain') {
+                // plain 一律写成对象并带上 displayType。
+                // 以前无敏感标记时输出裸字符串，displayType 无处可放 ——
+                // 于是日期/数字/文本三种语义在运行时只能靠值猜，
+                // 文本列里的 "2026-05-11" 会被当日期写成时间戳。
+                result[f.fieldName] = {
+                  name: f.fieldName,
+                  type: 'plain',
+                  displayType: sel.displayType,
+                  ...(sel.sensitive ? { sensitive: true } : {}),
+                };
                 continue;
               }
               if (sel.type === 'link') {
@@ -494,21 +540,7 @@ export default function ImBotResourceBindingsPage() {
                   <Checkbox
                     checked={pickerSelection[f.fieldName]?.selected ?? false}
                     onChange={(e) =>
-                      setPickerSelection({
-                        ...pickerSelection,
-                        [f.fieldName]: {
-                          ...(pickerSelection[f.fieldName] ?? {
-                            type: f.suggestedType,
-                            sensitive: false,
-                          }),
-                          selected: e.target.checked,
-                          type:
-                            pickerSelection[f.fieldName]?.type ??
-                            f.suggestedType,
-                          sensitive:
-                            pickerSelection[f.fieldName]?.sensitive ?? false,
-                        },
-                      })
+                      patchSelection(f, { selected: e.target.checked })
                     }
                   />
                 ),
@@ -525,22 +557,7 @@ export default function ImBotResourceBindingsPage() {
                 width: 130,
                 render: (_, f: FetchedField) => (
                   <Select
-                    onChange={(val) =>
-                      setPickerSelection({
-                        ...pickerSelection,
-                        [f.fieldName]: {
-                          ...(pickerSelection[f.fieldName] ?? {
-                            selected: true,
-                            sensitive: false,
-                          }),
-                          selected:
-                            pickerSelection[f.fieldName]?.selected ?? true,
-                          sensitive:
-                            pickerSelection[f.fieldName]?.sensitive ?? false,
-                          type: val,
-                        },
-                      })
-                    }
+                    onChange={(val) => patchSelection(f, { type: val })}
                     options={[
                       { value: 'plain', label: 'plain' },
                       { value: 'link', label: 'link' },
@@ -555,23 +572,39 @@ export default function ImBotResourceBindingsPage() {
                 ),
               },
               {
+                title: '取值语义',
+                width: 120,
+                render: (_, f: FetchedField) => {
+                  const sel = pickerSelection[f.fieldName];
+                  const type = sel?.type ?? f.suggestedType;
+                  if (type !== 'plain') {
+                    return <span style={{ color: '#bbb' }}>—</span>;
+                  }
+                  return (
+                    <Select
+                      onChange={(val: DisplayTypeOption) =>
+                        patchSelection(f, { displayType: val })
+                      }
+                      options={[
+                        { value: 'text', label: '文本' },
+                        { value: 'number', label: '数字' },
+                        { value: 'date', label: '日期' },
+                      ]}
+                      size="small"
+                      style={{ width: '100%' }}
+                      value={sel?.displayType ?? f.suggestedDisplayType}
+                    />
+                  );
+                },
+              },
+              {
                 title: 'link 子表 ID',
                 width: 160,
                 render: (_, f: FetchedField) =>
                   pickerSelection[f.fieldName]?.type === 'link' ? (
                     <Input
                       onChange={(e) =>
-                        setPickerSelection({
-                          ...pickerSelection,
-                          [f.fieldName]: {
-                            ...(pickerSelection[f.fieldName] ?? {
-                              selected: true,
-                              type: 'link',
-                              sensitive: false,
-                            }),
-                            linkTableId: e.target.value,
-                          },
-                        })
+                        patchSelection(f, { linkTableId: e.target.value })
                       }
                       placeholder="tblXXX"
                       size="small"
@@ -588,17 +621,7 @@ export default function ImBotResourceBindingsPage() {
                   pickerSelection[f.fieldName]?.type === 'link' ? (
                     <Input
                       onChange={(e) =>
-                        setPickerSelection({
-                          ...pickerSelection,
-                          [f.fieldName]: {
-                            ...(pickerSelection[f.fieldName] ?? {
-                              selected: true,
-                              type: 'link',
-                              sensitive: false,
-                            }),
-                            displayField: e.target.value,
-                          },
-                        })
+                        patchSelection(f, { displayField: e.target.value })
                       }
                       placeholder="如：学校名"
                       size="small"
@@ -615,21 +638,7 @@ export default function ImBotResourceBindingsPage() {
                   <Checkbox
                     checked={pickerSelection[f.fieldName]?.sensitive ?? false}
                     onChange={(e) =>
-                      setPickerSelection({
-                        ...pickerSelection,
-                        [f.fieldName]: {
-                          ...(pickerSelection[f.fieldName] ?? {
-                            selected: true,
-                            type: f.suggestedType,
-                          }),
-                          selected:
-                            pickerSelection[f.fieldName]?.selected ?? true,
-                          type:
-                            pickerSelection[f.fieldName]?.type ??
-                            f.suggestedType,
-                          sensitive: e.target.checked,
-                        },
-                      })
+                      patchSelection(f, { sensitive: e.target.checked })
                     }
                   />
                 ),

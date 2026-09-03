@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { getFeishuBotOpenId } from '../auth/feishu-bot';
 import { getFeishuChatName } from '../auth/feishu-chat';
 import { feishuTokenManager } from '../auth/feishu-token';
 import { getFeishuUserName } from '../auth/feishu-user';
@@ -110,11 +111,23 @@ export class FeishuChannelAdapter implements ChannelAdapter {
 
     const chatType: ChatType = message.chat_type === 'p2p' ? 'p2p' : 'group';
 
-    const mentions = message.mentions as Array<{ key: string }> | undefined;
+    const mentions = message.mentions as
+      | Array<{ key: string; id?: { open_id?: string } }>
+      | undefined;
     // 群聊要求 @机器人；单聊天然是对机器人说话，不该要求 @
     // （以前无条件要求 mentions 非空，导致所有私聊消息被静默丢弃）
-    if (chatType === 'group' && (!mentions || mentions.length === 0)) {
-      return { kind: 'ignored', reason: '群聊未 @机器人' };
+    if (chatType === 'group') {
+      if (!mentions || mentions.length === 0) {
+        return { kind: 'ignored', reason: '群聊未 @机器人' };
+      }
+      // mentions 里是**所有**被 @ 的人。标准权限下平台只推送 @机器人 的消息，
+      // 但开通"接收群里所有消息"后，只判断非空会让机器人去应答
+      // 「@张三 帮我看下」这类跟它无关的消息。
+      // 拿不到自身 open_id 时 fail-open（退回旧行为）—— 见 auth/feishu-bot.ts
+      const botOpenId = await getFeishuBotOpenId();
+      if (botOpenId && !mentions.some((m) => m.id?.open_id === botOpenId)) {
+        return { kind: 'ignored', reason: '群聊 @ 的不是机器人' };
+      }
     }
 
     let content = '';

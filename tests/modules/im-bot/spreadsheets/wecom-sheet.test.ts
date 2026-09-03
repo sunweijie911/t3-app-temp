@@ -181,3 +181,33 @@ describe('mapValuesFromRead', () => {
     expect(out.a).toBe('');
   });
 });
+
+describe('displayType 决定单元格类型（P1：文本列曾被写成 date 单元格）', () => {
+  it("声明 'text' 的列 → text 单元格", () => {
+    expect(toWecomCells('2026-05-11', 'text')).toEqual([
+      { type: 'text', text: '2026-05-11' },
+    ]);
+  });
+
+  it("声明 'date' 的列 → date 单元格", () => {
+    expect(toWecomCells('2026-05-11', 'date')).toEqual([
+      { type: 'date', date: new Date('2026-05-11T12:00:00+08:00').getTime() },
+    ]);
+  });
+
+  it('未声明时保留旧启发式（date 单元格）', () => {
+    expect(toWecomCells('2026-05-11')[0]?.type).toBe('date');
+  });
+
+  it('mapValuesForWrite 按每列声明分别处理', () => {
+    const out = mapValuesForWrite(
+      { 期号: '2026-05-11', 上线日期: '2026-05-11' },
+      makeConfig({
+        期号: { name: '期号', type: 'plain', displayType: 'text' },
+        上线日期: { name: '上线日期', type: 'plain', displayType: 'date' },
+      }),
+    );
+    expect(out.期号?.[0]?.type).toBe('text');
+    expect(out.上线日期?.[0]?.type).toBe('date');
+  });
+});

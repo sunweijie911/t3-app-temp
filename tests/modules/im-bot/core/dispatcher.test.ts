@@ -45,7 +45,9 @@ import { Dispatcher } from '@/modules/im-bot/core/dispatcher';
 import { chatCompletion } from '@/modules/im-bot/core/llm';
 import { MemoryPendingActionStore } from '@/modules/im-bot/core/pending-action';
 import type {
+  BotEvent,
   ResourceBinding,
+  SpreadsheetRecord,
   UnifiedMessage,
 } from '@/modules/im-bot/core/types';
 import { getDocumentAdapter } from '@/modules/im-bot/documents/factory';
@@ -1523,5 +1525,286 @@ describe('Dispatcher — 场景作用域与写权限', () => {
 
     expect(adapter.deleteRecord).not.toHaveBeenCalled();
     expect(channel.lastReply).toContain('权限已变更');
+  });
+});
+
+describe('Dispatcher — 序号选择必须是整条消息（P0：宽松 parseInt 会劫持业务消息）', () => {
+  /** 挂起一个 3 条候选的 select_record，返回共享 pending 的 dispatcher */
+  async function pendingSelect(
+    adapter: SpreadsheetAdapter,
+    channel: ReturnType<typeof makeChannel>,
+  ) {
+    const pendingStore = new MemoryPendingActionStore();
+    const d = new Dispatcher({ getBinding: () => baseBinding, pendingStore });
+    d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"UPDATE","fields":{"Node版本":"20"},"filters":{"项目名称":"A"},"confidence":0.95,"summary":"改"}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { recordId: 'r1', fields: { 项目名称: 'A1' } },
+      { recordId: 'r2', fields: { 项目名称: 'A2' } },
+      { recordId: 'r3', fields: { 项目名称: 'A3' } },
+    ]);
+    await d.process(
+      makeMsg({ content: '把项目 A 的 Node版本 改成 20' }),
+      channel,
+    );
+    expect(channel.lastReply).toContain('请回复序号');
+    return d;
+  }
+
+  it('以数字开头的业务消息不再被当成选序号', async () => {
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const d = await pendingSelect(adapter, channel);
+
+    await d.process(makeMsg({ content: '2条记录都改成完成' }), channel);
+
+    // 既不能更新任何记录，也要把用户拉回选择流程
+    expect(adapter.updateRecord).not.toHaveBeenCalled();
+    expect(channel.lastReply).toContain('请回复序号(1~3)选择');
+  });
+
+  it('纯序号与「第2条」写法仍然生效', async () => {
+    for (const content of ['2', '第2条']) {
+      const channel = makeChannel();
+      const adapter = makeAdapter();
+      mockGetAdapter.mockReturnValue(adapter);
+      (adapter.updateRecord as ReturnType<typeof vi.fn>).mockResolvedValue({
+        recordId: 'r2',
+        fields: { 项目名称: 'A2' },
+      });
+      const d = await pendingSelect(adapter, channel);
+
+      await d.process(makeMsg({ content }), channel);
+
+      expect(adapter.updateRecord).toHaveBeenCalledWith(
+        expect.anything(),
+        'r2',
+        { Node版本: '20' },
+      );
+    }
+  });
+
+  it('超出候选范围的序号不执行更新', async () => {
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const d = await pendingSelect(adapter, channel);
+
+    await d.process(makeMsg({ content: '9' }), channel);
+
+    expect(adapter.updateRecord).not.toHaveBeenCalled();
+  });
+});
+
+describe('Dispatcher — UPDATE 必须带变更字段（P0：空 fields 会发出空写请求）', () => {
+  it('只给筛选不给字段 → 直接拒绝，不查表也不挂确认', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"UPDATE","fields":{},"filters":{"项目名称":"A"},"confidence":0.95,"summary":"改"}',
+    );
+
+    await d.process(makeMsg({ content: '更新项目 A' }), channel);
+
+    expect(adapter.queryRecords).not.toHaveBeenCalled();
+    expect(adapter.updateRecord).not.toHaveBeenCalled();
+    expect(channel.lastReply).toContain('没有解析出要更新成什么');
+  });
+
+  it('字段全是未知字段 → 点名未知字段并列出可用字段', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"UPDATE","fields":{"负责人":"张三"},"filters":{"项目名称":"A"},"confidence":0.95,"summary":"改"}',
+    );
+
+    await d.process(makeMsg({ content: '把项目 A 的负责人改成张三' }), channel);
+
+    expect(adapter.updateRecord).not.toHaveBeenCalled();
+    expect(channel.lastReply).toContain('负责人');
+    expect(channel.lastReply).toContain('项目名称');
+  });
+});
+
+describe('Dispatcher — 待确认期间场景失效必须 fail-closed（P0：写权限复查被短路）', () => {
+  it('场景被停用后，确认删除不再执行', async () => {
+    const pendingStore = new MemoryPendingActionStore();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+
+    const before = new Dispatcher({
+      getBinding: () => baseBinding,
+      pendingStore,
+    });
+    before.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"DELETE","filters":{"项目名称":"x"},"confidence":0.95,"summary":"删"}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { recordId: 'r1', fields: { 项目名称: 'x' } },
+    ]);
+    await before.process(makeMsg({ content: '删除项目 x' }), channel);
+    expect(channel.lastReply).toContain('确认删除');
+
+    // 管理员停用了场景：新实例的 registry 里没有它，但 pending 还在
+    const after = new Dispatcher({
+      getBinding: () => baseBinding,
+      pendingStore,
+    });
+    await after.process(makeMsg({ content: '确认删除' }), channel);
+
+    expect(adapter.deleteRecord).not.toHaveBeenCalled();
+    expect(channel.lastReply).toContain('场景配置已变更');
+  });
+});
+
+describe('Dispatcher — 查询截断由 adapter 上报（P0：钉钉/企微过滤后条数恒不达上限）', () => {
+  /** 模拟钉钉/企微：拉取阶段撞上翻页上限，过滤后只剩少量记录 */
+  function truncatingAdapter(records: SpreadsheetRecord[]): SpreadsheetAdapter {
+    const adapter = makeAdapter();
+    (adapter as { queryHardLimit: number }).queryHardLimit = 5000;
+    Object.assign(adapter, {
+      queryRecordsWithMeta: vi.fn(async () => ({ records, truncated: true })),
+      queryRecords: vi.fn(async () => records),
+    });
+    return adapter;
+  }
+
+  it('QUERY：过滤后只剩 1 条也要提示可能不完整', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = truncatingAdapter([
+      { recordId: 'r1', fields: { 项目名称: 'A' } },
+    ]);
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"QUERY","fields":{},"filters":{"项目名称":"A"},"confidence":0.95,"summary":"查"}',
+    );
+
+    await d.process(makeMsg({ content: '查项目 A' }), channel);
+
+    expect(adapter.queryRecordsWithMeta).toHaveBeenCalled();
+    expect(channel.lastReply).toContain('单次查询上限');
+  });
+
+  it('DELETE：命中集可能不全时，确认提示里要说明', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = truncatingAdapter([
+      { recordId: 'r1', fields: { 项目名称: 'A' } },
+    ]);
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"DELETE","filters":{"项目名称":"A"},"confidence":0.95,"summary":"删"}',
+    );
+
+    await d.process(makeMsg({ content: '删除项目 A' }), channel);
+
+    expect(channel.lastReply).toContain('确认删除');
+    expect(channel.lastReply).toContain('未列出的匹配记录');
+  });
+
+  it('adapter 没实现 queryRecordsWithMeta 时退化为旧判据', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    // queryHardLimit 是 1000，返回 1000 条即视为撞上上限
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue(
+      Array.from({ length: 1000 }, (_, i) => ({
+        recordId: `r${i}`,
+        fields: { 项目名称: `A${i}` },
+      })),
+    );
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"QUERY","fields":{},"filters":{},"confidence":0.95,"summary":"查"}',
+    );
+
+    await d.process(makeMsg({ content: '查所有项目' }), channel);
+
+    expect(channel.lastReply).toContain('单次查询上限');
+  });
+});
+
+describe('Dispatcher — 确认后的执行失败要记进审计（P2：一律记 success）', () => {
+  /** 走完 DELETE 挂起确认，返回共享 pending 的 dispatcher 与审计事件数组 */
+  async function pendingDelete(
+    adapter: SpreadsheetAdapter,
+    channel: ReturnType<typeof makeChannel>,
+  ) {
+    const events: BotEvent[] = [];
+    const pendingStore = new MemoryPendingActionStore();
+    const d = new Dispatcher({
+      getBinding: () => baseBinding,
+      pendingStore,
+      onEvent: (e) => {
+        events.push(e);
+      },
+    });
+    d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"DELETE","filters":{"项目名称":"x"},"confidence":0.95,"summary":"删"}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { recordId: 'r1', fields: { 项目名称: 'x' } },
+    ]);
+    await d.process(makeMsg({ content: '删除项目 x' }), channel);
+    return { d, events };
+  }
+
+  it('批量删除全部失败 → 审计记 error 并带上原因', async () => {
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const { d, events } = await pendingDelete(adapter, channel);
+
+    (adapter.deleteRecord as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('平台 429'),
+    );
+    await d.process(makeMsg({ content: '确认删除' }), channel);
+
+    // 用户看到的是部分成功的实况
+    expect(channel.lastReply).toContain('已删除 0/1 条');
+    // 审计不能记成功，否则错误率统计漏掉真正失败的破坏性操作
+    const last = events.at(-1);
+    expect(last?.result).toBe('error');
+    expect(last?.errorMsg).toContain('平台 429');
+  });
+
+  it('删除成功仍记 success', async () => {
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const { d, events } = await pendingDelete(adapter, channel);
+
+    (adapter.deleteRecord as ReturnType<typeof vi.fn>).mockResolvedValue(
+      undefined,
+    );
+    await d.process(makeMsg({ content: '确认删除' }), channel);
+
+    expect(channel.lastReply).toContain('已删除 1 条');
+    expect(events.at(-1)?.result).toBe('success');
+    expect(events.at(-1)?.errorMsg).toBeUndefined();
+  });
+
+  it('无法识别的输入仍记 ignored 并保留 pending', async () => {
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const { d, events } = await pendingDelete(adapter, channel);
+
+    await d.process(makeMsg({ content: '嗯' }), channel);
+
+    expect(adapter.deleteRecord).not.toHaveBeenCalled();
+    expect(events.at(-1)?.result).toBe('ignored');
+    expect(channel.lastReply).toContain('确认删除');
   });
 });

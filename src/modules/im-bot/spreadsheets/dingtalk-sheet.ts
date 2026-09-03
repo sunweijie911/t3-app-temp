@@ -1,12 +1,14 @@
 // cspell:ignore notable
 import { dingtalkTokenManager } from '../auth/dingtalk-token';
+import type { DisplayType } from '../core/field-render';
 import type {
   FieldMappingValue,
   SpreadsheetRecord,
   SpreadsheetTableConfig,
 } from '../core/types';
+import { dateStringToMs, displayTypeOf } from './field-types';
 import { filterRecords } from './record-filter';
-import type { SpreadsheetAdapter } from './types';
+import type { SpreadsheetAdapter, SpreadsheetQueryResult } from './types';
 
 /**
  * 钉钉多维表（AI 表格 / notable）Adapter。
@@ -63,12 +65,13 @@ function platformKeyOf(mapping: FieldMappingValue): string {
  * 逻辑值 → 钉钉单元格值。
  * 钉钉多维表接受裸值，只有日期需要转毫秒时间戳
  * （CST 当天 12:00，与飞书/企微侧对齐避免跨日）。
+ * 声明为 number/text 的列不做转换 —— 见 field-types.ts。
  */
-export function toDingtalkValue(value: unknown): unknown {
-  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return new Date(`${value}T12:00:00+08:00`).getTime();
-  }
-  return value;
+export function toDingtalkValue(
+  value: unknown,
+  displayType?: DisplayType,
+): unknown {
+  return dateStringToMs(value, displayType) ?? value;
 }
 
 export function mapFieldsForWrite(
@@ -79,10 +82,9 @@ export function mapFieldsForWrite(
   for (const [logicalKey, value] of Object.entries(fields)) {
     // 与其它 adapter 一致：跳过 null/undefined，避免 LLM 幻觉字段静默清空数据
     if (value === null || value === undefined) continue;
-    const platformKey = platformKeyOf(
-      config.fieldMapping[logicalKey] ?? logicalKey,
-    );
-    out[platformKey] = toDingtalkValue(value);
+    const mapping = config.fieldMapping[logicalKey];
+    const platformKey = platformKeyOf(mapping ?? logicalKey);
+    out[platformKey] = toDingtalkValue(value, displayTypeOf(mapping));
   }
   return out;
 }
@@ -162,6 +164,13 @@ export class DingtalkSheetAdapter implements SpreadsheetAdapter {
     config: SpreadsheetTableConfig,
     filters: Record<string, unknown>,
   ): Promise<SpreadsheetRecord[]> {
+    return (await this.queryRecordsWithMeta(config, filters)).records;
+  }
+
+  async queryRecordsWithMeta(
+    config: SpreadsheetTableConfig,
+    filters: Record<string, unknown>,
+  ): Promise<SpreadsheetQueryResult> {
     // 续拉：钉钉按 nextToken 游标翻页。以前只发一个请求，超过单页的记录
     // 被静默丢掉，再叠加内存过滤 —— 大表上表现为"查不到"而不是报错。
     //
@@ -170,6 +179,9 @@ export class DingtalkSheetAdapter implements SpreadsheetAdapter {
     const all: SpreadsheetRecord[] = [];
     const seen = new Set<string>();
     let nextToken: string | undefined;
+    // 截断必须在这里判断：过滤发生在拉取之后，用过滤后的条数与
+    // queryHardLimit 比较永远不成立（拉满 5000 行、过滤后剩 1 条）
+    let truncated = false;
 
     for (let page = 0; page < MAX_PAGES; page++) {
       const query = `maxResults=${PAGE_SIZE}${
@@ -203,9 +215,10 @@ export class DingtalkSheetAdapter implements SpreadsheetAdapter {
       // 用"短页即止"会漏数据（那是 offset 分页才成立的启发式）。
       // fresh === 0 兜住"游标不被支持、下一页原样回第一页"的情形。
       if (!nextToken || fresh === 0) break;
+      if (page === MAX_PAGES - 1) truncated = true;
     }
 
-    return filterRecords(all, filters);
+    return { records: filterRecords(all, filters), truncated };
   }
 
   async deleteRecord(

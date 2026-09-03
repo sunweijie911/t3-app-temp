@@ -90,6 +90,33 @@ function suggestMappingType(
   return 'plain';
 }
 
+/** 飞书里语义上是「时刻」的列 */
+const DATE_UI_TYPES = new Set(['DateTime', 'CreatedTime', 'ModifiedTime']);
+/** 飞书里语义上是「数量」的列 —— 不能被当成日期毫秒值 */
+const NUMBER_UI_TYPES = new Set([
+  'Number',
+  'Currency',
+  'Progress',
+  'Rating',
+  'AutoNumber',
+]);
+
+/**
+ * 推断 plain 映射的 displayType。
+ *
+ * 这一步以前是缺的：ui_type 明明拉回来了却只用来选 plain/link/multiSelect，
+ * displayType 全靠管理员手写 JSON，于是实际配置里几乎不存在 ——
+ * 日期列的格式提示进不了 prompt、金额被按毫秒渲染成日期、
+ * 文本列里的 "2026-05-11" 被写成时间戳。
+ */
+function suggestDisplayType(
+  uiType: string | undefined,
+): 'date' | 'number' | 'text' {
+  if (uiType && DATE_UI_TYPES.has(uiType)) return 'date';
+  if (uiType && NUMBER_UI_TYPES.has(uiType)) return 'number';
+  return 'text';
+}
+
 /** 业务时区固定 CST(+08:00)，与飞书日期字段的处理保持一致 */
 const BUSINESS_TZ_OFFSET_MS = 8 * 60 * 60 * 1000;
 
@@ -477,6 +504,7 @@ export const imBotAdminRouter = createTRPCRouter({
         uiType: it.ui_type ?? '',
         // 给前端的建议映射类型；admin 仍可手动覆盖
         suggestedType: suggestMappingType(it.ui_type, it.property?.multiple),
+        suggestedDisplayType: suggestDisplayType(it.ui_type),
       }));
     }),
 

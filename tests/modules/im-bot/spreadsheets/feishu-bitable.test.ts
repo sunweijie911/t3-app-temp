@@ -339,3 +339,54 @@ describe('日期边界语义 — 由真实 API 实测反推（回归保护）', 
     expect(Number(conds[1]?.value[1])).toBe(2001);
   });
 });
+
+describe('displayType 决定值是否按日期解释（P1：文本列的 2026-05-11 曾被写成时间戳）', () => {
+  it("声明 'text' 的列：日期样式的字符串原样写入", () => {
+    expect(coerceFieldValue('2026-05-11', 'text')).toBe('2026-05-11');
+  });
+
+  it("声明 'number' 的列：日期样式的字符串原样写入", () => {
+    expect(coerceFieldValue('2026-05-11', 'number')).toBe('2026-05-11');
+  });
+
+  it("声明 'date' 的列：仍转成 CST 12:00 毫秒值", () => {
+    expect(coerceFieldValue('2026-05-11', 'date')).toBe(
+      new Date('2026-05-11T12:00:00+08:00').getTime(),
+    );
+  });
+
+  it('未声明 displayType 时保留旧启发式，历史配置不回归', () => {
+    expect(typeof coerceFieldValue('2026-05-11')).toBe('number');
+  });
+
+  it('mapFieldsForWrite 按每列的声明分别处理', async () => {
+    const out = await mapFieldsForWrite(
+      { 期号: '2026-05-11', 上线日期: '2026-05-11' },
+      makeConfig({
+        期号: { name: '期号', type: 'plain', displayType: 'text' },
+        上线日期: { name: '上线日期', type: 'plain', displayType: 'date' },
+      }),
+    );
+    expect(out.期号).toBe('2026-05-11');
+    expect(typeof out.上线日期).toBe('number');
+  });
+
+  it("筛选侧同理：'text' 列不生成 ExactDate 条件", () => {
+    expect(buildFilterConditions('期号', '2026-05-11', 'text')).toEqual([
+      { field_name: '期号', operator: 'is', value: ['2026-05-11'] },
+    ]);
+  });
+
+  it("'text' 列的比较操作符也按字面量走，不做日粒度换算", () => {
+    expect(
+      buildFilterConditions('期号', { op: '>=', value: '2026-05-11' }, 'text'),
+    ).toEqual([
+      { field_name: '期号', operator: 'isGreaterEqual', value: ['2026-05-11'] },
+    ]);
+  });
+
+  it('日期列的 ExactDate 语义不受影响', () => {
+    const conds = buildFilterConditions('上线日期', '2026-05-11', 'date');
+    expect(conds[0]?.value[0]).toBe('ExactDate');
+  });
+});

@@ -137,3 +137,82 @@ describe('queryHardLimit — 各平台自己声明上限', () => {
     expect(new WecomSheetAdapter().queryHardLimit).toBeGreaterThan(0);
   });
 });
+
+describe('queryRecordsWithMeta — 截断由 adapter 上报（P0：过滤后条数判不出来）', () => {
+  it('钉钉：页数用完且仍有 nextToken → truncated', async () => {
+    // 每页都带新记录和新游标，5 页拉完平台还说有后续
+    let page = 0;
+    const fetchMock = vi.fn().mockImplementation(async () => {
+      page++;
+      return jsonResponse({
+        records: [{ id: `p${page}`, fields: { 名称: `A${page}` } }],
+        nextToken: `tok${page + 1}`,
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const out = await new DingtalkSheetAdapter().queryRecordsWithMeta(
+      dingtalkConfig,
+      // 过滤只留一条：旧判据「返回条数 >= queryHardLimit」在这里恒为 false
+      { 名称: 'A1' },
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(out.records).toHaveLength(1);
+    expect(out.truncated).toBe(true);
+  });
+
+  it('钉钉：一页拉完 → 不算截断', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse({ records: [{ id: 'r1', fields: { 名称: 'A' } }] }),
+      ),
+    );
+
+    const out = await new DingtalkSheetAdapter().queryRecordsWithMeta(
+      dingtalkConfig,
+      {},
+    );
+
+    expect(out.truncated).toBe(false);
+  });
+
+  it('企微：满页续拉到页数上限 → truncated', async () => {
+    let seq = 0;
+    const fetchMock = vi.fn().mockImplementation(async () => {
+      // 每页都是满页（1000 条），说明后面还有
+      const records = Array.from({ length: 1000 }, (_, i) => ({
+        record_id: `p${seq}-r${i}`,
+        values: { 名称: [{ type: 'text', text: 'A' }] },
+      }));
+      seq++;
+      return jsonResponse({ records });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const out = await new WecomSheetAdapter().queryRecordsWithMeta(
+      wecomConfig,
+      { 名称: '不存在的值' },
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(out.records).toHaveLength(0);
+    expect(out.truncated).toBe(true);
+  });
+
+  it('queryRecords 与 queryRecordsWithMeta 返回同一批记录', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse({ records: [{ id: 'r1', fields: { 名称: 'A' } }] }),
+      ),
+    );
+    const adapter = new DingtalkSheetAdapter();
+
+    const plain = await adapter.queryRecords(dingtalkConfig, {});
+    const meta = await adapter.queryRecordsWithMeta(dingtalkConfig, {});
+
+    expect(plain).toEqual(meta.records);
+  });
+});

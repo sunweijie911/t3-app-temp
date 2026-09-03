@@ -21,7 +21,7 @@ export const BOT_EVENT_RESULT_VALUES = [
 ] as const;
 export const BOT_EVENT_RESULT_ENUM = z.enum(BOT_EVENT_RESULT_VALUES);
 
-/** 资源类型。table 已实现，doc/file 为能力层预留 */
+/** 资源类型。table 全平台已实现；doc 仅飞书已实现；file 为能力层预留 */
 export const BOT_RESOURCE_KIND_VALUES = ['table', 'doc', 'file'] as const;
 export const BOT_RESOURCE_KIND_ENUM = z.enum(BOT_RESOURCE_KIND_VALUES);
 export const RESOURCE_KIND_LABELS: Record<
@@ -29,7 +29,10 @@ export const RESOURCE_KIND_LABELS: Record<
   string
 > = {
   table: '多维表格',
-  doc: '文档（未实现）',
+  // 这些标签会随字段清单一起注入 system prompt（core/schema-prompt.ts）。
+  // 曾写作「文档（未实现）」，于是 prompt 里一边列出 READ / APPEND 可用、
+  // 一边告诉 LLM 该资源未实现，自相矛盾 —— 模型会倾向返回 UNKNOWN。
+  doc: '文档',
   file: '文件（未实现）',
 };
 
@@ -57,19 +60,10 @@ export const FIELD_MAPPING_SCHEMA = z.record(
       type: z.literal('plain'),
       sensitive: z.boolean().optional(),
       label: z.string().optional(),
-      displayType: z.enum(['number', 'date']).optional(),
+      displayType: z.enum(['number', 'date', 'text']).optional(),
     }),
   ]),
 );
-
-export const INTENT_VALUES = [
-  'CREATE',
-  'UPDATE',
-  'QUERY',
-  'DELETE',
-  'UNKNOWN',
-] as const;
-export const INTENT_ENUM = z.enum(INTENT_VALUES);
 
 /** LLM 意图解析置信度阈值 */
 export const CONFIDENCE_THRESHOLD = 0.7;

@@ -1,4 +1,5 @@
 import { feishuTokenManager } from '../auth/feishu-token';
+import type { DisplayType } from '../core/field-render';
 import type {
   FieldMappingValue,
   LinkFieldMapping,
@@ -6,7 +7,12 @@ import type {
   SpreadsheetRecord,
   SpreadsheetTableConfig,
 } from '../core/types';
-import type { SpreadsheetAdapter } from './types';
+import {
+  dateStringToMs,
+  displayTypeOf,
+  treatsValueAsDate,
+} from './field-types';
+import type { SpreadsheetAdapter, SpreadsheetQueryResult } from './types';
 
 async function feishuApi(path: string, method: string, body?: unknown) {
   const token = await feishuTokenManager.getToken();
@@ -136,15 +142,17 @@ function platformKeyOf(mapping: FieldMappingValue): string {
 }
 
 /**
- * 把 LLM 返回的 YYYY-MM-DD 字符串转成飞书日期字段要求的毫秒时间戳
- * （CST 当天 12:00，避免时区误差跨日）。
- * 非日期字符串原样返回。
+ * 把 LLM 返回的 YYYY-MM-DD 字符串转成飞书日期字段要求的毫秒时间戳。
+ * 非日期字符串、或声明为 number/text 的列，原样返回。
+ *
+ * displayType 必须传：文本列里合法的 "2026-05-11" 曾被无条件转成
+ * 1778472000000 写进平台 —— 要么写进去一串数字，要么整条写入失败。
  */
-export function coerceFieldValue(value: unknown): unknown {
-  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return new Date(`${value}T12:00:00+08:00`).getTime();
-  }
-  return value;
+export function coerceFieldValue(
+  value: unknown,
+  displayType?: DisplayType,
+): unknown {
+  return dateStringToMs(value, displayType) ?? value;
 }
 
 /**
@@ -199,7 +207,7 @@ export async function mapFieldsForWrite(
       continue;
     }
     const platformKey = platformKeyOf(mapping ?? logicalKey);
-    result[platformKey] = coerceFieldValue(value);
+    result[platformKey] = coerceFieldValue(value, displayTypeOf(mapping));
   }
   return result;
 }
@@ -275,10 +283,13 @@ export function buildFilterConditions(
   raw: unknown,
   /**
    * 该字段在 fieldMapping 里声明的展示类型。
-   * 只有 'number' 会改变行为：把 between 从「日期区间」切回「数值区间」。
+   * 'number' / 'text' 都会关掉日期解释：between 切回数值区间，
+   * 值里的 YYYY-MM-DD 按字面量比较而不是生成 ExactDate 条件
+   * —— 对文本列下 ExactDate 条件，飞书要么报错要么恒不命中。
    */
-  displayType?: 'number' | 'date',
+  displayType?: DisplayType,
 ): Array<{ field_name: string; operator: string; value: string[] }> {
+  const asDate = treatsValueAsDate(displayType);
   // 高级对象语法
   if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
     const obj = raw as { op?: string; value?: unknown };
@@ -291,12 +302,12 @@ export function buildFilterConditions(
     ) {
       const [start, end] = obj.value as [unknown, unknown];
       const isDate = (v: unknown): v is string =>
-        typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
+        asDate && typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
 
-      // 数值列（分数、金额…）不能套 ExactDate —— 那是 datetime 字段专用的值格式。
+      // 数值/文本列不能套 ExactDate —— 那是 datetime 字段专用的值格式。
       // 裸数字在 datetime 列上表示精确毫秒（见下方分支），两者从值本身分辨不出来，
       // 只能靠 fieldMapping 的 displayType 显式声明。
-      if (displayType === 'number') {
+      if (!asDate) {
         return [
           {
             field_name: fieldName,
@@ -341,7 +352,11 @@ export function buildFilterConditions(
       return [{ field_name: fieldName, operator: op, value: [] }];
     }
     const rawV: unknown = obj.value;
-    if (typeof rawV === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(rawV)) {
+    if (
+      asDate &&
+      typeof rawV === 'string' &&
+      /^\d{4}-\d{2}-\d{2}$/.test(rawV)
+    ) {
       // 飞书 datetime 字段：value 必须 ["ExactDate", "<毫秒>"] 双元素；
       // 且不支持 isGreaterEqual/isLessEqual，用开区间 + 日粒度边界表达
       if (op === 'isGreaterEqual') {
@@ -401,7 +416,7 @@ export function buildFilterConditions(
   // 实测确认 ExactDate 是日粒度比较，所以 `is 当天零点` 就等价于"当天"，
   // 不需要拆成 isGreater + isLess 两条。这样还顺带消掉了与 `_conjunction:'or'`
   // 的冲突 —— 单条件不触发 requiresAndConjunction。
-  if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+  if (asDate && typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw)) {
     return [
       {
         field_name: fieldName,
@@ -557,6 +572,13 @@ export class FeishuBitableAdapter implements SpreadsheetAdapter {
     config: SpreadsheetTableConfig,
     filters: Record<string, unknown>,
   ): Promise<SpreadsheetRecord[]> {
+    return (await this.queryRecordsWithMeta(config, filters)).records;
+  }
+
+  async queryRecordsWithMeta(
+    config: SpreadsheetTableConfig,
+    filters: Record<string, unknown>,
+  ): Promise<SpreadsheetQueryResult> {
     // _conjunction 协议：默认 and；'or' 时多条件以 OR 连接
     const conjunction = filters._conjunction === 'or' ? 'or' : 'and';
     const conditions: Array<{
@@ -582,14 +604,10 @@ export class FeishuBitableAdapter implements SpreadsheetAdapter {
       } else if (mapping && isMultiSelectMapping(mapping)) {
         built = buildMultiSelectFilterConditions(mapping.name, value);
       } else {
-        const displayType =
-          mapping && typeof mapping === 'object' && mapping.type === 'plain'
-            ? mapping.displayType
-            : undefined;
         built = buildFilterConditions(
           platformKeyOf(mapping ?? key),
           value,
-          displayType,
+          displayTypeOf(mapping),
         );
       }
 
@@ -617,6 +635,8 @@ export class FeishuBitableAdapter implements SpreadsheetAdapter {
       fields: Record<string, unknown>;
     }> = [];
     let pageToken: string | undefined;
+    // 翻页上限用完时平台还说 has_more —— 结果被截断了，要让上层提示用户
+    let truncated = false;
 
     for (let page = 0; page < MAX_PAGES; page++) {
       const path = `/apps/${config.workspaceId}/tables/${config.tableId}/records/search?page_size=${PAGE_SIZE}${
@@ -630,10 +650,11 @@ export class FeishuBitableAdapter implements SpreadsheetAdapter {
       if (data.items) allItems.push(...data.items);
       if (!data.has_more || !data.page_token) break;
       pageToken = data.page_token;
+      if (page === MAX_PAGES - 1) truncated = true;
     }
 
     const logicalKeys = Object.keys(config.fieldMapping);
-    return allItems.map((item) => {
+    const records = allItems.map((item) => {
       const mapped = reverseMapFields(item.fields, config.fieldMapping);
       // 以 fieldMapping 配置的字段为基准，空值填 '' 而非缺失，保证表头完整
       const fields: Record<string, unknown> = Object.fromEntries(
@@ -645,6 +666,7 @@ export class FeishuBitableAdapter implements SpreadsheetAdapter {
       }
       return { recordId: item.record_id, fields };
     });
+    return { records, truncated };
   }
 
   async deleteRecord(

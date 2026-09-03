@@ -1,12 +1,14 @@
 // cspell:ignore wedoc smartsheet docid
 import { wecomTokenManager } from '../auth/wecom-token';
+import type { DisplayType } from '../core/field-render';
 import type {
   FieldMappingValue,
   SpreadsheetRecord,
   SpreadsheetTableConfig,
 } from '../core/types';
+import { dateStringToMs, displayTypeOf } from './field-types';
 import { filterRecords } from './record-filter';
-import type { SpreadsheetAdapter } from './types';
+import type { SpreadsheetAdapter, SpreadsheetQueryResult } from './types';
 
 /**
  * 企微智能表格（smartsheet）Adapter。
@@ -72,14 +74,18 @@ export type WecomCell =
  * 把逻辑值转成企微的类型化单元格数组。
  * - number → number 单元格
  * - boolean → checkbox
- * - YYYY-MM-DD 字符串 → date（CST 当天 12:00，与飞书侧的处理对齐避免跨日）
+ * - YYYY-MM-DD 字符串 → date（CST 当天 12:00，与飞书侧的处理对齐避免跨日）；
+ *   声明为 number/text 的列走 text，不再误判成日期单元格
  * - 数组 → 逐元素转（多选/多值字段）
  * - 其它 → text
  */
-export function toWecomCells(value: unknown): WecomCell[] {
+export function toWecomCells(
+  value: unknown,
+  displayType?: DisplayType,
+): WecomCell[] {
   if (value === null || value === undefined || value === '') return [];
   if (Array.isArray(value)) {
-    return value.flatMap((v) => toWecomCells(v));
+    return value.flatMap((v) => toWecomCells(v, displayType));
   }
   if (typeof value === 'number') {
     return [{ type: 'number', number: value }];
@@ -87,11 +93,9 @@ export function toWecomCells(value: unknown): WecomCell[] {
   if (typeof value === 'boolean') {
     return [{ type: 'checkbox', checkbox: value }];
   }
-  const s = String(value);
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
-    return [{ type: 'date', date: new Date(`${s}T12:00:00+08:00`).getTime() }];
-  }
-  return [{ type: 'text', text: s }];
+  const ms = dateStringToMs(value, displayType);
+  if (ms !== null) return [{ type: 'date', date: ms }];
+  return [{ type: 'text', text: String(value) }];
 }
 
 /** 把企微的类型化单元格数组还原为可读值 */
@@ -122,10 +126,9 @@ export function mapValuesForWrite(
   for (const [logicalKey, value] of Object.entries(fields)) {
     // 与飞书侧一致：跳过 null/undefined，避免 LLM 幻觉字段静默清空数据
     if (value === null || value === undefined) continue;
-    const platformKey = platformKeyOf(
-      config.fieldMapping[logicalKey] ?? logicalKey,
-    );
-    out[platformKey] = toWecomCells(value);
+    const mapping = config.fieldMapping[logicalKey];
+    const platformKey = platformKeyOf(mapping ?? logicalKey);
+    out[platformKey] = toWecomCells(value, displayTypeOf(mapping));
   }
   return out;
 }
@@ -201,6 +204,13 @@ export class WecomSheetAdapter implements SpreadsheetAdapter {
     config: SpreadsheetTableConfig,
     filters: Record<string, unknown>,
   ): Promise<SpreadsheetRecord[]> {
+    return (await this.queryRecordsWithMeta(config, filters)).records;
+  }
+
+  async queryRecordsWithMeta(
+    config: SpreadsheetTableConfig,
+    filters: Record<string, unknown>,
+  ): Promise<SpreadsheetQueryResult> {
     // 续拉：企微按 offset 翻页。以前只发一个请求，超过单页的记录被静默丢掉，
     // 再叠加内存过滤 —— 大表上表现为"查不到"而不是报错。
     //
@@ -208,6 +218,8 @@ export class WecomSheetAdapter implements SpreadsheetAdapter {
     // "这页没有新记录"并立即停止，避免把同一批记录重复计进结果。
     const all: SpreadsheetRecord[] = [];
     const seen = new Set<string>();
+    // 与钉钉同理：截断发生在内存过滤之前，只能由 adapter 自己上报
+    let truncated = false;
 
     for (let page = 0; page < MAX_PAGES; page++) {
       const data = (await wecomApi('/get_records', {
@@ -231,9 +243,10 @@ export class WecomSheetAdapter implements SpreadsheetAdapter {
       }
 
       if (fresh === 0 || rows.length < PAGE_SIZE) break;
+      if (page === MAX_PAGES - 1) truncated = true;
     }
 
-    return filterRecords(all, filters);
+    return { records: filterRecords(all, filters), truncated };
   }
 
   async deleteRecord(
