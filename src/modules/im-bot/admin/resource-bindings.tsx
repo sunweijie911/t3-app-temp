@@ -9,6 +9,7 @@ import {
   Popconfirm,
   Select,
   Space,
+  Switch,
   Table,
   Tag,
 } from 'antd';
@@ -16,7 +17,12 @@ import type { ColumnsType } from 'antd/es/table';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { api } from '@/trpc/react';
-import { type BotPlatform, PLATFORM_LABELS } from '../constants';
+import {
+  type BotPlatform,
+  PLATFORM_LABELS,
+  RESOURCE_KIND_LABELS,
+} from '../constants';
+import type { ResourceKind } from '../core/types';
 
 type FetchedField = {
   fieldId: string;
@@ -40,32 +46,39 @@ type FieldPickerSelection = Record<
 const SENSITIVE_KEY_PATTERN =
   /密码|密钥|秘钥|password|passwd|secret|token|api[_-]?key|凭证|敏感/i;
 
-type MappingRow = {
+type BindingRow = {
   id: string;
   sceneId: string;
-  platform: BotPlatform;
+  alias: string;
+  kind: ResourceKind;
+  /** 数据所在平台，与消息来源平台无关 */
+  provider: BotPlatform;
   workspaceId: string;
-  tableId: string;
+  resourceId: string;
   fieldMapping: unknown;
   uniqueKey: string | null;
+  isDefault: boolean;
   isActive: boolean;
 };
 
-type EditingMapping = {
+type EditingBinding = {
   id?: string;
   sceneId: string;
-  platform: BotPlatform;
+  alias: string;
+  kind: ResourceKind;
+  provider: BotPlatform;
   workspaceId: string;
-  tableId: string;
+  resourceId: string;
   fieldMappingStr: string;
   uniqueKey: string;
+  isDefault: boolean;
 };
 
-export default function ImBotTableMappingsPage() {
-  const { data: mappings, refetch } =
-    api.imBot.admin.listTableMappings.useQuery();
+export default function ImBotResourceBindingsPage() {
+  const { data: bindings, refetch } =
+    api.imBot.admin.listResourceBindings.useQuery();
   const { data: scenes } = api.imBot.admin.listScenes.useQuery();
-  const [editing, setEditing] = useState<EditingMapping | null>(null);
+  const [editing, setEditing] = useState<EditingBinding | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerFields, setPickerFields] = useState<FetchedField[]>([]);
   const [pickerSelection, setPickerSelection] = useState<FieldPickerSelection>(
@@ -89,7 +102,7 @@ export default function ImBotTableMappingsPage() {
     onError: (err) => toast.error(`拉取字段失败：${err.message}`),
   });
 
-  const upsertMutation = api.imBot.admin.upsertTableMapping.useMutation({
+  const upsertMutation = api.imBot.admin.upsertResourceBinding.useMutation({
     onSuccess: () => {
       toast.success('保存成功');
       void refetch();
@@ -98,7 +111,7 @@ export default function ImBotTableMappingsPage() {
     onError: (err) => toast.error(err.message),
   });
 
-  const deleteMutation = api.imBot.admin.deleteTableMapping.useMutation({
+  const deleteMutation = api.imBot.admin.deleteResourceBinding.useMutation({
     onSuccess: () => {
       toast.success('已删除');
       void refetch();
@@ -106,18 +119,35 @@ export default function ImBotTableMappingsPage() {
     onError: (err) => toast.error(err.message),
   });
 
-  const columns: ColumnsType<MappingRow> = [
+  const columns: ColumnsType<BindingRow> = [
     { title: '场景', dataIndex: 'sceneId', width: 120 },
     {
-      title: '平台',
-      dataIndex: 'platform',
+      title: '资源别名',
+      dataIndex: 'alias',
+      width: 130,
+      render: (val: string, record: BindingRow) => (
+        <Space size={4}>
+          <span>{val}</span>
+          {record.isDefault && <Tag color="green">默认</Tag>}
+        </Space>
+      ),
+    },
+    {
+      title: '类型',
+      dataIndex: 'kind',
+      width: 110,
+      render: (val: ResourceKind) => <Tag>{RESOURCE_KIND_LABELS[val]}</Tag>,
+    },
+    {
+      title: '数据平台',
+      dataIndex: 'provider',
       width: 100,
       render: (val: BotPlatform) => (
         <Tag color="blue">{PLATFORM_LABELS[val]}</Tag>
       ),
     },
     { title: 'Workspace ID', dataIndex: 'workspaceId', ellipsis: true },
-    { title: 'Table ID', dataIndex: 'tableId', ellipsis: true },
+    { title: '资源 ID', dataIndex: 'resourceId', ellipsis: true },
     {
       title: '字段映射',
       dataIndex: 'fieldMapping',
@@ -140,22 +170,25 @@ export default function ImBotTableMappingsPage() {
     {
       title: '操作',
       width: 140,
-      render: (_: unknown, record: MappingRow) => (
+      render: (_: unknown, record: BindingRow) => (
         <Space size="small">
           <Button
             onClick={() =>
               setEditing({
                 id: record.id,
                 sceneId: record.sceneId,
-                platform: record.platform,
+                alias: record.alias,
+                kind: record.kind,
+                provider: record.provider,
                 workspaceId: record.workspaceId,
-                tableId: record.tableId,
+                resourceId: record.resourceId,
                 fieldMappingStr: JSON.stringify(
                   record.fieldMapping ?? {},
                   null,
                   2,
                 ),
                 uniqueKey: record.uniqueKey ?? '',
+                isDefault: record.isDefault,
               })
             }
             size="small"
@@ -186,27 +219,30 @@ export default function ImBotTableMappingsPage() {
             justifyContent: 'space-between',
           }}
         >
-          <h1 className="font-bold text-2xl text-gray-900">表格映射</h1>
+          <h1 className="font-bold text-2xl text-gray-900">资源绑定</h1>
           <Button
             onClick={() =>
               setEditing({
                 sceneId: '',
-                platform: 'feishu',
+                alias: '',
+                kind: 'table',
+                provider: 'feishu',
                 workspaceId: '',
-                tableId: '',
+                resourceId: '',
                 fieldMappingStr: '{}',
                 uniqueKey: '',
+                isDefault: true,
               })
             }
             type="primary"
           >
-            新增映射
+            新增绑定
           </Button>
         </div>
 
         <Table
           columns={columns}
-          dataSource={mappings ?? []}
+          dataSource={bindings ?? []}
           pagination={false}
           rowKey="id"
           size="small"
@@ -233,15 +269,18 @@ export default function ImBotTableMappingsPage() {
             upsertMutation.mutate({
               id: editing.id,
               sceneId: editing.sceneId,
-              platform: editing.platform,
+              alias: editing.alias,
+              kind: editing.kind,
+              provider: editing.provider,
               workspaceId: editing.workspaceId,
-              tableId: editing.tableId,
+              resourceId: editing.resourceId,
               fieldMapping,
               uniqueKey: editing.uniqueKey || undefined,
+              isDefault: editing.isDefault,
             });
           }}
           open={!!editing}
-          title={editing?.id ? '编辑映射' : '新增映射'}
+          title={editing?.id ? '编辑绑定' : '新增绑定'}
           width={640}
         >
           {editing && (
@@ -257,15 +296,52 @@ export default function ImBotTableMappingsPage() {
                   value={editing.sceneId || undefined}
                 />
               </Form.Item>
-              <Form.Item label="平台" required>
+              <Form.Item
+                label="资源别名"
+                required
+                tooltip="场景内唯一的资源名，如「项目台账表」。一个场景可以绑多个资源，靠别名区分"
+              >
+                <Input
+                  onChange={(e) =>
+                    setEditing({ ...editing, alias: e.target.value })
+                  }
+                  placeholder="如：项目台账表"
+                  value={editing.alias}
+                />
+              </Form.Item>
+              <Form.Item label="资源类型" required>
                 <Select
-                  onChange={(val) => setEditing({ ...editing, platform: val })}
+                  onChange={(val) => setEditing({ ...editing, kind: val })}
+                  options={[
+                    { value: 'table', label: '多维表格' },
+                    { value: 'doc', label: '文档 (未实现)', disabled: true },
+                    { value: 'file', label: '文件 (未实现)', disabled: true },
+                  ]}
+                  value={editing.kind}
+                />
+              </Form.Item>
+              <Form.Item
+                label="数据所在平台"
+                required
+                tooltip="数据存在哪个平台，与消息来自哪个 IM 无关 —— 可以在企微群里操作飞书多维表"
+              >
+                <Select
+                  onChange={(val) => setEditing({ ...editing, provider: val })}
                   options={[
                     { value: 'feishu', label: '飞书' },
                     { value: 'dingtalk', label: '钉钉 (TODO)', disabled: true },
                     { value: 'wecom', label: '企微 (TODO)', disabled: true },
                   ]}
-                  value={editing.platform}
+                  value={editing.provider}
+                />
+              </Form.Item>
+              <Form.Item
+                label="设为场景默认资源"
+                tooltip="未在指令中指定资源时使用这一条。同场景内只会保留一条默认"
+              >
+                <Switch
+                  checked={editing.isDefault}
+                  onChange={(val) => setEditing({ ...editing, isDefault: val })}
                 />
               </Form.Item>
               <Form.Item label="Workspace ID (飞书 app_token)" required>
@@ -276,12 +352,12 @@ export default function ImBotTableMappingsPage() {
                   value={editing.workspaceId}
                 />
               </Form.Item>
-              <Form.Item label="Table ID" required>
+              <Form.Item label="资源 ID (飞书多维表 table_id)" required>
                 <Input
                   onChange={(e) =>
-                    setEditing({ ...editing, tableId: e.target.value })
+                    setEditing({ ...editing, resourceId: e.target.value })
                   }
-                  value={editing.tableId}
+                  value={editing.resourceId}
                 />
               </Form.Item>
               <Form.Item
@@ -311,14 +387,14 @@ export default function ImBotTableMappingsPage() {
                   <Button
                     disabled={
                       !editing.workspaceId ||
-                      !editing.tableId ||
-                      editing.platform !== 'feishu'
+                      !editing.resourceId ||
+                      editing.provider !== 'feishu'
                     }
                     loading={fetchFields.isPending}
                     onClick={() =>
                       fetchFields.mutate({
                         workspaceId: editing.workspaceId,
-                        tableId: editing.tableId,
+                        tableId: editing.resourceId,
                       })
                     }
                     size="small"

@@ -201,9 +201,9 @@ const modules: Record<string, ModuleDefinition> = {
         description: '配置飞书/钉钉/企微平台凭证',
       },
       {
-        label: '表格映射',
-        href: '/admin/im-bot/table-mappings',
-        description: '配置场景与多维表格的字段映射',
+        label: '资源绑定',
+        href: '/admin/im-bot/resource-bindings',
+        description: '配置场景绑定的表格/文档资源与字段映射',
       },
       {
         label: '事件日志',

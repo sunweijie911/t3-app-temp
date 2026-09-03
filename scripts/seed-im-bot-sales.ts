@@ -19,7 +19,9 @@
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { nanoid } from 'nanoid';
 import postgres from 'postgres';
-import { botScenes, botTableMappings } from '@/modules/im-bot/schema';
+import { botResourceBindings, botScenes } from '@/modules/im-bot/schema';
+
+const SALES_ALIAS = '销售记录表';
 
 if (!process.env.DATABASE_URL) {
   console.error('错误: 缺少 DATABASE_URL 环境变量');
@@ -217,21 +219,23 @@ async function main() {
   console.log(`✅ 场景 ${SCENE_ID} 已 upsert`);
 
   await db
-    .insert(botTableMappings)
+    .insert(botResourceBindings)
     .values({
       id: nanoid(),
       sceneId: SCENE_ID,
-      platform: 'feishu',
+      alias: SALES_ALIAS,
+      kind: 'table' as const,
+      provider: 'feishu',
       workspaceId: APP_TOKEN,
-      tableId: TABLE_ID,
+      resourceId: TABLE_ID,
       fieldMapping: FIELD_MAPPING,
       isActive: true,
     })
     .onConflictDoUpdate({
-      target: [botTableMappings.sceneId, botTableMappings.platform],
+      target: [botResourceBindings.sceneId, botResourceBindings.alias],
       set: {
         workspaceId: APP_TOKEN,
-        tableId: TABLE_ID,
+        resourceId: TABLE_ID,
         fieldMapping: FIELD_MAPPING,
         isActive: true,
       },

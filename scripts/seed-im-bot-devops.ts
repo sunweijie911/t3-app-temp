@@ -18,7 +18,10 @@
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { nanoid } from 'nanoid';
 import postgres from 'postgres';
-import { botScenes, botTableMappings } from '@/modules/im-bot/schema';
+import { botResourceBindings, botScenes } from '@/modules/im-bot/schema';
+
+const PROJECT_ALIAS = '项目台账表';
+const SCHOOL_ALIAS = '学校部署表';
 
 if (!process.env.DATABASE_URL) {
   console.error('错误: 缺少 DATABASE_URL 环境变量');
@@ -240,26 +243,30 @@ async function main() {
   console.log(`✅ 场景 ${PROJECT_SCENE_ID} 已 upsert`);
 
   await db
-    .insert(botTableMappings)
+    .insert(botResourceBindings)
     .values({
       id: nanoid(),
       sceneId: PROJECT_SCENE_ID,
-      platform: 'feishu',
+      alias: PROJECT_ALIAS,
+      kind: 'table' as const,
+      provider: 'feishu',
       workspaceId: APP_TOKEN,
-      tableId: PROJECT_TABLE_ID,
+      resourceId: PROJECT_TABLE_ID,
       fieldMapping: PROJECT_FIELD_MAPPING,
       isActive: true,
     })
     .onConflictDoUpdate({
-      target: [botTableMappings.sceneId, botTableMappings.platform],
+      target: [botResourceBindings.sceneId, botResourceBindings.alias],
       set: {
         workspaceId: APP_TOKEN,
-        tableId: PROJECT_TABLE_ID,
+        resourceId: PROJECT_TABLE_ID,
         fieldMapping: PROJECT_FIELD_MAPPING,
         isActive: true,
       },
     });
-  console.log(`✅ 表格映射 ${PROJECT_SCENE_ID} × feishu 已 upsert`);
+  console.log(
+    `✅ 资源绑定 ${PROJECT_SCENE_ID} → ${PROJECT_ALIAS} (feishu) 已 upsert`,
+  );
 
   // 学校部署清单
   console.log(`[seed-im-bot-devops] sceneId=${SCHOOL_SCENE_ID}`);
@@ -291,26 +298,30 @@ async function main() {
   console.log(`✅ 场景 ${SCHOOL_SCENE_ID} 已 upsert`);
 
   await db
-    .insert(botTableMappings)
+    .insert(botResourceBindings)
     .values({
       id: nanoid(),
       sceneId: SCHOOL_SCENE_ID,
-      platform: 'feishu',
+      alias: SCHOOL_ALIAS,
+      kind: 'table' as const,
+      provider: 'feishu',
       workspaceId: APP_TOKEN,
-      tableId: SCHOOL_TABLE_ID,
+      resourceId: SCHOOL_TABLE_ID,
       fieldMapping: SCHOOL_FIELD_MAPPING,
       isActive: true,
     })
     .onConflictDoUpdate({
-      target: [botTableMappings.sceneId, botTableMappings.platform],
+      target: [botResourceBindings.sceneId, botResourceBindings.alias],
       set: {
         workspaceId: APP_TOKEN,
-        tableId: SCHOOL_TABLE_ID,
+        resourceId: SCHOOL_TABLE_ID,
         fieldMapping: SCHOOL_FIELD_MAPPING,
         isActive: true,
       },
     });
-  console.log(`✅ 表格映射 ${SCHOOL_SCENE_ID} × feishu 已 upsert`);
+  console.log(
+    `✅ 资源绑定 ${SCHOOL_SCENE_ID} → ${SCHOOL_ALIAS} (feishu) 已 upsert`,
+  );
 }
 
 main()

@@ -162,6 +162,20 @@
       "when": 1782266408359,
       "tag": "0022_robust_thundra",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1788407009406,
+      "tag": "0023_im_bot_resource_binding",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1788407340674,
+      "tag": "0024_im_bot_shared_state",
+      "breakpoints": true
     }
   ]
 }

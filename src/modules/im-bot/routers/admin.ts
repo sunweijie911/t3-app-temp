@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gte, lt, lte, min, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gte, lt, lte, min, ne, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { adminProcedure, createTRPCRouter } from '@/server/api/trpc';
@@ -6,15 +6,19 @@ import { feishuTokenManager } from '../auth/feishu-token';
 import {
   BOT_EVENT_RESULT_ENUM,
   BOT_PLATFORM_ENUM,
+  BOT_RESOURCE_KIND_ENUM,
   type BotPlatform,
   CREDENTIAL_MASK,
+  FIELD_MAPPING_SCHEMA,
   PLATFORM_SECRET_FIELDS,
 } from '../constants';
 import {
+  botEventDedup,
   botEventLogs,
+  botPendingActions,
   botPlatforms,
+  botResourceBindings,
   botScenes,
-  botTableMappings,
 } from '../schema';
 import { reloadBotConfig } from '../services/bot-engine';
 
@@ -79,6 +83,20 @@ function suggestMappingType(
   if (uiType === 'SingleLink' || uiType === 'DuplexLink') return 'link';
   if (uiType === 'MultiSelect' || multiple === true) return 'multiSelect';
   return 'plain';
+}
+
+/** 业务时区固定 CST(+08:00)，与飞书日期字段的处理保持一致 */
+const BUSINESS_TZ_OFFSET_MS = 8 * 60 * 60 * 1000;
+
+/**
+ * 返回「业务时区今天 00:00」对应的 UTC 时刻。
+ * 直接用 `new Date().setHours(0,0,0,0)` 取的是**服务器本地时区**，
+ * 容器一般跑 UTC，会把凌晨 0~8 点的数据算进前一天。
+ */
+function startOfBusinessDay(now: Date = new Date()): Date {
+  const shifted = new Date(now.getTime() + BUSINESS_TZ_OFFSET_MS);
+  shifted.setUTCHours(0, 0, 0, 0);
+  return new Date(shifted.getTime() - BUSINESS_TZ_OFFSET_MS);
 }
 
 export const imBotAdminRouter = createTRPCRouter({
@@ -159,8 +177,8 @@ export const imBotAdminRouter = createTRPCRouter({
         .returning({ sceneId: botScenes.sceneId });
       if (deleted) {
         await ctx.db
-          .delete(botTableMappings)
-          .where(eq(botTableMappings.sceneId, deleted.sceneId));
+          .delete(botResourceBindings)
+          .where(eq(botResourceBindings.sceneId, deleted.sceneId));
       }
       reloadBotConfig();
       return { success: true };
@@ -232,85 +250,84 @@ export const imBotAdminRouter = createTRPCRouter({
       return { id };
     }),
 
-  listTableMappings: adminProcedure.query(async ({ ctx }) => {
-    return ctx.db.select().from(botTableMappings);
+  listResourceBindings: adminProcedure.query(async ({ ctx }) => {
+    return ctx.db
+      .select()
+      .from(botResourceBindings)
+      .orderBy(botResourceBindings.sceneId, botResourceBindings.alias);
   }),
 
-  upsertTableMapping: adminProcedure
+  upsertResourceBinding: adminProcedure
     .input(
       z.object({
         id: z.string().optional(),
         sceneId: z.string().min(1),
-        platform: BOT_PLATFORM_ENUM,
+        alias: z.string().min(1).max(64),
+        kind: BOT_RESOURCE_KIND_ENUM.default('table'),
+        /** 数据所在平台，与消息来源平台无关 */
+        provider: BOT_PLATFORM_ENUM,
         workspaceId: z.string().min(1),
-        tableId: z.string().min(1),
-        fieldMapping: z
-          .record(
-            z.string(),
-            z.union([
-              z.string(),
-              z.object({
-                name: z.string(),
-                type: z.literal('link'),
-                linkTableId: z.string(),
-                displayField: z.string(),
-                sensitive: z.boolean().optional(),
-                label: z.string().optional(),
-              }),
-              z.object({
-                name: z.string(),
-                type: z.literal('multiSelect'),
-                sensitive: z.boolean().optional(),
-                label: z.string().optional(),
-              }),
-              z.object({
-                name: z.string(),
-                type: z.literal('plain'),
-                sensitive: z.boolean().optional(),
-                label: z.string().optional(),
-                displayType: z.enum(['number', 'date']).optional(),
-              }),
-            ]),
-          )
-          .default({}),
+        resourceId: z.string().min(1),
+        fieldMapping: FIELD_MAPPING_SCHEMA.default({}),
         uniqueKey: z.string().max(64).optional(),
+        isDefault: z.boolean().default(true),
         isActive: z.boolean().default(true),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const id = input.id ?? nanoid();
-      await ctx.db
-        .insert(botTableMappings)
-        .values({
-          id,
-          sceneId: input.sceneId,
-          platform: input.platform,
-          workspaceId: input.workspaceId,
-          tableId: input.tableId,
-          fieldMapping: input.fieldMapping,
-          uniqueKey: input.uniqueKey,
-          isActive: input.isActive,
-        })
-        .onConflictDoUpdate({
-          target: [botTableMappings.sceneId, botTableMappings.platform],
-          set: {
+      await ctx.db.transaction(async (tx) => {
+        // 同场景内只允许一条默认资源，否则 dispatcher 的默认解析会不确定
+        if (input.isDefault) {
+          await tx
+            .update(botResourceBindings)
+            .set({ isDefault: false })
+            .where(
+              and(
+                eq(botResourceBindings.sceneId, input.sceneId),
+                ne(botResourceBindings.alias, input.alias),
+              ),
+            );
+        }
+        await tx
+          .insert(botResourceBindings)
+          .values({
+            id,
+            sceneId: input.sceneId,
+            alias: input.alias,
+            kind: input.kind,
+            provider: input.provider,
             workspaceId: input.workspaceId,
-            tableId: input.tableId,
+            resourceId: input.resourceId,
             fieldMapping: input.fieldMapping,
             uniqueKey: input.uniqueKey,
+            isDefault: input.isDefault,
             isActive: input.isActive,
-          },
-        });
+          })
+          .onConflictDoUpdate({
+            target: [botResourceBindings.sceneId, botResourceBindings.alias],
+            set: {
+              kind: input.kind,
+              provider: input.provider,
+              workspaceId: input.workspaceId,
+              resourceId: input.resourceId,
+              fieldMapping: input.fieldMapping,
+              uniqueKey: input.uniqueKey,
+              isDefault: input.isDefault,
+              isActive: input.isActive,
+            },
+          });
+      });
       reloadBotConfig();
       return { id };
     }),
 
-  deleteTableMapping: adminProcedure
+  deleteResourceBinding: adminProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       await ctx.db
-        .delete(botTableMappings)
-        .where(eq(botTableMappings.id, input.id));
+        .delete(botResourceBindings)
+        .where(eq(botResourceBindings.id, input.id));
       reloadBotConfig();
       return { success: true };
     }),
@@ -413,8 +430,7 @@ export const imBotAdminRouter = createTRPCRouter({
     }),
 
   getStats: adminProcedure.query(async ({ ctx }) => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const today = startOfBusinessDay();
 
     const [todayStats, sceneStats, platformStats] = await Promise.all([
       ctx.db
@@ -452,6 +468,44 @@ export const imBotAdminRouter = createTRPCRouter({
   }),
 
   // ---- 事件日志清理 ----
+
+  /**
+   * 共享状态观测。多实例部署时用来确认幂等/待确认状态是否在正常流转
+   * （比如待确认记录长期堆积，说明有用户被卡在等待态没被清掉）。
+   */
+  getSharedStateStats: adminProcedure.query(async ({ ctx }) => {
+    const now = new Date();
+    const [dedupTotal, pendingTotal, pendingLive] = await Promise.all([
+      ctx.db.select({ total: count() }).from(botEventDedup),
+      ctx.db.select({ total: count() }).from(botPendingActions),
+      ctx.db
+        .select({ total: count() })
+        .from(botPendingActions)
+        .where(gte(botPendingActions.expiresAt, now)),
+    ]);
+    return {
+      dedupTotal: dedupTotal[0]?.total ?? 0,
+      pendingTotal: pendingTotal[0]?.total ?? 0,
+      /** 未过期的待确认数 —— 正常应该接近 0 */
+      pendingLive: pendingLive[0]?.total ?? 0,
+    };
+  }),
+
+  /** 清理已过期的幂等 / 待确认记录（正常由 webhook 顺带 GC，这里是手动兜底） */
+  purgeExpiredSharedState: adminProcedure.mutation(async ({ ctx }) => {
+    const now = new Date();
+    const [dedup, pending] = await Promise.all([
+      ctx.db
+        .delete(botEventDedup)
+        .where(lt(botEventDedup.expiresAt, now))
+        .returning({ k: botEventDedup.dedupKey }),
+      ctx.db
+        .delete(botPendingActions)
+        .where(lt(botPendingActions.expiresAt, now))
+        .returning({ k: botPendingActions.pendingKey }),
+    ]);
+    return { dedupDeleted: dedup.length, pendingDeleted: pending.length };
+  }),
 
   getEventLogStats: adminProcedure.query(async ({ ctx }) => {
     const [countResult, minResult] = await Promise.all([

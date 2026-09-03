@@ -54,11 +54,23 @@ describe('DatabaseDrivenScene.match', () => {
     expect(s.match('hello')).toBe(0);
   });
 
-  it('命中越多得分越高', () => {
+  it('命中越多得分越高（按命中个数计分）', () => {
     const s = makeScene({ keywords: ['销售', '订单'] });
-    expect(s.match('hello 销售')).toBe(0.5);
-    expect(s.match('销售 订单')).toBe(1);
+    expect(s.match('hello 销售')).toBe(1);
+    expect(s.match('销售 订单')).toBe(2);
     expect(s.match('hello')).toBe(0);
+  });
+
+  it('关键词配得多的场景不会因为命中率低而输给关键词少的场景', () => {
+    // 旧实现用 matched/total：detailed 命中 1/5=0.2 会输给 sparse 的 1/1=1.0，
+    // 导致"关键词配得越全越难被选中"
+    const detailed = makeScene({
+      keywords: ['销售', '订单', '成交', '客户', '回款'],
+    });
+    const sparse = makeScene({ keywords: ['报销'] });
+    expect(detailed.match('登记一下销售订单')).toBeGreaterThan(
+      sparse.match('登记一下销售订单'),
+    );
   });
 });
 

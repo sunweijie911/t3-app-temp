@@ -1,9 +1,10 @@
 import crypto from 'node:crypto';
+import { getFeishuChatName } from '../auth/feishu-chat';
 import { feishuTokenManager } from '../auth/feishu-token';
 import { getFeishuUserName } from '../auth/feishu-user';
-import type { UnifiedMessage } from '../core/types';
+import type { ChatType, UnifiedMessage } from '../core/types';
 import { getFeishuCredentials } from '../services/credentials';
-import type { ChannelAdapter, VerifyResult } from './types';
+import type { ChannelAdapter, DecodeResult } from './types';
 
 function decryptFeishuEvent(encrypt: string, key: string): string {
   const keyHash = crypto.createHash('sha256').update(key).digest();
@@ -18,68 +19,100 @@ function decryptFeishuEvent(encrypt: string, key: string): string {
 export class FeishuChannelAdapter implements ChannelAdapter {
   readonly platform = 'feishu' as const;
 
-  async verify(_req: Request, body: unknown): Promise<VerifyResult> {
-    const obj = body as Record<string, unknown>;
+  async decode(req: Request): Promise<DecodeResult> {
+    let body: Record<string, unknown>;
+    try {
+      body = (await req.json()) as Record<string, unknown>;
+    } catch {
+      return { kind: 'reject', status: 400, reason: '请求体不是合法 JSON' };
+    }
+
     const creds = await getFeishuCredentials();
 
-    if (typeof obj.encrypt === 'string') {
+    // 1. 解密（开启了事件加密时）
+    if (typeof body.encrypt === 'string') {
       if (!creds.encryptKey) {
         console.warn('[FeishuChannel] 收到加密事件但未配置 encryptKey');
-        return { ok: false, status: 403 };
+        return { kind: 'reject', status: 403, reason: '未配置 encryptKey' };
       }
       try {
-        const decrypted = decryptFeishuEvent(obj.encrypt, creds.encryptKey);
-        const parsed = JSON.parse(decrypted) as Record<string, unknown>;
-        Object.assign(obj, parsed);
+        const decrypted = decryptFeishuEvent(body.encrypt, creds.encryptKey);
+        body = JSON.parse(decrypted) as Record<string, unknown>;
       } catch (err) {
         console.error(
           '[FeishuChannel] 解密事件失败，可能是 encryptKey 配置错误:',
           err,
         );
-        return { ok: false, status: 403 };
+        return { kind: 'reject', status: 403, reason: '解密失败' };
       }
     }
 
-    if (typeof obj.challenge === 'string') {
-      return { challenge: obj.challenge };
+    // 2. URL challenge
+    if (typeof body.challenge === 'string') {
+      return {
+        kind: 'respond',
+        response: Response.json({ challenge: body.challenge }),
+      };
     }
 
-    // verification_token 必须配置（DB 或 env），否则拒绝以避免 webhook 裸奔
+    // 3. verification_token 必须配置（DB 或 env），否则拒绝以避免 webhook 裸奔
     if (!creds.verificationToken) {
       console.warn(
         '[FeishuChannel] 拒绝请求：未配置 verificationToken，webhook 不能裸奔',
       );
-      return { ok: false, status: 403 };
+      return {
+        kind: 'reject',
+        status: 403,
+        reason: '未配置 verificationToken',
+      };
     }
-
-    const token = (obj.header as Record<string, unknown>)?.token as
-      | string
-      | undefined;
+    const header = body.header as Record<string, unknown> | undefined;
+    const token = header?.token as string | undefined;
     if (!token || token !== creds.verificationToken) {
-      return { ok: false, status: 403 };
+      return { kind: 'reject', status: 403, reason: 'token 校验失败' };
     }
 
-    return { ok: true };
+    // 4. 解析为统一消息
+    return this.parseEvent(body);
   }
 
-  async parse(body: unknown): Promise<UnifiedMessage | null> {
-    const obj = body as Record<string, unknown>;
-    const header = obj.header as Record<string, unknown> | undefined;
-    const event = obj.event as Record<string, unknown> | undefined;
-    if (!header || !event) return null;
+  private async parseEvent(
+    body: Record<string, unknown>,
+  ): Promise<DecodeResult> {
+    const header = body.header as Record<string, unknown> | undefined;
+    const event = body.event as Record<string, unknown> | undefined;
+    if (!header || !event)
+      return { kind: 'ignored', reason: '缺少 header/event' };
 
-    if (header.event_type !== 'im.message.receive_v1') return null;
+    if (header.event_type !== 'im.message.receive_v1') {
+      return {
+        kind: 'ignored',
+        reason: `事件类型 ${String(header.event_type)}`,
+      };
+    }
 
     const message = event.message as Record<string, unknown> | undefined;
     const sender = event.sender as Record<string, unknown> | undefined;
-    if (!message || !sender) return null;
+    if (!message || !sender) {
+      return { kind: 'ignored', reason: '缺少 message/sender' };
+    }
+    if (message.message_type !== 'text') {
+      return { kind: 'ignored', reason: '非文本消息' };
+    }
 
-    if (message.message_type !== 'text') return null;
+    // 机器人自己发的消息不处理，否则会与自己的回复形成回环
+    if (sender.sender_type !== 'user') {
+      return { kind: 'ignored', reason: '非用户发送' };
+    }
 
-    const mentions = message.mentions as
-      | Array<{ key: string; name: string; id: { open_id: string } }>
-      | undefined;
-    if (!mentions || mentions.length === 0) return null;
+    const chatType: ChatType = message.chat_type === 'p2p' ? 'p2p' : 'group';
+
+    const mentions = message.mentions as Array<{ key: string }> | undefined;
+    // 群聊要求 @机器人；单聊天然是对机器人说话，不该要求 @
+    // （以前无条件要求 mentions 非空，导致所有私聊消息被静默丢弃）
+    if (chatType === 'group' && (!mentions || mentions.length === 0)) {
+      return { kind: 'ignored', reason: '群聊未 @机器人' };
+    }
 
     let content = '';
     try {
@@ -87,39 +120,41 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       content = parsed.text ?? '';
     } catch (err) {
       console.warn(
-        '[FeishuChannel] message.content 解析失败，raw:',
+        '[FeishuChannel] message.content 解析失败, raw:',
         String(message.content).slice(0, 200),
         err,
       );
-      return null;
+      return { kind: 'ignored', reason: 'content 解析失败' };
     }
 
     content = content.replace(/@_user_\d+/g, '').trim();
-    if (!content) return null;
+    if (!content) return { kind: 'ignored', reason: '@ 之后内容为空' };
 
     const senderInfo = sender.sender_id as Record<string, string> | undefined;
     const senderId = senderInfo?.open_id ?? senderInfo?.user_id ?? '';
+    const chatId = message.chat_id as string;
 
-    let senderName = senderId;
-    if (
-      (sender as Record<string, unknown>).sender_type === 'user' &&
-      senderId
-    ) {
-      const realName = await getFeishuUserName(senderId);
-      if (realName) senderName = realName;
-    } else if ((sender as Record<string, unknown>).sender_type !== 'user') {
-      senderName = '未知用户';
-    }
+    // 用户名与群名并发查询，两者都有独立缓存与 3s 超时，失败各自降级
+    const [senderName, chatName] = await Promise.all([
+      senderId ? getFeishuUserName(senderId) : Promise.resolve(null),
+      chatType === 'group' ? getFeishuChatName(chatId) : Promise.resolve(null),
+    ]);
 
     return {
-      platform: 'feishu',
-      eventId: header.event_id as string,
-      messageId: message.message_id as string,
-      chatId: message.chat_id as string,
-      senderId,
-      senderName,
-      content,
-      timestamp: Number(header.create_time) || Date.now(),
+      kind: 'ok',
+      message: {
+        platform: 'feishu',
+        eventId: header.event_id as string,
+        messageId: message.message_id as string,
+        chatId,
+        chatName: chatName ?? undefined,
+        chatType,
+        senderId,
+        senderName: senderName ?? senderId,
+        content,
+        timestamp: Number(header.create_time) || Date.now(),
+        raw: body,
+      },
     };
   }
 
@@ -156,6 +191,8 @@ export class FeishuChannelAdapter implements ChannelAdapter {
           '[FeishuChannel] 回复业务失败: code=',
           data.code,
           data.msg,
+          '文本长度=',
+          content.length,
         );
       }
     } catch (err) {

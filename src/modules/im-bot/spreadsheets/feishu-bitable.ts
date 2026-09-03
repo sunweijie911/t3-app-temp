@@ -348,6 +348,33 @@ export function buildFilterConditions(
   return [{ field_name: fieldName, operator: 'is', value: [String(raw)] }];
 }
 
+/** 区间类操作符 —— 由单个 filter key 展开出的多个此类条件之间只能是 AND 关系 */
+const RANGE_OPERATORS = new Set([
+  'isGreater',
+  'isGreaterEqual',
+  'isLess',
+  'isLessEqual',
+]);
+
+/**
+ * 判断某个 filter key 展开出的条件组是否**必须**以 AND 连接。
+ *
+ * 日期区间（between、裸 YYYY-MM-DD、>=/<= 降级）会被展开成
+ * isGreater + isLess 两个条件，二者语义上是「且」。若外层 conjunction 是 'or'，
+ * 就变成「大于起点 或 小于终点」→ 全表命中。
+ *
+ * multiSelect 数组展开出的多个 contains 条件不在此列 —— 那种情况下
+ * 「包含 A 或 包含 B」本身就是用户想要的语义。
+ */
+export function requiresAndConjunction(
+  conditions: Array<{ operator: string }>,
+): boolean {
+  return (
+    conditions.length > 1 &&
+    conditions.every((c) => RANGE_OPERATORS.has(c.operator))
+  );
+}
+
 /**
  * 为 link 字段构造 filter conditions：先把 displayValue 反查为 record_id，
  * 再用飞书 link 字段支持的 contains 操作符匹配。
@@ -470,23 +497,31 @@ export class FeishuBitableAdapter implements SpreadsheetAdapter {
       // 跳过保留键（以 _ 开头）
       if (key.startsWith('_')) continue;
       const mapping = config.fieldMapping[key];
+      let built: Array<{
+        field_name: string;
+        operator: string;
+        value: string[];
+      }>;
       if (mapping && isLinkMapping(mapping)) {
-        conditions.push(
-          ...(await buildLinkFilterConditions(
-            config.workspaceId,
-            mapping,
-            value,
-          )),
+        built = await buildLinkFilterConditions(
+          config.workspaceId,
+          mapping,
+          value,
         );
       } else if (mapping && isMultiSelectMapping(mapping)) {
-        conditions.push(
-          ...buildMultiSelectFilterConditions(mapping.name, value),
-        );
+        built = buildMultiSelectFilterConditions(mapping.name, value);
       } else {
-        conditions.push(
-          ...buildFilterConditions(platformKeyOf(mapping ?? key), value),
+        built = buildFilterConditions(platformKeyOf(mapping ?? key), value);
+      }
+
+      // 飞书 bitable filter 是单层扁平结构，表达不出 A AND (B OR C)。
+      // 区间条件必须 AND，与外层 'or' 不兼容 —— 静默返回全表比报错危险得多。
+      if (conjunction === 'or' && requiresAndConjunction(built)) {
+        throw new Error(
+          `筛选条件「${key}」是一个区间（需要「且」），无法与「或」条件混用。请拆成两次查询，或改用单一条件`,
         );
       }
+      conditions.push(...built);
     }
 
     const baseBody: Record<string, unknown> = {};

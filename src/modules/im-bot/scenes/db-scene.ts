@@ -1,3 +1,10 @@
+import {
+  clampReply,
+  fieldMeta,
+  fieldToString,
+  maskSensitive,
+  renderFieldEntry,
+} from '../core/field-render';
 import type {
   ExecuteResult,
   FieldMappingValue,
@@ -5,123 +12,6 @@ import type {
   SceneContext,
 } from '../core/types';
 import type { BotScene } from './types';
-
-const DATE_MS_MIN = 946684800000; // 2000-01-01
-const DATE_MS_MAX = 4102444800000; // 2100-01-01
-const FIELD_DISPLAY_MAX_LEN = 200;
-const REPLY_TOTAL_MAX_LEN = 20_000;
-
-/**
- * 字段名启发式：含"密码/密钥/秘钥/password/secret/token/api_key/凭证/敏感"
- * 等关键字时，输出前自动脱敏。即使 admin 错把敏感字段配进 fieldMapping，
- * 也不会泄漏到群里。
- */
-const SENSITIVE_KEY_PATTERN =
-  /密码|密钥|秘钥|password|passwd|secret|token|api[_-]?key|凭证|敏感/i;
-
-function maskSensitive(key: string, value: string): string {
-  if (!value) return value;
-  if (SENSITIVE_KEY_PATTERN.test(key)) return '***（已脱敏）';
-  return value;
-}
-
-/**
- * 群消息总长兜底截断 — 主表字段多 / 子表汇总字段大时，
- * 累计可能超飞书 IM 文本上限（~30K），保留前缀 + 提示尾部。
- */
-function clampReply(s: string): string {
-  if (s.length <= REPLY_TOTAL_MAX_LEN) return s;
-  return `${s.slice(0, REPLY_TOTAL_MAX_LEN)}\n\n…（消息过长已截断，详见多维表）`;
-}
-
-/**
- * 单字段展示截断，避免长文本（如发版步骤、备注）撑爆群消息且污染 LLM 上下文。
- * 仅用于面向用户的最终输出，不影响内部值传递。
- */
-function truncateForDisplay(s: string): string {
-  if (s.length <= FIELD_DISPLAY_MAX_LEN) return s;
-  return `${s.slice(0, FIELD_DISPLAY_MAX_LEN)}…（已截断，共 ${s.length} 字，详见多维表）`;
-}
-
-type DisplayType = 'number' | 'date';
-
-function formatDateMs(v: number): string {
-  return new Date(v).toLocaleDateString('zh-CN', {
-    timeZone: 'Asia/Shanghai',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  });
-}
-
-/**
- * 内部递归版本：把飞书多维表格等平台返回的复杂字段值转为字符串，不做截断。
- * displayType:
- * - 'number'：数字原样输出（避免金额/版本号被误格式化为日期）
- * - 'date'：数字始终格式化为日期
- * - 未指定：保留旧启发式（毫秒值落在 2000~2100 年区间时按日期渲染）
- */
-function fieldToStringRaw(v: unknown, displayType?: DisplayType): string {
-  if (v == null || v === '') return '';
-  if (typeof v === 'number') {
-    if (displayType === 'number') return String(v);
-    if (displayType === 'date') return formatDateMs(v);
-    if (v >= DATE_MS_MIN && v <= DATE_MS_MAX) return formatDateMs(v);
-    return String(v);
-  }
-  if (typeof v === 'string' || typeof v === 'boolean') return String(v);
-  if (Array.isArray(v)) {
-    return v
-      .map((item) => {
-        if (item != null && typeof item === 'object') {
-          const obj = item as Record<string, unknown>;
-          if (typeof obj.text === 'string') return obj.text;
-          if (typeof obj.name === 'string') return obj.name;
-          return fieldToStringRaw(item, displayType);
-        }
-        return String(item);
-      })
-      .filter(Boolean)
-      .join(' ');
-  }
-  if (typeof v === 'object') {
-    const obj = v as Record<string, unknown>;
-    if (typeof obj.text === 'string') return obj.text;
-    if ('value' in obj && Array.isArray(obj.value)) {
-      return fieldToStringRaw(obj.value, displayType);
-    }
-    return JSON.stringify(v);
-  }
-  return String(v);
-}
-
-function fieldToString(v: unknown, displayType?: DisplayType): string {
-  return truncateForDisplay(fieldToStringRaw(v, displayType));
-}
-
-function maskedFieldToString(
-  key: string,
-  v: unknown,
-  displayType?: DisplayType,
-): string {
-  return maskSensitive(key, fieldToString(v, displayType));
-}
-
-/**
- * 单字段渲染入口：综合 fieldMapping 中的 label（用户友好名）和 displayType
- * （数字/日期渲染策略），返回展示用的 label 和 value。
- */
-function renderFieldEntry(
-  key: string,
-  value: unknown,
-  fieldMapping?: Record<string, FieldMappingValue>,
-): { label: string; display: string } {
-  const m = fieldMapping?.[key];
-  const label = typeof m === 'object' && m.label ? m.label : key;
-  const displayType =
-    typeof m === 'object' && m.type === 'plain' ? m.displayType : undefined;
-  return { label, display: maskedFieldToString(key, value, displayType) };
-}
 
 function applyFieldVars(
   tpl: string,
@@ -137,12 +27,12 @@ function applyFieldVars(
         /\$\{fields\.([^}]+)\}/g,
         (_, key: string) => {
           hasPlaceholder = true;
-          const m = fieldMapping?.[key];
-          const dt =
-            typeof m === 'object' && m.type === 'plain'
-              ? m.displayType
-              : undefined;
-          const val = maskedFieldToString(key, fields[key] ?? '', dt);
+          const { sensitive, displayType } = fieldMeta(key, fieldMapping);
+          const val = maskSensitive(
+            key,
+            fieldToString(fields[key] ?? '', displayType),
+            sensitive,
+          );
           if (val) allEmpty = false;
           return val;
         },
@@ -183,10 +73,14 @@ export class DatabaseDrivenScene implements BotScene {
     this.replyTemplate = config.replyTemplate;
   }
 
+  /**
+   * 关键词命中打分。用「命中个数」而非「命中率」：
+   * 以前是 matched.length / keywords.length，配了 10 个关键词的场景命中 1 个只有 0.1，
+   * 反而输给只配 1 个关键词的场景 —— 关键词配得越全越难被选中，跨场景比较不公平。
+   */
   match(content: string): number {
     if (this.keywords.length === 0) return 0;
-    const matched = this.keywords.filter((kw) => content.includes(kw));
-    return matched.length > 0 ? matched.length / this.keywords.length : 0;
+    return this.keywords.filter((kw) => content.includes(kw)).length;
   }
 
   getSystemPrompt(ctx: SceneContext): string {
@@ -235,7 +129,10 @@ export class DatabaseDrivenScene implements BotScene {
     result: ExecuteResult,
     fieldMapping?: Record<string, FieldMappingValue>,
   ): string {
-    if (!result.success) return `❌ 操作失败: ${result.error ?? '未知错误'}`;
+    // 失败分支同样要 clamp：dispatcher 的候选列表 / 确认提示走的就是 result.error，
+    // 不截断会拼出超长文本，导致 IM 侧发送失败、用户一条回复都收不到
+    if (!result.success)
+      return clampReply(`❌ 操作失败: ${result.error ?? '未知错误'}`);
 
     // 有自定义回复模板时使用模板
     if (this.replyTemplate) {

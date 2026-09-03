@@ -8,6 +8,7 @@ import {
   buildFilterConditions,
   coerceFieldValue,
   mapFieldsForWrite,
+  requiresAndConjunction,
   reverseMapFields,
 } from '@/modules/im-bot/spreadsheets/feishu-bitable';
 
@@ -207,5 +208,36 @@ describe('reverseMapFields', () => {
   it('mapping 中没有的平台字段保留为原名', () => {
     const out = reverseMapFields({ extra: 'v' }, { a: 'a' });
     expect(out).toEqual({ extra: 'v' });
+  });
+});
+
+describe('requiresAndConjunction — or 与区间条件不兼容', () => {
+  it('日期区间展开的 isGreater + isLess 必须 AND', () => {
+    const conds = buildFilterConditions('date', {
+      op: 'between',
+      value: ['2026-05-01', '2026-05-31'],
+    });
+    expect(requiresAndConjunction(conds)).toBe(true);
+  });
+
+  it('裸 YYYY-MM-DD 展开的当天范围同样必须 AND', () => {
+    expect(
+      requiresAndConjunction(buildFilterConditions('d', '2026-05-11')),
+    ).toBe(true);
+  });
+
+  it('单条件不构成冲突', () => {
+    expect(requiresAndConjunction(buildFilterConditions('name', '督导'))).toBe(
+      false,
+    );
+  });
+
+  it('multiSelect 多个 contains 可以 OR（"包含A或包含B"是合法语义）', () => {
+    // 不走 buildFilterConditions，直接模拟多选数组展开的形状
+    const conds = [
+      { field_name: 'tags', operator: 'contains', value: ['门户'] },
+      { field_name: 'tags', operator: 'contains', value: ['督导'] },
+    ];
+    expect(requiresAndConjunction(conds)).toBe(false);
   });
 });
