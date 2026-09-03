@@ -101,6 +101,12 @@ export interface ExecuteResult {
   doc?: DocumentContent;
   /** 文档：本次追加进去的文本（用于回复里回显写了什么） */
   appendedText?: string;
+  /**
+   * true 表示"已挂起二次确认，等用户回复"，而不是执行失败。
+   * error 字段此时承载给用户看的确认提示文案。
+   * 审计日志据此记 pending 而非 error，避免污染错误率。
+   */
+  awaitingConfirmation?: boolean;
   error?: string;
 }
 
@@ -249,7 +255,7 @@ export interface BotEvent {
   content: string;
   sceneId?: string;
   intent?: string;
-  result: 'success' | 'error' | 'ignored';
+  result: 'success' | 'error' | 'ignored' | 'pending';
   resultData?: unknown;
   errorMsg?: string;
   costMs: number;

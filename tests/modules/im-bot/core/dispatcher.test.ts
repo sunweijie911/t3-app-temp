@@ -948,3 +948,117 @@ describe('Dispatcher — 场景匹配失败与 LLM 故障要区分开', () => {
     expect(adapter.createRecord).toHaveBeenCalled();
   });
 });
+
+describe('Dispatcher — 二次确认记 pending 而不是 error', () => {
+  function withEvents(binding: ResourceBinding | null = baseBinding) {
+    const events: Array<{ result?: string; intent?: string }> = [];
+    const d = new Dispatcher({
+      getBinding: () => binding,
+      onEvent: (e) => events.push(e),
+    });
+    d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    return { d, events };
+  }
+
+  it('DELETE 挂起确认 → pending', async () => {
+    // 回归：原先记 error，导致每次删除都把统计面板的错误率顶上去
+    const { d, events } = withEvents();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"DELETE","filters":{"项目名称":"x"},"confidence":0.9,"summary":""}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { recordId: 'r1', fields: { 项目名称: 'x' } },
+    ]);
+
+    await d.process(makeMsg({ content: '删除项目 x' }), channel);
+    expect(events[0]?.result).toBe('pending');
+    expect(events[0]?.intent).toBe('DELETE');
+  });
+
+  it('单条 UPDATE 挂起确认 → pending', async () => {
+    const { d, events } = withEvents();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"UPDATE","filters":{"项目名称":"x"},"fields":{"Node版本":"20"},"confidence":0.9,"summary":""}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { recordId: 'r1', fields: { 项目名称: 'x' } },
+    ]);
+
+    await d.process(makeMsg({ content: '把项目 x 改一下' }), channel);
+    expect(events[0]?.result).toBe('pending');
+  });
+
+  it('uniqueKey 撞车挂起确认 → pending', async () => {
+    const { d, events } = withEvents({ ...baseBinding, uniqueKey: '项目名称' });
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"CREATE","fields":{"项目名称":"x"},"confidence":0.95,"summary":""}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { recordId: 'r1', fields: { 项目名称: 'x' } },
+    ]);
+
+    await d.process(makeMsg({ content: '新增项目 x' }), channel);
+    expect(events[0]?.result).toBe('pending');
+  });
+
+  it('多条命中挂起选择 → pending', async () => {
+    const { d, events } = withEvents();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"UPDATE","filters":{"项目名称":"x"},"fields":{"Node版本":"20"},"confidence":0.9,"summary":""}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { recordId: 'r1', fields: { 项目名称: 'x1' } },
+      { recordId: 'r2', fields: { 项目名称: 'x2' } },
+    ]);
+
+    await d.process(makeMsg({ content: '把项目 x 改一下' }), channel);
+    expect(events[0]?.result).toBe('pending');
+  });
+
+  it('真正的失败仍记 error（超批量上限）', async () => {
+    const { d, events } = withEvents();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"DELETE","filters":{"项目名称":"x"},"confidence":0.9,"summary":""}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      Array.from({ length: 500 }, (_, i) => ({
+        recordId: `r${i}`,
+        fields: {},
+      })),
+    );
+
+    await d.process(makeMsg({ content: '删除项目 x' }), channel);
+    expect(events[0]?.result).toBe('error');
+  });
+
+  it('成功执行仍记 success', async () => {
+    const { d, events } = withEvents();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"QUERY","filters":{"项目名称":"x"},"confidence":0.9,"summary":""}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      [],
+    );
+
+    await d.process(makeMsg({ content: '查询项目 x' }), channel);
+    expect(events[0]?.result).toBe('success');
+  });
+});

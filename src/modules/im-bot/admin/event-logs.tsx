@@ -31,7 +31,7 @@ type LogRow = {
   content?: string | null;
   sceneId?: string | null;
   intent?: string | null;
-  result: 'success' | 'error' | 'ignored';
+  result: 'success' | 'error' | 'ignored' | 'pending';
   errorMsg?: string | null;
   costMs?: number | null;
   createdAt: Date;
@@ -41,11 +41,14 @@ const RESULT_COLORS = {
   success: 'green',
   error: 'red',
   ignored: 'default',
+  // 等用户确认，不是失败 —— 用橙色区别于 error 的红色
+  pending: 'orange',
 } as const;
 const RESULT_LABELS = {
   success: '成功',
   error: '失败',
   ignored: '忽略',
+  pending: '待确认',
 } as const;
 
 function toExcel(records: LogRow[]): Blob {
@@ -115,7 +118,7 @@ export default function ImBotEventLogsPage() {
   const [filters, setFilters] = useState<{
     platform?: BotPlatform;
     sceneId?: string;
-    result?: 'success' | 'error' | 'ignored';
+    result?: 'success' | 'error' | 'ignored' | 'pending';
     startDate?: string;
     endDate?: string;
   }>({});
@@ -279,6 +282,7 @@ export default function ImBotEventLogsPage() {
             options={[
               { value: 'success', label: '成功' },
               { value: 'error', label: '失败' },
+              { value: 'pending', label: '待确认' },
               { value: 'ignored', label: '忽略' },
             ]}
             placeholder="结果"

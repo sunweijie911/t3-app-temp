@@ -19,6 +19,12 @@ export const botEventResultEnum = pgEnum('bot_event_result', [
   'success',
   'error',
   'ignored',
+  /**
+   * 已挂起二次确认，等用户回复。破坏性操作（DELETE / 单条 UPDATE /
+   * uniqueKey 撞车）的设计正路，不是失败 —— 原先统一记成 error，
+   * 一次全成功的会话在统计面板上也会显示 40% 错误率。
+   */
+  'pending',
 ]);
 
 /**

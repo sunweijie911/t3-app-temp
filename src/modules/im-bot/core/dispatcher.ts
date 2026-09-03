@@ -295,7 +295,13 @@ export class Dispatcher {
       logEvent({
         sceneId: scene.id,
         intent: parsed.intent,
-        result: result.success ? 'success' : 'error',
+        // 挂起二次确认是设计正路，记 pending —— 记 error 会让统计面板的
+        // 错误率变得毫无意义（每次 DELETE / 单条 UPDATE 都会计一次）
+        result: result.success
+          ? 'success'
+          : result.awaitingConfirmation
+            ? 'pending'
+            : 'error',
         resultData: result,
       });
     } catch (err) {
@@ -419,6 +425,7 @@ export class Dispatcher {
             });
             return {
               success: false,
+              awaitingConfirmation: true,
               error: `已存在 ${existing.length} 条「${uniqueKey}=${String(uniqueValue)}」的记录。回复"确认更新"将合并到第 1 条；回复"取消"放弃；回复"强制新建"仍按新记录创建`,
             };
           }
@@ -467,6 +474,7 @@ export class Dispatcher {
               .join('\n');
             return {
               success: false,
+              awaitingConfirmation: true,
               error: `确认更新 1 条记录？\n变更字段：\n${changes}\n\n回复"确认更新"执行，回复"取消"放弃`,
             };
           }
@@ -487,6 +495,7 @@ export class Dispatcher {
         });
         return {
           success: false,
+          awaitingConfirmation: true,
           error: `找到 ${records.length} 条匹配记录，请回复序号选择：\n${renderCandidateList(records, tableConfig.fieldMapping)}`,
         };
       }
@@ -515,6 +524,7 @@ export class Dispatcher {
         });
         return {
           success: false,
+          awaitingConfirmation: true,
           error: `确认删除以下 ${records.length} 条记录？\n${renderCandidateList(records, tableConfig.fieldMapping)}\n\n回复"确认删除"执行，回复"取消"放弃`,
         };
       }

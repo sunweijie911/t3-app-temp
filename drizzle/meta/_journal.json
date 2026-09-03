@@ -176,6 +176,13 @@
       "when": 1788407340674,
       "tag": "0024_im_bot_shared_state",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1788415457559,
+      "tag": "0025_bot_event_result_pending",
+      "breakpoints": true
     }
   ]
 }

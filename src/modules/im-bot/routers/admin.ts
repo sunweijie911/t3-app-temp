@@ -447,6 +447,9 @@ export const imBotAdminRouter = createTRPCRouter({
           total: sql<number>`count(*)::int`,
           success: sql<number>`count(case when ${botEventLogs.result} = 'success' then 1 end)::int`,
           error: sql<number>`count(case when ${botEventLogs.result} = 'error' then 1 end)::int`,
+          // 挂起二次确认的次数。单列出来，不并入 error，
+          // 否则每次 DELETE / 单条 UPDATE 都会把错误率顶上去
+          pending: sql<number>`count(case when ${botEventLogs.result} = 'pending' then 1 end)::int`,
           avgCostMs: sql<number>`coalesce(avg(${botEventLogs.costMs}), 0)::int`,
         })
         .from(botEventLogs)
@@ -470,7 +473,13 @@ export const imBotAdminRouter = createTRPCRouter({
     ]);
 
     return {
-      today: todayStats[0] ?? { total: 0, success: 0, error: 0, avgCostMs: 0 },
+      today: todayStats[0] ?? {
+        total: 0,
+        success: 0,
+        error: 0,
+        pending: 0,
+        avgCostMs: 0,
+      },
       byScene: sceneStats,
       byPlatform: platformStats,
     };

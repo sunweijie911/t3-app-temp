@@ -12,7 +12,13 @@ export const PLATFORM_LABELS: Record<BotPlatform, string> = {
   wecom: '企业微信',
 };
 
-export const BOT_EVENT_RESULT_VALUES = ['success', 'error', 'ignored'] as const;
+export const BOT_EVENT_RESULT_VALUES = [
+  'success',
+  'error',
+  'ignored',
+  /** 已挂起二次确认，等用户回复 —— 是正路，不计入错误率 */
+  'pending',
+] as const;
 export const BOT_EVENT_RESULT_ENUM = z.enum(BOT_EVENT_RESULT_VALUES);
 
 /** 资源类型。table 已实现，doc/file 为能力层预留 */
