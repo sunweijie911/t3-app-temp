@@ -1982,3 +1982,190 @@ describe('Dispatcher — 协议保留键不能进写入字段（P2）', () => {
     expect(channel.lastReply).toContain('没有解析出要写入的字段');
   });
 });
+
+describe('Dispatcher — 审计要能还原"LLM 解析出了什么"（观测）', () => {
+  function withEvents() {
+    const events: BotEvent[] = [];
+    const d = new Dispatcher({
+      getBinding: () => baseBinding,
+      onEvent: (e) => {
+        events.push(e);
+      },
+    });
+    d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    return { d, events };
+  }
+
+  it('QUERY：记下筛选键与操作符、投影列、置信度', async () => {
+    const { d, events } = withEvents();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"QUERY","fields":{},"filters":{"项目名称":{"op":"contains","value":"A"},"Node版本":"20","_conjunction":"or"},"projectFields":["Node版本"],"confidence":0.88,"summary":"查"}',
+    );
+
+    await d.process(makeMsg({ content: '查项目 A' }), channel);
+
+    const req = (
+      events.at(-1)?.resultData as { request?: Record<string, unknown> }
+    )?.request;
+    // 回归：以前只记结果 —— 一条 QUERY 回了 99 条，看不出是筛选真的命中全表，
+    // 还是 filters 被解析成空导致的全表扫描
+    expect(req).toEqual({
+      confidence: 0.88,
+      filters: { 项目名称: 'contains', Node版本: 'is', _conjunction: 'or' },
+      projectFields: ['Node版本'],
+    });
+  });
+
+  it('置信度不足时也记下解析出的内容（最需要看的那种情形）', async () => {
+    const { d, events } = withEvents();
+    const channel = makeChannel();
+    mockGetAdapter.mockReturnValue(makeAdapter());
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"UPDATE","fields":{"Node版本":"20"},"filters":{},"confidence":0.3,"summary":"不确定"}',
+    );
+
+    await d.process(makeMsg({ content: '项目 改一下' }), channel);
+
+    const data = events.at(-1)?.resultData as {
+      request?: { confidence?: number; fieldKeys?: string[] };
+    };
+    expect(data.request?.confidence).toBe(0.3);
+    expect(data.request?.fieldKeys).toEqual(['Node版本']);
+  });
+
+  it('不记筛选值与写入值（原文已在 content 列，避免多落一份）', async () => {
+    const { d, events } = withEvents();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    (adapter.createRecord as ReturnType<typeof vi.fn>).mockResolvedValue({
+      recordId: 'r1',
+      fields: {},
+    });
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"CREATE","fields":{"项目名称":"绝密项目"},"confidence":0.95,"summary":"新增"}',
+    );
+
+    await d.process(makeMsg({ content: '新增项目 绝密项目' }), channel);
+
+    expect(JSON.stringify(events.at(-1)?.resultData)).not.toContain('绝密项目');
+  });
+});
+
+describe('Dispatcher — 二次确认执行后要留痕（观测）', () => {
+  it('确认删除：记 intent=DELETE 与删掉的 recordId', async () => {
+    const events: BotEvent[] = [];
+    const pendingStore = new MemoryPendingActionStore();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const d = new Dispatcher({
+      getBinding: () => baseBinding,
+      pendingStore,
+      onEvent: (e) => {
+        events.push(e);
+      },
+    });
+    d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"DELETE","filters":{"项目名称":"x"},"confidence":0.95,"summary":"删"}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { recordId: 'r1', fields: { 项目名称: 'x' } },
+      { recordId: 'r2', fields: { 项目名称: 'x' } },
+    ]);
+    (adapter.deleteRecord as ReturnType<typeof vi.fn>).mockResolvedValue(
+      undefined,
+    );
+    await d.process(makeMsg({ content: '删除项目 x' }), channel);
+
+    await d.process(makeMsg({ content: '确认删除' }), channel);
+
+    const last = events.at(-1);
+    // 回归：以前这条路径只有一个 success，删了哪几条完全没有记录
+    expect(last?.intent).toBe('DELETE');
+    expect(last?.resultData).toEqual({
+      pendingType: 'confirm_delete',
+      deleted: 2,
+      recordIds: ['r1', 'r2'],
+    });
+  });
+
+  it('选序号更新：记下选了第几条、改了哪些字段', async () => {
+    const events: BotEvent[] = [];
+    const pendingStore = new MemoryPendingActionStore();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const d = new Dispatcher({
+      getBinding: () => baseBinding,
+      pendingStore,
+      onEvent: (e) => {
+        events.push(e);
+      },
+    });
+    d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"UPDATE","fields":{"Node版本":"20"},"filters":{"项目名称":"A"},"confidence":0.95,"summary":"改"}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { recordId: 'r1', fields: { 项目名称: 'A1' } },
+      { recordId: 'r2', fields: { 项目名称: 'A2' } },
+    ]);
+    (adapter.updateRecord as ReturnType<typeof vi.fn>).mockResolvedValue({
+      recordId: 'r2',
+      fields: {},
+    });
+    await d.process(
+      makeMsg({ content: '把项目 A 的 Node版本 改成 20' }),
+      channel,
+    );
+
+    await d.process(makeMsg({ content: '2' }), channel);
+
+    const last = events.at(-1);
+    expect(last?.intent).toBe('UPDATE');
+    expect(last?.resultData).toEqual({
+      pendingType: 'select_record',
+      picked: 2,
+      candidateCount: 2,
+      recordId: 'r2',
+      fieldKeys: ['Node版本'],
+    });
+  });
+
+  it('取消也留痕，区别于"没识别"', async () => {
+    const events: BotEvent[] = [];
+    const pendingStore = new MemoryPendingActionStore();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const d = new Dispatcher({
+      getBinding: () => baseBinding,
+      pendingStore,
+      onEvent: (e) => {
+        events.push(e);
+      },
+    });
+    d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"DELETE","filters":{"项目名称":"x"},"confidence":0.95,"summary":"删"}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { recordId: 'r1', fields: { 项目名称: 'x' } },
+    ]);
+    await d.process(makeMsg({ content: '删除项目 x' }), channel);
+
+    await d.process(makeMsg({ content: '取消' }), channel);
+
+    expect(adapter.deleteRecord).not.toHaveBeenCalled();
+    expect(events.at(-1)?.resultData).toEqual({
+      pendingType: 'confirm_delete',
+      aborted: '用户取消',
+    });
+  });
+});

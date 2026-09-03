@@ -204,7 +204,7 @@ src/app/
 | `bot_scene` | 场景配置 | `sceneId` 唯一；`keywords` 是 JSON 字符串；`allowedChatIds` / `writerIds` 为权限白名单；`fieldSchema` 已废弃 |
 | `bot_platform` | 平台凭证 | `platform` 唯一；`credentials` jsonb；secret 字段回传前掩码 |
 | `bot_resource_binding` | 场景 → 数据资源 | 唯一索引 `(sceneId, alias)`，一场景可绑多资源；`provider` 是**数据平台** |
-| `bot_event_log` | 审计日志 | `result` 四态 `success / error / ignored / pending`；`resultData` 只存摘要 |
+| `bot_event_log` | 审计日志 | `result` 四态 `success / error / ignored / pending`；`resultData` 只存摘要（`request` 子对象记 LLM 解析出的筛选键+操作符、投影列、置信度，**不记值**——原文已在 `content` 列） |
 | `bot_event_dedup` | 事件幂等 | 主键 `${platform}:${eventId}`，`INSERT ... ON CONFLICT` 原子占坑 |
 | `bot_pending_action` | 待确认交互 | 主键 `${platform}:${chatId}:${senderId}`，同一人同一会话仅一个待确认 |
 
@@ -445,6 +445,10 @@ flowchart TD
 | 候选展示 | `MAX_CANDIDATE_DISPLAY = 10` | 只把展示出来的候选存进 pending，序号不会越界到用户没见过的记录 |
 | 配置失效即作废 | — | 确认阶段取不到绑定**或场景**（被停用/删除/改了 sceneId）时清掉 pending 并提示重发。场景侧必须 fail-closed：写成 `if (scene && !scene.allowsWrite(...))` 会让权限复查被短路，场景刚停用、60s 窗口内的"确认删除"照样删 |
 
+确认执行后的那条审计要记全 `intent` 与影响范围（删了哪些 recordId、选了第几条、
+改了哪些字段键）。以前这条路径只有一个 `success`，而它恰恰是**破坏性写操作**
+落地的那一刻 —— 出问题时最需要留痕的地方反而什么都没有。
+
 二次确认走 `success: false + awaitingConfirmation: true`，`error` 字段承载提示
 文案：回复用 `⏳` 前缀而非"操作失败"，审计日志记 `pending` 而非 `error`
 ——否则每次 DELETE 都会计一次错误，错误率彻底失去意义。
@@ -677,7 +681,7 @@ tRPC 过程一览（全部 `adminProcedure`）：`listScenes` `upsertScene`
 
 ## 测试
 
-`tests/modules/im-bot/` 下按目录镜像源码结构（440 个用例），覆盖加解密往返、
+`tests/modules/im-bot/` 下按目录镜像源码结构（446 个用例），覆盖加解密往返、
 验签、消息解码、字段渲染与脱敏、日期边界、客户端过滤、翻页续拉与去重与截断
 上报、回复截断、场景匹配与作用域、意图解析、`displayType` 的写入/筛选分流、
 文档结果与回复模板的优先级、以及 dispatcher 的全流程编排（含权限、未知字段

@@ -161,6 +161,46 @@ function splitByMapping(
 }
 
 /**
+ * 筛选值 → 它会生成的操作符（审计用，与 adapter 的实际映射保持大意一致）。
+ */
+function operatorOf(value: unknown): string {
+  if (Array.isArray(value)) return 'contains[]';
+  if (value !== null && typeof value === 'object') {
+    const op = (value as { op?: unknown }).op;
+    return typeof op === 'string' ? op : 'is';
+  }
+  return 'is';
+}
+
+/**
+ * 审计日志里的**请求**摘要 —— LLM 到底解析出了什么。
+ *
+ * 只记结果不记请求的话排障会卡死：一条 QUERY 回了 99 条，从日志看不出是
+ * `物流单号 isEmpty` 真的命中了全表，还是 filters 被解析成空导致的全表扫描。
+ * confidence 同理，以前只在"置信度不足"时以 errorMsg 出现，通过的那些看不到。
+ *
+ * 只记「键 + 操作符」，不记筛选值与写入值：值本来就在 content 列里（用户原话），
+ * 再存一份等于把同样内容多落一遍，还绕过了 sensitive 标记。
+ * `_` 开头的协议保留键记值本身（'or' / 'and' 不是用户数据）。
+ */
+function summarizeRequest(parsed: ParsedIntent): Record<string, unknown> {
+  const filters: Record<string, string> = {};
+  for (const [key, value] of Object.entries(parsed.filters ?? {})) {
+    filters[key] = key.startsWith('_') ? String(value) : operatorOf(value);
+  }
+  const fieldKeys = Object.keys(parsed.fields);
+  return {
+    confidence: parsed.confidence,
+    ...(parsed.resource ? { resource: parsed.resource } : {}),
+    filters,
+    ...(fieldKeys.length > 0 ? { fieldKeys } : {}),
+    ...(parsed.projectFields?.length
+      ? { projectFields: parsed.projectFields }
+      : {}),
+  };
+}
+
+/**
  * 审计日志里的执行结果摘要。
  *
  * 以前直接把整个 ExecuteResult 塞进 jsonb：一次 QUERY 能带上千条记录的
@@ -227,6 +267,15 @@ function renderCandidateList(
 interface PendingOutcome {
   handled: boolean;
   errorMsg?: string;
+  /**
+   * 实际执行的动作与影响范围，用于审计。
+   *
+   * 以前这条路径只记 `{sceneId, result}`：一次"确认删除"在日志里只剩一个
+   * success，改了/删了哪条记录、改了哪些字段全都没有 —— 偏偏破坏性写操作
+   * 才是最需要留痕的地方。
+   */
+  intent?: ParsedIntent['intent'];
+  resultData?: Record<string, unknown>;
 }
 
 /**
@@ -322,8 +371,13 @@ export class Dispatcher {
         if (outcome.handled) {
           await logEvent({
             sceneId: pendingAction.sceneId,
+            intent: outcome.intent,
             result: outcome.errorMsg ? 'error' : 'success',
             errorMsg: outcome.errorMsg,
+            resultData: {
+              pendingType: pendingAction.type,
+              ...outcome.resultData,
+            },
           });
           return;
         }
@@ -431,6 +485,7 @@ export class Dispatcher {
           intent: parsed.intent,
           result: 'error',
           errorMsg: '置信度不足',
+          resultData: { request: summarizeRequest(parsed) },
         });
         return;
       }
@@ -446,6 +501,7 @@ export class Dispatcher {
           intent: parsed.intent,
           result: 'ignored',
           errorMsg: 'UNKNOWN 意图',
+          resultData: { request: summarizeRequest(parsed) },
         });
         return;
       }
@@ -462,6 +518,7 @@ export class Dispatcher {
           intent: parsed.intent,
           result: 'ignored',
           errorMsg: '无写入权限',
+          resultData: { request: summarizeRequest(parsed) },
         });
         return;
       }
@@ -487,7 +544,10 @@ export class Dispatcher {
           : result.awaitingConfirmation
             ? 'pending'
             : 'error',
-        resultData: summarizeResult(result),
+        resultData: {
+          ...summarizeResult(result),
+          request: summarizeRequest(parsed),
+        },
       });
     } catch (err) {
       console.error('[Dispatcher] 处理失败:', err);
@@ -840,7 +900,7 @@ export class Dispatcher {
     if (['取消', '算了', '不用了'].includes(content)) {
       await this.pending.delete(pendingKeyOf(msg));
       await channelAdapter.reply(msg, '已取消操作');
-      return { handled: true };
+      return { handled: true, resultData: { aborted: '用户取消' } };
     }
 
     // 复用挂起时记录的 alias，确认阶段不会漂到别的资源上
@@ -853,7 +913,7 @@ export class Dispatcher {
         msg,
         '⚠️ 表格配置已变更，刚才的操作已作废，请重新发送指令',
       );
-      return { handled: true };
+      return { handled: true, resultData: { aborted: '资源绑定已变更' } };
     }
     const tableConfig = tableConfigOf(binding);
     const adapter = getSpreadsheetAdapter(binding.provider);
@@ -871,7 +931,7 @@ export class Dispatcher {
         msg,
         '⚠️ 场景配置已变更，刚才的操作已作废，请重新发送指令',
       );
-      return { handled: true };
+      return { handled: true, resultData: { aborted: '场景已停用或删除' } };
     }
     if (!scene.allowsWrite(msg.senderId)) {
       await this.pending.delete(pendingKeyOf(msg));
@@ -879,7 +939,7 @@ export class Dispatcher {
         msg,
         '🔒 你的写入权限已变更，刚才的操作已作废',
       );
-      return { handled: true };
+      return { handled: true, resultData: { aborted: '写权限已撤销' } };
     }
 
     if (action.type === 'confirm_delete' && content.includes('确认删除')) {
@@ -895,24 +955,36 @@ export class Dispatcher {
       );
       const failed = results.filter((r) => r.status === 'rejected');
       const okCount = results.length - failed.length;
+      const deletedIds = action.candidates
+        .filter((_, i) => results[i]?.status === 'fulfilled')
+        .map((r) => r.recordId);
       if (failed.length === 0) {
         await channelAdapter.reply(msg, `✅ 已删除 ${okCount} 条记录`);
-      } else {
-        const firstErr =
-          failed[0]?.status === 'rejected'
-            ? String((failed[0] as PromiseRejectedResult).reason)
-            : '';
-        console.error('[Dispatcher] 批量删除部分失败:', failed);
-        await channelAdapter.reply(
-          msg,
-          `⚠️ 已删除 ${okCount}/${results.length} 条，${failed.length} 条失败${firstErr ? `（首条原因：${firstErr.slice(0, 100)}）` : ''}`,
-        );
         return {
           handled: true,
-          errorMsg: `批量删除 ${failed.length}/${results.length} 条失败：${firstErr.slice(0, 200)}`,
+          intent: 'DELETE',
+          resultData: { deleted: okCount, recordIds: deletedIds },
         };
       }
-      return { handled: true };
+      const firstErr =
+        failed[0]?.status === 'rejected'
+          ? String((failed[0] as PromiseRejectedResult).reason)
+          : '';
+      console.error('[Dispatcher] 批量删除部分失败:', failed);
+      await channelAdapter.reply(
+        msg,
+        `⚠️ 已删除 ${okCount}/${results.length} 条，${failed.length} 条失败${firstErr ? `（首条原因：${firstErr.slice(0, 100)}）` : ''}`,
+      );
+      return {
+        handled: true,
+        intent: 'DELETE',
+        errorMsg: `批量删除 ${failed.length}/${results.length} 条失败：${firstErr.slice(0, 200)}`,
+        resultData: {
+          deleted: okCount,
+          failed: failed.length,
+          recordIds: deletedIds,
+        },
+      };
     }
 
     if (action.type === 'confirm_update') {
@@ -937,7 +1009,14 @@ export class Dispatcher {
           tableConfig.fieldMapping,
         );
         await channelAdapter.reply(msg, reply);
-        return { handled: true };
+        return {
+          handled: true,
+          intent: 'UPDATE',
+          resultData: {
+            recordId: target.recordId,
+            fieldKeys: Object.keys(action.updateFields ?? {}),
+          },
+        };
       }
       return { handled: false };
     }
@@ -969,7 +1048,15 @@ export class Dispatcher {
           tableConfig.fieldMapping,
         );
         await channelAdapter.reply(msg, reply);
-        return { handled: true };
+        return {
+          handled: true,
+          intent: 'UPDATE',
+          resultData: {
+            merged: true,
+            recordId: target.recordId,
+            fieldKeys: Object.keys(action.updateFields ?? {}),
+          },
+        };
       }
       if (content.includes('强制新建') || content.includes('新建一条')) {
         await this.pending.delete(pendingKeyOf(msg));
@@ -988,7 +1075,15 @@ export class Dispatcher {
           tableConfig.fieldMapping,
         );
         await channelAdapter.reply(msg, reply);
-        return { handled: true };
+        return {
+          handled: true,
+          intent: 'CREATE',
+          resultData: {
+            forced: true,
+            recordId: record.recordId,
+            fieldKeys: Object.keys(action.updateFields ?? {}),
+          },
+        };
       }
       return { handled: false };
     }
@@ -1021,7 +1116,16 @@ export class Dispatcher {
         tableConfig.fieldMapping,
       );
       await channelAdapter.reply(msg, reply);
-      return { handled: true };
+      return {
+        handled: true,
+        intent: 'UPDATE',
+        resultData: {
+          picked: num,
+          candidateCount: action.candidates.length,
+          recordId: target.recordId,
+          fieldKeys: Object.keys(action.updateFields ?? {}),
+        },
+      };
     }
 
     return { handled: false };

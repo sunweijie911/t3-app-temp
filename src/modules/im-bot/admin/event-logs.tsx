@@ -5,6 +5,7 @@ import {
   Card,
   DatePicker,
   Modal,
+  Popover,
   Select,
   Space,
   Statistic,
@@ -32,6 +33,8 @@ type LogRow = {
   sceneId?: string | null;
   intent?: string | null;
   result: 'success' | 'error' | 'ignored' | 'pending';
+  /** 请求与结果摘要（解析出的筛选键/操作符、影响的记录数与 recordId…） */
+  resultData?: unknown;
   errorMsg?: string | null;
   costMs?: number | null;
   createdAt: Date;
@@ -212,6 +215,39 @@ export default function ImBotEventLogsPage() {
       dataIndex: 'errorMsg',
       ellipsis: true,
       width: 200,
+    },
+    {
+      // 排障最有用的一列：解析出的筛选键/操作符、置信度、影响了哪些记录。
+      // 以前只落库不展示，只能连数据库才看得到
+      title: '详情',
+      dataIndex: 'resultData',
+      width: 90,
+      render: (val: unknown) =>
+        val == null ? (
+          '-'
+        ) : (
+          <Popover
+            content={
+              <pre
+                style={{
+                  margin: 0,
+                  maxWidth: 560,
+                  maxHeight: 420,
+                  overflow: 'auto',
+                  fontSize: 12,
+                }}
+              >
+                {JSON.stringify(val, null, 2)}
+              </pre>
+            }
+            title="请求与结果摘要"
+            trigger="click"
+          >
+            <Button size="small" type="link">
+              查看
+            </Button>
+          </Popover>
+        ),
     },
   ];
 
