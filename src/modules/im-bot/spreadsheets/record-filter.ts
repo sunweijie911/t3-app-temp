@@ -5,8 +5,96 @@ import type { SpreadsheetRecord } from '../core/types';
  *
  * 企微 get_records 与钉钉多维表 records 都没有等价于飞书 search 的服务端
  * filter，所以先拉取再在内存过滤。语义与飞书侧保持一致（含 `_conjunction`
- * 协议），代价是大表查询会多传数据 —— 等确认各自的服务端 filter 参数后可下推。
+ * 协议与**日粒度日期比较**），代价是大表查询会多传数据 ——
+ * 等确认各自的服务端 filter 参数后可下推。
  */
+
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+const CST_OFFSET_MS = 8 * 60 * 60 * 1000;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function isDateStr(v: unknown): v is string {
+  return typeof v === 'string' && DATE_RE.test(v);
+}
+
+/** YYYY-MM-DD → 该日 CST 零点的毫秒值 */
+function dayStartMs(s: string): number {
+  return new Date(`${s}T00:00:00+08:00`).getTime();
+}
+
+/** 毫秒值 → 它在 CST 下所属自然日的 YYYY-MM-DD */
+function cstDayOf(ms: number): string {
+  return new Date(ms + CST_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+/**
+ * 把记录侧的值转成可比较的毫秒值。
+ * 平台读回的日期字段是毫秒数（企微 date 单元格、钉钉裸值都是），
+ * 但也兼容配置成文本列的 'YYYY-MM-DD'。
+ */
+function actualMs(actual: unknown): number | null {
+  if (typeof actual === 'number' && Number.isFinite(actual)) return actual;
+  if (isDateStr(actual)) return dayStartMs(actual);
+  return null;
+}
+
+/**
+ * 日期比较。
+ *
+ * 与飞书 adapter 的 ExactDate 边界一一对应：筛选值是「整天」，
+ * 记录侧是真实时刻（写入时统一落在当天 12:00），所以
+ * `> 当天` 必须从次日零点算起，`<= 当天` 要取到次日零点前。
+ *
+ * 这层以前没有：filterRecords 直接 `String(1778...000) === '2026-05-11'`，
+ * 于是钉钉/企微上**任何按日期的查询都恒返回 0 条** —— 静默给错答案。
+ *
+ * @returns null 表示两侧不构成日期比较，交回普通比较分支
+ */
+function compareAsDate(
+  actual: unknown,
+  expected: unknown,
+  op: string,
+): boolean | null {
+  if (!isDateStr(expected)) return null;
+  const ms = actualMs(actual);
+  if (ms === null) return null;
+
+  const start = dayStartMs(expected);
+  const end = start + ONE_DAY_MS;
+  switch (op) {
+    case '>':
+      return ms >= end;
+    case '>=':
+      return ms >= start;
+    case '<':
+      return ms < start;
+    case '<=':
+      return ms < end;
+    case '!=':
+      return cstDayOf(ms) !== expected;
+    default:
+      return cstDayOf(ms) === expected;
+  }
+}
+
+/** between：闭区间「起始日 00:00 ~ 结束日 23:59:59.999」，与飞书侧一致 */
+function matchBetween(actual: unknown, value: unknown): boolean {
+  if (!Array.isArray(value) || value.length !== 2) return false;
+  const [rawStart, rawEnd] = value as [unknown, unknown];
+  const ms = actualMs(actual);
+  if (ms === null) {
+    // 非日期字段的 between 退化为数值区间
+    const n = Number(actual);
+    if (Number.isNaN(n)) return false;
+    return n >= Number(rawStart) && n <= Number(rawEnd);
+  }
+  const lower = isDateStr(rawStart) ? dayStartMs(rawStart) : Number(rawStart);
+  const upper = isDateStr(rawEnd)
+    ? dayStartMs(rawEnd) + ONE_DAY_MS
+    : Number(rawEnd) + 1;
+  return ms >= lower && ms < upper;
+}
+
 export function filterRecords(
   records: SpreadsheetRecord[],
   filters: Record<string, unknown>,
@@ -23,8 +111,9 @@ export function filterRecords(
       : String(actual ?? '');
     if (expected !== null && typeof expected === 'object') {
       const { op, value } = expected as { op?: string; value?: unknown };
+      const opKey = (op ?? '').toLowerCase();
       const v = String(value ?? '');
-      switch ((op ?? '').toLowerCase()) {
+      switch (opKey) {
         case 'contains':
         case '~':
           return actualStr.includes(v);
@@ -32,22 +121,27 @@ export function filterRecords(
           return actualStr === '';
         case 'isnotempty':
           return actualStr !== '';
+        case 'between':
+          return matchBetween(actual, value);
         case '!=':
         case 'isnot':
-          return actualStr !== v;
+          return compareAsDate(actual, value, '!=') ?? actualStr !== v;
         case '>':
-          return Number(actual) > Number(value);
         case '>=':
-          return Number(actual) >= Number(value);
         case '<':
-          return Number(actual) < Number(value);
         case '<=':
-          return Number(actual) <= Number(value);
+          return (
+            compareAsDate(actual, value, opKey) ??
+            compareNumeric(actual, value, opKey)
+          );
         default:
-          return actualStr === v;
+          return compareAsDate(actual, value, '=') ?? actualStr === v;
       }
     }
-    return actualStr === String(expected ?? '');
+    return (
+      compareAsDate(actual, expected, '=') ??
+      actualStr === String(expected ?? '')
+    );
   };
 
   return records.filter((r) =>
@@ -55,4 +149,21 @@ export function filterRecords(
       ? keys.some((k) => matchOne(r, k))
       : keys.every((k) => matchOne(r, k)),
   );
+}
+
+function compareNumeric(actual: unknown, value: unknown, op: string): boolean {
+  const a = Number(actual);
+  const b = Number(value);
+  switch (op) {
+    case '>':
+      return a > b;
+    case '>=':
+      return a >= b;
+    case '<':
+      return a < b;
+    case '<=':
+      return a <= b;
+    default:
+      return false;
+  }
 }

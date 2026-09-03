@@ -307,3 +307,59 @@ describe('DingtalkChannelAdapter.reply', () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe('DingtalkChannelAdapter.reply — 按平台字节上限截断', () => {
+  const msg = {
+    platform: 'dingtalk' as const,
+    eventId: 'e1',
+    messageId: 'msg-1',
+    chatId: 'cid-1',
+    chatType: 'group' as const,
+    senderId: 'zhangsan',
+    senderName: '张三',
+    content: 'hi',
+    timestamp: Date.now(),
+    raw: basePayload,
+  };
+
+  it('超长文本按 UTF-8 字节截断后再发', async () => {
+    // 回归：core 的 clampReply 是按字符的单一阈值(20000)，面向飞书；
+    // 钉钉按字节计，20000 个汉字 = 60KB，整条会被平台拒收
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ errcode: 0 }), { status: 200 }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await adapter.reply(msg, '汉'.repeat(20_000));
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const sent = (
+      JSON.parse(String(init.body)) as { text: { content: string } }
+    ).text.content;
+    expect(Buffer.byteLength(sent, 'utf8')).toBeLessThanOrEqual(
+      adapter.maxReplyBytes,
+    );
+    expect(sent).toContain('已截断');
+    vi.unstubAllGlobals();
+  });
+});
+
+describe('DingtalkChannelAdapter.decode — robotCode 含正则元字符', () => {
+  it('robotCode 里的 . * ( ) 被转义，不会当成模式解析', async () => {
+    // 回归：robotCode 直接拼进 new RegExp()，含元字符时轻则剥错前缀重则抛异常
+    mockCreds.mockResolvedValue({
+      botSecret: SECRET,
+      robotCode: 'ding.bot(v2)*',
+    });
+    const body = {
+      ...basePayload,
+      text: { content: '@ding.bot(v2)* 新增项目 督导2.0' },
+    };
+    const res = await adapter.decode(makeReq(body));
+
+    expect(res.kind).toBe('ok');
+    if (res.kind === 'ok') expect(res.message.content).toBe('新增项目 督导2.0');
+  });
+});

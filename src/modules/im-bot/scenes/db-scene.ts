@@ -135,8 +135,16 @@ export class DatabaseDrivenScene implements BotScene {
   ): string {
     // 失败分支同样要 clamp：dispatcher 的候选列表 / 确认提示走的就是 result.error，
     // 不截断会拼出超长文本，导致 IM 侧发送失败、用户一条回复都收不到
-    if (!result.success)
+    if (!result.success) {
+      // 二次确认不是失败：DELETE 确认、单条 UPDATE 确认、uniqueKey 撞车、
+      // 多条命中选序号四条路径都走 success=false + error 承载提示文案，
+      // 统一加「❌ 操作失败」前缀会把设计正路显示成报错，用户以为操作没成功。
+      // （审计日志侧已按 awaitingConfirmation 记 pending，这里补上用户可见的一半）
+      if (result.awaitingConfirmation) {
+        return clampReply(`⏳ ${result.error ?? '请确认后继续'}`);
+      }
       return clampReply(`❌ 操作失败: ${result.error ?? '未知错误'}`);
+    }
 
     // 有自定义回复模板时使用模板
     if (this.replyTemplate) {
@@ -169,12 +177,10 @@ export class DatabaseDrivenScene implements BotScene {
       if (result.records.length === 0)
         return `📊 查询结果: 未找到匹配的${this.name}`;
 
-      // 飞书 adapter 单次查询硬上限：PAGE_SIZE(200) × MAX_PAGES(5) = 1000。
-      // 命中上限说明真实匹配可能更多被静默截断，提示用户缩窄条件
-      const HIT_HARD_LIMIT = 1000;
-      const hitLimit = result.records.length >= HIT_HARD_LIMIT;
-      const limitHint = hitLimit
-        ? `\n\n⚠️ 已达查询上限 ${HIT_HARD_LIMIT} 条，可能还有未展示的数据，请缩窄筛选条件`
+      // 命中 adapter 的翻页硬上限说明真实匹配可能更多、被静默截断了，
+      // 提示用户缩窄条件。上限各平台不同，由 adapter 声明后经 ExecuteResult 传过来
+      const limitHint = result.hitQueryLimit
+        ? `\n\n⚠️ 已达单次查询上限 ${result.records.length} 条，可能还有未展示的数据，请缩窄筛选条件`
         : '';
 
       // 投影模式：LLM 标记了 projectFields → 只渲染主标识 + 指定列，

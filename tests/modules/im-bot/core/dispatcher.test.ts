@@ -36,7 +36,10 @@ vi.mock('@/modules/im-bot/documents/factory', () => ({
 }));
 
 import type { ChannelAdapter } from '@/modules/im-bot/channels/types';
-import { DESTRUCTIVE_CONCURRENCY } from '@/modules/im-bot/constants';
+import {
+  DESTRUCTIVE_CONCURRENCY,
+  MAX_CANDIDATE_DISPLAY,
+} from '@/modules/im-bot/constants';
 import { MemoryDedupStore } from '@/modules/im-bot/core/dedup';
 import { Dispatcher } from '@/modules/im-bot/core/dispatcher';
 import { chatCompletion } from '@/modules/im-bot/core/llm';
@@ -84,6 +87,7 @@ function makeChannel(): ChannelAdapter & { lastReply?: string } {
 function makeAdapter(): SpreadsheetAdapter {
   return {
     platform: 'feishu',
+    queryHardLimit: 1000,
     createRecord: vi.fn(),
     updateRecord: vi.fn(),
     queryRecords: vi.fn(),
@@ -893,7 +897,9 @@ describe('Dispatcher — 场景匹配失败与 LLM 故障要区分开', () => {
     const events: Array<{ result?: string; errorMsg?: string }> = [];
     const d = new Dispatcher({
       getBinding: () => baseBinding,
-      onEvent: (e) => events.push(e),
+      onEvent: (e) => {
+        events.push(e);
+      },
     });
     d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
     const channel = makeChannel();
@@ -913,7 +919,9 @@ describe('Dispatcher — 场景匹配失败与 LLM 故障要区分开', () => {
     const events: Array<{ result?: string; errorMsg?: string }> = [];
     const d = new Dispatcher({
       getBinding: () => baseBinding,
-      onEvent: (e) => events.push(e),
+      onEvent: (e) => {
+        events.push(e);
+      },
     });
     d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
     const channel = makeChannel();
@@ -954,7 +962,9 @@ describe('Dispatcher — 二次确认记 pending 而不是 error', () => {
     const events: Array<{ result?: string; intent?: string }> = [];
     const d = new Dispatcher({
       getBinding: () => binding,
-      onEvent: (e) => events.push(e),
+      onEvent: (e) => {
+        events.push(e);
+      },
     });
     d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
     return { d, events };
@@ -1060,5 +1070,285 @@ describe('Dispatcher — 二次确认记 pending 而不是 error', () => {
 
     await d.process(makeMsg({ content: '查询项目 x' }), channel);
     expect(events[0]?.result).toBe('success');
+  });
+});
+
+describe('Dispatcher — 未知字段守卫', () => {
+  it('CREATE：丢掉 fieldMapping 里没有的字段，其余照写并在回复里点名', async () => {
+    // 回归：adapter 用 `fieldMapping[key] ?? key` 原名透传未知字段，
+    // 飞书回 InvalidFieldName —— 整条 CREATE 失败，用户只看到一句笼统报错
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"CREATE","fields":{"项目名称":"督导2.0","星座":"处女座"},"confidence":0.95,"summary":"新增"}',
+    );
+    (adapter.createRecord as ReturnType<typeof vi.fn>).mockResolvedValue({
+      recordId: 'r1',
+      fields: { 项目名称: '督导2.0' },
+    });
+
+    await d.process(makeMsg({ content: '新增项目 督导2.0' }), channel);
+
+    expect(adapter.createRecord).toHaveBeenCalledWith(expect.anything(), {
+      项目名称: '督导2.0',
+    });
+    expect(channel.lastReply).toContain('已忽略未配置的字段：星座');
+  });
+
+  it('CREATE：字段全是未知的 → 不调 adapter，提示可用字段', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"CREATE","fields":{"星座":"处女座"},"confidence":0.95,"summary":"新增"}',
+    );
+
+    await d.process(makeMsg({ content: '新增项目' }), channel);
+
+    expect(adapter.createRecord).not.toHaveBeenCalled();
+    expect(channel.lastReply).toContain('星座');
+    expect(channel.lastReply).toContain('项目名称');
+  });
+
+  it('QUERY：未知筛选字段直接报错，绝不静默放宽查询范围', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"QUERY","filters":{"星座":"处女座"},"confidence":0.95,"summary":"查"}',
+    );
+
+    await d.process(makeMsg({ content: '查项目' }), channel);
+
+    expect(adapter.queryRecords).not.toHaveBeenCalled();
+    expect(channel.lastReply).toContain('星座');
+  });
+
+  it('DELETE：未知筛选字段被拒，不会退化成"无筛选条件"后命中全表', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"DELETE","filters":{"星座":"处女座"},"confidence":0.95,"summary":"删"}',
+    );
+
+    await d.process(makeMsg({ content: '删除项目' }), channel);
+
+    expect(adapter.queryRecords).not.toHaveBeenCalled();
+    expect(adapter.deleteRecord).not.toHaveBeenCalled();
+  });
+
+  it('保留键 _conjunction 不会被当成未知字段', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"QUERY","filters":{"项目名称":"a","_conjunction":"or"},"confidence":0.95,"summary":"查"}',
+    );
+
+    await d.process(makeMsg({ content: '查项目' }), channel);
+
+    expect(adapter.queryRecords).toHaveBeenCalledWith(expect.anything(), {
+      项目名称: 'a',
+      _conjunction: 'or',
+    });
+  });
+
+  it('绑定没配 fieldMapping 时整体透传（不把这条绑定的写入全禁掉）', async () => {
+    const d = makeDispatcher({ ...baseBinding, fieldMapping: {} });
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"CREATE","fields":{"随便什么字段":"v"},"confidence":0.95,"summary":"新增"}',
+    );
+    (adapter.createRecord as ReturnType<typeof vi.fn>).mockResolvedValue({
+      recordId: 'r1',
+      fields: {},
+    });
+
+    await d.process(makeMsg({ content: '新增项目' }), channel);
+
+    expect(adapter.createRecord).toHaveBeenCalledWith(expect.anything(), {
+      随便什么字段: 'v',
+    });
+  });
+});
+
+describe('Dispatcher — 候选序号与操作人字段', () => {
+  it('select_record 只把展示出来的候选存进 pending（序号不会越界到没见过的记录）', async () => {
+    // 回归：候选存全量(≤20)、只列前 10 条，用户回 15 就能更新一条自己没见过的记录
+    const pendingStore = new MemoryPendingActionStore();
+    const d = new Dispatcher({
+      getBinding: () => baseBinding,
+      pendingStore,
+      dedupStore: new MemoryDedupStore(),
+    });
+    d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const many = Array.from({ length: 15 }, (_, i) => ({
+      recordId: `r${i}`,
+      fields: { 项目名称: `p${i}` },
+    }));
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue(many);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"UPDATE","filters":{"项目名称":"p"},"fields":{"Node版本":"20"},"confidence":0.9,"summary":""}',
+    );
+
+    const msg = makeMsg({ content: '把项目 p 的 Node 版本改成 20' });
+    await d.process(msg, channel);
+
+    const pending = await pendingStore.get({
+      platform: msg.platform,
+      chatId: msg.chatId,
+      senderId: msg.senderId,
+    });
+    expect(pending?.candidates).toHaveLength(MAX_CANDIDATE_DISPLAY);
+    // 提示语里给出的可选上界与真正可选的条数一致
+    expect(channel.lastReply).toContain(
+      `共 15 条，仅列出前 ${MAX_CANDIDATE_DISPLAY} 条`,
+    );
+  });
+
+  it('操作人字段用中文键名（录入人）时也会注入发送者', async () => {
+    // 回归：以前只认字面的 'operator'，而字段选择器生成的逻辑键就是中文字段名，
+    // 于是表里明明有「录入人」列，机器人却从来不写
+    const d = makeDispatcher({
+      ...baseBinding,
+      fieldMapping: { 项目名称: '项目名称', 录入人: '录入人' },
+    });
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"CREATE","fields":{"项目名称":"督导2.0"},"confidence":0.95,"summary":"新增"}',
+    );
+    (adapter.createRecord as ReturnType<typeof vi.fn>).mockResolvedValue({
+      recordId: 'r1',
+      fields: {},
+    });
+
+    await d.process(
+      makeMsg({ content: '新增项目 督导2.0', senderName: '李四' }),
+      channel,
+    );
+
+    expect(adapter.createRecord).toHaveBeenCalledWith(expect.anything(), {
+      项目名称: '督导2.0',
+      录入人: '李四',
+    });
+  });
+
+  it('没有任何操作人字段时不注入（避免写未知字段整条失败）', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"CREATE","fields":{"项目名称":"督导2.0"},"confidence":0.95,"summary":"新增"}',
+    );
+    (adapter.createRecord as ReturnType<typeof vi.fn>).mockResolvedValue({
+      recordId: 'r1',
+      fields: {},
+    });
+
+    await d.process(makeMsg({ content: '新增项目 督导2.0' }), channel);
+
+    expect(adapter.createRecord).toHaveBeenCalledWith(expect.anything(), {
+      项目名称: '督导2.0',
+    });
+  });
+});
+
+describe('Dispatcher — 审计事件', () => {
+  it('resultData 只存摘要，不落记录字段原文', async () => {
+    // 回归：以前把整个 ExecuteResult 塞进 jsonb —— 一次 QUERY 上千条记录的
+    // 字段原文进库，且脱敏只作用于 IM 回复层，等于把数据明文又存了一份
+    const events: Array<{ resultData?: unknown }> = [];
+    const d = new Dispatcher({
+      getBinding: () => baseBinding,
+      onEvent: (e) => {
+        events.push(e);
+      },
+    });
+    d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        recordId: 'r1',
+        fields: { 项目名称: '督导2.0', 手机号: '13800138000' },
+      },
+    ]);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"QUERY","filters":{"项目名称":"督导2.0"},"confidence":0.95,"summary":"查"}',
+    );
+
+    await d.process(makeMsg({ content: '查项目 督导2.0' }), channel);
+
+    const logged = events.at(-1)?.resultData as Record<string, unknown>;
+    expect(logged).toMatchObject({
+      success: true,
+      recordCount: 1,
+      recordIds: ['r1'],
+    });
+    // 字段原文一律不进日志
+    expect(JSON.stringify(logged)).not.toContain('13800138000');
+    expect(JSON.stringify(logged)).not.toContain('督导2.0');
+  });
+
+  it('onEvent 返回 Promise 时会被等待（serverless 上不 await 会丢日志）', async () => {
+    let settled = false;
+    const d = new Dispatcher({
+      getBinding: () => baseBinding,
+      onEvent: async () => {
+        await new Promise((r) => setTimeout(r, 10));
+        settled = true;
+      },
+    });
+    d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"QUERY","filters":{"项目名称":"x"},"confidence":0.95,"summary":"查"}',
+    );
+
+    await d.process(makeMsg({ content: '查项目 x' }), channel);
+
+    expect(settled).toBe(true);
+  });
+
+  it('审计回调抛错不影响用户流程，也不会被当成业务错误再记一次', async () => {
+    const d = new Dispatcher({
+      getBinding: () => baseBinding,
+      onEvent: () => {
+        throw new Error('日志库挂了');
+      },
+    });
+    d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"QUERY","filters":{"项目名称":"x"},"confidence":0.95,"summary":"查"}',
+    );
+
+    await expect(
+      d.process(makeMsg({ content: '查项目 x' }), channel),
+    ).resolves.toBeUndefined();
+    expect(channel.lastReply).not.toContain('服务暂时繁忙');
   });
 });

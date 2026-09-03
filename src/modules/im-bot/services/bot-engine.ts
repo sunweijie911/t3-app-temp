@@ -90,8 +90,13 @@ function resolveBinding(
   return list.find((b) => b.isDefault) ?? list[0] ?? null;
 }
 
-function logBotEvent(event: BotEvent) {
-  db.insert(botEventLogs)
+/**
+ * 写审计日志。返回 Promise 并由 dispatcher await —— 不 await 的话，
+ * 这条插入会挂在 after() 回调之外，serverless 响应返回即冻结，日志随机丢失。
+ */
+async function logBotEvent(event: BotEvent) {
+  await db
+    .insert(botEventLogs)
     .values({
       platform: event.platform,
       eventId: event.eventId,
@@ -165,18 +170,32 @@ async function getDispatcher(): Promise<Dispatcher> {
 }
 
 /**
- * 立即失效本实例的配置缓存。其它实例靠 CONFIG_TTL_MS 收敛
+ * 立即失效本实例的**场景/绑定**配置缓存。其它实例靠 CONFIG_TTL_MS 收敛
  * —— 真正的跨实例即时生效需要 pub/sub，目前用 TTL 兜底。
+ *
+ * 不再顺手 reset 三个平台的 token manager：改个场景名和平台凭证没有关系，
+ * 却会把三个平台还没到期的 access_token 全丢掉，下一条消息重新换取。
+ * 凭证真的变了走 reloadPlatformCredentials()。
  */
 export function reloadBotConfig() {
   dispatcher = null;
   dispatcherExpiresAt = 0;
   lastInitError = null;
+}
+
+/**
+ * 平台凭证变更后失效凭证缓存与已缓存的 access_token。
+ * 只 reset 指定平台；不传则全部（比如不确定改了哪个）。
+ */
+export function reloadPlatformCredentials(platform?: BotPlatform) {
   resetCredentialsCache();
-  feishuTokenManager.reset();
-  wecomTokenManager.reset();
-  dingtalkTokenManager.reset();
-  resetFeishuChatNameCache();
+  if (!platform || platform === 'feishu') {
+    feishuTokenManager.reset();
+    // 群名缓存是用飞书 token 拉的，凭证换了要一并作废
+    resetFeishuChatNameCache();
+  }
+  if (!platform || platform === 'wecom') wecomTokenManager.reset();
+  if (!platform || platform === 'dingtalk') dingtalkTokenManager.reset();
 }
 
 /**

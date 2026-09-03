@@ -19,8 +19,10 @@ import type { SpreadsheetAdapter } from './types';
  */
 
 const API_BASE = 'https://api.dingtalk.com/v2.0/notable/bases';
-/** 单次查询拉取上限，与飞书/企微侧对齐 */
-const QUERY_LIMIT = 1000;
+/** 单页拉取条数。保持 1000 不变 —— 首个请求与改动前完全一致，不引入回归 */
+const PAGE_SIZE = 1000;
+/** 续拉页数上限，防止超大表把内存和时延拖垮 */
+const MAX_PAGES = 5;
 
 async function dingtalkApi(
   path: string,
@@ -118,6 +120,7 @@ function readRecordId(r: DingtalkRecord): string {
 
 export class DingtalkSheetAdapter implements SpreadsheetAdapter {
   readonly platform = 'dingtalk' as const;
+  readonly queryHardLimit = PAGE_SIZE * MAX_PAGES;
 
   async createRecord(
     config: SpreadsheetTableConfig,
@@ -159,16 +162,49 @@ export class DingtalkSheetAdapter implements SpreadsheetAdapter {
     config: SpreadsheetTableConfig,
     filters: Record<string, unknown>,
   ): Promise<SpreadsheetRecord[]> {
-    const data = await dingtalkApi(
-      `/${config.workspaceId}/sheets/${config.tableId}/records?maxResults=${QUERY_LIMIT}`,
-      'GET',
-    );
-    const all = ((data.records as DingtalkRecord[] | undefined) ?? []).map(
-      (r) => ({
-        recordId: readRecordId(r),
-        fields: mapFieldsFromRead(r.fields ?? {}, config.fieldMapping),
-      }),
-    );
+    // 续拉：钉钉按 nextToken 游标翻页。以前只发一个请求，超过单页的记录
+    // 被静默丢掉，再叠加内存过滤 —— 大表上表现为"查不到"而不是报错。
+    //
+    // 游标字段名按响应实际返回的探测（不同版本文档里出现过 nextToken /
+    // next_token），拿不到就只取第一页 —— 与改动前行为完全一致，不会回归。
+    const all: SpreadsheetRecord[] = [];
+    const seen = new Set<string>();
+    let nextToken: string | undefined;
+
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const query = `maxResults=${PAGE_SIZE}${
+        nextToken ? `&nextToken=${encodeURIComponent(nextToken)}` : ''
+      }`;
+      const data = await dingtalkApi(
+        `/${config.workspaceId}/sheets/${config.tableId}/records?${query}`,
+        'GET',
+      );
+      const rows = (data.records as DingtalkRecord[] | undefined) ?? [];
+      let fresh = 0;
+      for (const r of rows) {
+        const recordId = readRecordId(r);
+        // 游标不被支持时下一页会原样回第一页，靠 id 去重挡住重复计数
+        if (recordId && seen.has(recordId)) continue;
+        if (recordId) seen.add(recordId);
+        fresh++;
+        all.push({
+          recordId,
+          fields: mapFieldsFromRead(r.fields ?? {}, config.fieldMapping),
+        });
+      }
+
+      nextToken =
+        typeof data.nextToken === 'string'
+          ? data.nextToken
+          : typeof data.next_token === 'string'
+            ? data.next_token
+            : undefined;
+      // 游标分页以 nextToken 为准：钉钉可能返回不足 maxResults 的一页却仍有后续，
+      // 用"短页即止"会漏数据（那是 offset 分页才成立的启发式）。
+      // fresh === 0 兜住"游标不被支持、下一页原样回第一页"的情形。
+      if (!nextToken || fresh === 0) break;
+    }
+
     return filterRecords(all, filters);
   }
 

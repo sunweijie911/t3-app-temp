@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { getFeishuChatName } from '../auth/feishu-chat';
 import { feishuTokenManager } from '../auth/feishu-token';
 import { getFeishuUserName } from '../auth/feishu-user';
+import { clampReplyBytes } from '../core/field-render';
 import type { ChatType, UnifiedMessage } from '../core/types';
 import { getFeishuCredentials } from '../services/credentials';
 import type { ChannelAdapter, DecodeResult } from './types';
@@ -18,6 +19,8 @@ function decryptFeishuEvent(encrypt: string, key: string): string {
 
 export class FeishuChannelAdapter implements ChannelAdapter {
   readonly platform = 'feishu' as const;
+  /** 飞书文本消息 content 上限约 30KB，取整留余量 */
+  readonly maxReplyBytes = 30_000;
 
   async decode(req: Request): Promise<DecodeResult> {
     let body: Record<string, unknown>;
@@ -158,7 +161,8 @@ export class FeishuChannelAdapter implements ChannelAdapter {
     };
   }
 
-  async reply(msg: UnifiedMessage, content: string): Promise<void> {
+  async reply(msg: UnifiedMessage, rawContent: string): Promise<void> {
+    const content = clampReplyBytes(rawContent, this.maxReplyBytes);
     const token = await feishuTokenManager.getToken();
     try {
       const res = await fetch(

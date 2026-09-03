@@ -35,7 +35,12 @@ interface DispatcherConfig {
    * 与消息来自哪个 IM 无关。以前是 getTableConfig(sceneId, msg.platform)。
    */
   getBinding: (sceneId: string, alias?: string) => ResourceBinding | null;
-  onEvent?: (event: BotEvent) => void;
+  /**
+   * 审计事件回调。允许返回 Promise —— dispatcher 会 await：
+   * 整个 process 跑在 Next 的 after() 里，游离的 fire-and-forget 写库
+   * 会在 after 回调 resolve 时被冻结掉，serverless 上表现为日志随机丢失。
+   */
+  onEvent?: (event: BotEvent) => void | Promise<void>;
   /**
    * 幂等与待确认状态的存储。默认是进程内实现，**只适合单实例和测试**；
    * 多实例部署必须注入 DB 实现，否则平台重试会重复写数据、
@@ -60,6 +65,91 @@ function hasEffectiveFilters(
     ([key, value]) =>
       !key.startsWith('_') && value != null && value !== '' && value !== '*',
   );
+}
+
+/**
+ * fieldMapping 里表示「操作人」的约定逻辑键，按顺序取第一个命中的。
+ *
+ * 以前只认字面的 `operator`，而 admin 的字段选择器生成的逻辑键
+ * 就是平台字段名本身（中文居多），于是这条注入实际上从不触发 ——
+ * 表里明明有「录入人」列，机器人却从来不写。
+ */
+const OPERATOR_FIELD_KEYS = [
+  'operator',
+  '操作人',
+  '录入人',
+  '提交人',
+  '填写人',
+  '记录人',
+] as const;
+
+function resolveOperatorKey(
+  fieldMapping: Record<string, FieldMappingValue>,
+): string | null {
+  return OPERATOR_FIELD_KEYS.find((k) => k in fieldMapping) ?? null;
+}
+
+/**
+ * 按 fieldMapping 白名单切分 LLM 产出的字段。
+ *
+ * LLM 幻觉出一个表里没有的字段时，adapter 会用原名把它透传给平台
+ * （`fieldMapping[key] ?? key`），飞书直接回 InvalidFieldName —— **整条写入失败**，
+ * 用户只看到一句笼统的报错。写入侧丢掉未知字段并回显，比整条失败可用得多。
+ *
+ * 以 `_` 开头的保留键（如 `_conjunction`）不参与白名单，原样带过。
+ * 绑定没配 fieldMapping 时整体透传，否则等于把这条绑定的写入全禁掉。
+ */
+function splitByMapping(
+  input: Record<string, unknown>,
+  fieldMapping: Record<string, FieldMappingValue>,
+): { known: Record<string, unknown>; unknownKeys: string[] } {
+  const known: Record<string, unknown> = {};
+  const unknownKeys: string[] = [];
+  const hasMapping = Object.keys(fieldMapping).length > 0;
+  for (const [k, v] of Object.entries(input)) {
+    if (k.startsWith('_') || !hasMapping || k in fieldMapping) {
+      known[k] = v;
+      continue;
+    }
+    unknownKeys.push(k);
+  }
+  return { known, unknownKeys };
+}
+
+/**
+ * 审计日志里的执行结果摘要。
+ *
+ * 以前直接把整个 ExecuteResult 塞进 jsonb：一次 QUERY 能带上千条记录的
+ * **字段原文**进库，既撑爆日志表，也等于把数据明文落了一份 ——
+ * 脱敏只作用于 IM 回复层，日志表里没有那道关。
+ * 排查需要的是「做了什么、影响了几条」，不是记录内容本身。
+ */
+function summarizeResult(result: ExecuteResult): Record<string, unknown> {
+  const MAX_LOGGED_IDS = 50;
+  return {
+    success: result.success,
+    ...(result.awaitingConfirmation ? { awaitingConfirmation: true } : {}),
+    ...(result.record ? { recordId: result.record.recordId } : {}),
+    ...(result.records
+      ? {
+          recordCount: result.records.length,
+          recordIds: result.records
+            .slice(0, MAX_LOGGED_IDS)
+            .map((r) => r.recordId),
+        }
+      : {}),
+    ...(result.doc
+      ? { docTitle: result.doc.title, docTextLength: result.doc.text.length }
+      : {}),
+    ...(result.appendedText
+      ? { appendedLength: result.appendedText.length }
+      : {}),
+    ...(result.droppedFields?.length
+      ? { droppedFields: result.droppedFields }
+      : {}),
+    // 确认提示里带的是已脱敏的候选摘要，仍然只留个头部够定位就行
+    ...(result.error ? { error: result.error.slice(0, 200) } : {}),
+  };
 }
 
 /**
@@ -124,7 +214,7 @@ export class Dispatcher {
     channelAdapter: ChannelAdapter,
   ): Promise<void> {
     const startTime = Date.now();
-    const logEvent = (partial: Partial<BotEvent>) => {
+    const logEvent = async (partial: Partial<BotEvent>) => {
       const event: BotEvent = {
         platform: msg.platform,
         eventId: msg.eventId,
@@ -138,7 +228,12 @@ export class Dispatcher {
         createdAt: new Date(),
         ...partial,
       };
-      this.config.onEvent?.(event);
+      // 审计写库失败绝不能打断用户流程，也不能被外层 catch 当成业务错误再记一次
+      try {
+        await this.config.onEvent?.(event);
+      } catch (err) {
+        console.error('[Dispatcher] 审计事件回调失败:', err);
+      }
     };
 
     try {
@@ -147,7 +242,7 @@ export class Dispatcher {
       //    claim 是原子的：抢不到说明这条事件已被处理过。
       const claimed = await this.dedup.claim(msg.platform, msg.eventId);
       if (!claimed) {
-        logEvent({ result: 'ignored' });
+        await logEvent({ result: 'ignored' });
         return;
       }
 
@@ -161,7 +256,7 @@ export class Dispatcher {
           channelAdapter,
         );
         if (handled) {
-          logEvent({ sceneId: pendingAction.sceneId, result: 'success' });
+          await logEvent({ sceneId: pendingAction.sceneId, result: 'success' });
           return;
         }
         // 无法识别的输入：提示用户并保留 PendingAction，不走正常流程
@@ -173,7 +268,7 @@ export class Dispatcher {
           select_record: `请回复序号(1~${pendingAction.candidates.length})选择，或回复"取消"放弃`,
         };
         await channelAdapter.reply(msg, promptByType[pendingAction.type]);
-        logEvent({ sceneId: pendingAction.sceneId, result: 'ignored' });
+        await logEvent({ sceneId: pendingAction.sceneId, result: 'ignored' });
         return;
       }
 
@@ -198,7 +293,7 @@ export class Dispatcher {
             ? '⚠️ 语义识别服务暂时不可用，请稍后再试'
             : this.getHelpText(),
         );
-        logEvent({
+        await logEvent({
           result: matchFailure ? 'error' : 'ignored',
           errorMsg: matchFailure,
         });
@@ -233,7 +328,7 @@ export class Dispatcher {
           msg,
           '🤔 无法理解您的消息，请用更明确的描述再试一次',
         );
-        logEvent({
+        await logEvent({
           sceneId: scene.id,
           result: 'error',
           errorMsg: 'JSON 提取失败',
@@ -247,7 +342,7 @@ export class Dispatcher {
           msg,
           '🤔 无法理解您的消息，请用更明确的描述再试一次',
         );
-        logEvent({
+        await logEvent({
           sceneId: scene.id,
           result: 'error',
           errorMsg: 'parseResult 失败',
@@ -261,7 +356,7 @@ export class Dispatcher {
           msg,
           `🤔 不太确定您的意图，解析结果：${parsed.summary}\n\n请用更明确的描述再试一次`,
         );
-        logEvent({
+        await logEvent({
           sceneId: scene.id,
           intent: parsed.intent,
           result: 'error',
@@ -276,7 +371,7 @@ export class Dispatcher {
           msg,
           `🤔 暂时不知道您想做什么：${parsed.summary || '没拿到具体操作'}\n\n可以试试：\n• 查询：「${scene.name} ...的 xxx」\n• 新增：「新增/记录 ...」\n• 更新：「把 ... 改成 ...」\n• 删除：「删除 ...」`,
         );
-        logEvent({
+        await logEvent({
           sceneId: scene.id,
           intent: parsed.intent,
           result: 'ignored',
@@ -291,8 +386,12 @@ export class Dispatcher {
       // 8. 回复（fieldMapping 用于渲染时取 label / displayType；缺失时退化为 logicalKey）
       const binding = this.config.getBinding(scene.id, parsed.resource);
       const reply = scene.formatReply(parsed, result, binding?.fieldMapping);
-      await channelAdapter.reply(msg, reply);
-      logEvent({
+      // 被丢弃的字段必须点名：否则用户以为自己说的内容都记下来了
+      const dropped = result.droppedFields?.length
+        ? `\n\n⚠️ 已忽略未配置的字段：${result.droppedFields.join('、')}`
+        : '';
+      await channelAdapter.reply(msg, reply + dropped);
+      await logEvent({
         sceneId: scene.id,
         intent: parsed.intent,
         // 挂起二次确认是设计正路，记 pending —— 记 error 会让统计面板的
@@ -302,7 +401,7 @@ export class Dispatcher {
           : result.awaitingConfirmation
             ? 'pending'
             : 'error',
-        resultData: result,
+        resultData: summarizeResult(result),
       });
     } catch (err) {
       console.error('[Dispatcher] 处理失败:', err);
@@ -314,7 +413,7 @@ export class Dispatcher {
             replyErr,
           );
         });
-      logEvent({
+      await logEvent({
         result: 'error',
         errorMsg: err instanceof Error ? err.message : '未知错误',
       });
@@ -399,17 +498,47 @@ export class Dispatcher {
     // adapter 按**数据所在平台**选，而不是消息来源平台 —— 这是跨平台访问的落点
     const adapter = getSpreadsheetAdapter(binding.provider);
 
+    // 未知字段守卫。写入侧丢掉并回显，筛选侧直接拒绝 ——
+    // 筛选条件被悄悄丢掉会让查询范围变宽（DELETE/UPDATE 上就是放大影响面），
+    // 宁可报一句能照着改的错，也不能静默给出更大的结果集。
+    const mapping = tableConfig.fieldMapping;
+    const { known: fields, unknownKeys: droppedFields } = splitByMapping(
+      parsed.fields,
+      mapping,
+    );
+    const { known: filters, unknownKeys: badFilterKeys } = splitByMapping(
+      parsed.filters ?? {},
+      mapping,
+    );
+    if (badFilterKeys.length > 0) {
+      const available = Object.keys(mapping).join('、');
+      return {
+        success: false,
+        error: `筛选条件里的「${badFilterKeys.join('、')}」不是「${binding.alias}」里的字段，没法按它查。可用字段：${available}`,
+      };
+    }
+
     switch (parsed.intent) {
       case 'CREATE': {
-        // 仅当 fieldMapping 显式声明 operator 字段时才注入操作人
-        // (避免对没有"录入人"字段的飞书表写入未知字段触发 InvalidField 错误)
-        const fields = tableConfig.fieldMapping.operator
-          ? { ...parsed.fields, operator: msg.senderName }
-          : parsed.fields;
+        // 仅当 fieldMapping 显式声明了操作人字段时才注入发送者
+        // (避免对没有"录入人"字段的表写入未知字段触发 InvalidField 错误)
+        const operatorKey = resolveOperatorKey(mapping);
+        const createFields = operatorKey
+          ? { ...fields, [operatorKey]: msg.senderName }
+          : fields;
+        if (Object.keys(createFields).length === 0) {
+          return {
+            success: false,
+            error:
+              droppedFields.length > 0
+                ? `「${droppedFields.join('、')}」不是「${binding.alias}」里的字段，没有可写入的内容。可用字段：${Object.keys(mapping).join('、')}`
+                : '没有解析出要写入的字段，请把要记录的内容说清楚',
+          };
+        }
 
         // 唯一键查重：命中已有记录时挂起 PendingAction，等用户确认转 UPDATE
         const uniqueKey = tableConfig.uniqueKey;
-        const uniqueValue = uniqueKey ? fields[uniqueKey] : undefined;
+        const uniqueValue = uniqueKey ? createFields[uniqueKey] : undefined;
         if (uniqueKey && uniqueValue != null && uniqueValue !== '') {
           const existing = await adapter.queryRecords(tableConfig, {
             [uniqueKey]: uniqueValue,
@@ -421,7 +550,7 @@ export class Dispatcher {
               type: 'confirm_upsert',
               candidates: existing,
               message: msg,
-              updateFields: fields,
+              updateFields: createFields,
             });
             return {
               success: false,
@@ -431,29 +560,35 @@ export class Dispatcher {
           }
         }
 
-        const record = await adapter.createRecord(tableConfig, fields);
+        const record = await adapter.createRecord(tableConfig, createFields);
         return {
           success: true,
-          record: { ...record, fields: { ...fields, ...record.fields } },
+          droppedFields,
+          record: {
+            ...record,
+            fields: { ...createFields, ...record.fields },
+          },
         };
       }
 
       case 'QUERY': {
-        const records = await adapter.queryRecords(
-          tableConfig,
-          parsed.filters ?? {},
-        );
-        return { success: true, records };
+        const records = await adapter.queryRecords(tableConfig, filters);
+        return {
+          success: true,
+          records,
+          droppedFields,
+          hitQueryLimit: records.length >= adapter.queryHardLimit,
+        };
       }
 
       case 'UPDATE': {
         // 仅统计有效筛选键（排除以 _ 开头的保留键，如 _conjunction），
         // 否则 LLM 返回 {"_conjunction":"or"} 会绕过空判断，
         // 下游 queryRecords 跳过保留键后 filter 为空 → 命中全表 → 全表挂入待更新。
-        if (!parsed.filters || !hasEffectiveFilters(parsed.filters)) {
+        if (!hasEffectiveFilters(filters)) {
           return { success: false, error: '更新操作需要指定筛选条件' };
         }
-        const records = await adapter.queryRecords(tableConfig, parsed.filters);
+        const records = await adapter.queryRecords(tableConfig, filters);
         if (records.length === 0)
           return { success: false, error: '未找到匹配记录' };
         if (records.length === 1) {
@@ -467,9 +602,9 @@ export class Dispatcher {
               type: 'confirm_update',
               candidates: [target],
               message: msg,
-              updateFields: parsed.fields,
+              updateFields: fields,
             });
-            const changes = Object.entries(parsed.fields)
+            const changes = Object.entries(fields)
               .map(([k, v]) => `  ${k}: ${JSON.stringify(v)}`)
               .join('\n');
             return {
@@ -485,13 +620,16 @@ export class Dispatcher {
             error: `匹配到 ${records.length} 条记录，超过单次可操作上限 ${MAX_DESTRUCTIVE_BATCH} 条。请补充更精确的筛选条件后重试`,
           };
         }
+        // 只把**展示出来的**候选存进 pending：序号校验的上界是 candidates.length，
+        // 存全量而只列前 10 条时，用户可以回一个 15 去更新一条自己从没见过的记录
+        const selectable = records.slice(0, MAX_CANDIDATE_DISPLAY);
         await this.pending.set(pendingKeyOf(msg), {
           sceneId: scene.id,
           bindingAlias: binding.alias,
           type: 'select_record',
-          candidates: records,
+          candidates: selectable,
           message: msg,
-          updateFields: parsed.fields,
+          updateFields: fields,
         });
         return {
           success: false,
@@ -502,10 +640,10 @@ export class Dispatcher {
 
       case 'DELETE': {
         // 同 UPDATE：排除保留键后再判空，防止保留键绕过守卫导致全表删除放大。
-        if (!parsed.filters || !hasEffectiveFilters(parsed.filters)) {
+        if (!hasEffectiveFilters(filters)) {
           return { success: false, error: '删除操作需要指定筛选条件' };
         }
-        const records = await adapter.queryRecords(tableConfig, parsed.filters);
+        const records = await adapter.queryRecords(tableConfig, filters);
         if (records.length === 0)
           return { success: false, error: '未找到匹配记录' };
         // 删除无法回滚：超过上限直接拒绝，不给"一句确认删掉上千条"的机会

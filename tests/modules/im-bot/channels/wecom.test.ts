@@ -257,3 +257,41 @@ describe('WecomChannelAdapter.decode — 消息过滤', () => {
     expect(r.message.senderName).toBe('lisi');
   });
 });
+
+describe('WecomChannelAdapter.reply — 按平台字节上限截断', () => {
+  const msg = {
+    platform: 'wecom' as const,
+    eventId: 'e1',
+    messageId: 'MSG-1',
+    chatId: 'CHAT-1',
+    chatType: 'group' as const,
+    senderId: 'zhangsan',
+    senderName: '张三',
+    content: 'hi',
+    timestamp: Date.now(),
+    raw: {
+      ...botPayload,
+      webhook_url: 'https://qyapi.weixin.qq.com/cgi-bin/x',
+    },
+  };
+
+  it('企微上限 2048 字节，远小于飞书，必须单独截断', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ errcode: 0 }), { status: 200 }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    // 1000 个汉字 = 3000 字节：字符数远没到 core 的 20000 阈值，字节数已超企微上限
+    await adapter.reply(msg, '汉'.repeat(1000));
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const sent = (
+      JSON.parse(String(init.body)) as { text: { content: string } }
+    ).text.content;
+    expect(adapter.maxReplyBytes).toBe(2048);
+    expect(Buffer.byteLength(sent, 'utf8')).toBeLessThanOrEqual(2048);
+    vi.unstubAllGlobals();
+  });
+});

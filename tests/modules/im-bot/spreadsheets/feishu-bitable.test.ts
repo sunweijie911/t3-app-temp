@@ -315,6 +315,21 @@ describe('日期边界语义 — 由真实 API 实测反推（回归保护）', 
     expect(Number(conds[1]?.value[1])).toBe(start('2026-05-11') + DAY);
   });
 
+  it('displayType=number 的列走数值区间，不套 ExactDate', () => {
+    // 回归：between 原来无条件输出 ["ExactDate", ms]，数值列（分数/金额）
+    // 上会被飞书判为非法筛选值。裸数字在 datetime 列上另有含义（精确毫秒），
+    // 两者只能靠 fieldMapping 的 displayType 区分
+    const conds = buildFilterConditions(
+      '分数',
+      { op: 'between', value: [50, 80] },
+      'number',
+    );
+    expect(conds).toEqual([
+      { field_name: '分数', operator: 'isGreaterEqual', value: ['50'] },
+      { field_name: '分数', operator: 'isLessEqual', value: ['80'] },
+    ]);
+  });
+
   it('between 传毫秒数值时不做日截断（保留精确区间能力）', () => {
     const conds = buildFilterConditions('date', {
       op: 'between',

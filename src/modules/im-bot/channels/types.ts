@@ -24,6 +24,15 @@ export interface ChannelAdapter {
   readonly platform: BotPlatform;
 
   /**
+   * 单条文本消息的 **UTF-8 字节** 上限，由各平台文档给出，取保守值。
+   *
+   * 必须按平台分别声明：core 侧的 clampReply 是按字符算的单一阈值（面向飞书），
+   * 而企微的上限比飞书小一个量级、平台又都按字节计——一个汉字 3 字节。
+   * 超限时平台只回业务错误码，用户一条回复都收不到。
+   */
+  readonly maxReplyBytes: number;
+
+  /**
    * 处理平台的 URL 有效性验证请求（GET）。企微需要；飞书/钉钉走 POST challenge。
    * 返回 null 表示该平台不使用 GET 验证。
    */

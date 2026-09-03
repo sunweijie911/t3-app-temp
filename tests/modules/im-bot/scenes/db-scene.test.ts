@@ -158,6 +158,24 @@ describe('DatabaseDrivenScene.formatReply — 错误分支', () => {
     const reply = s.formatReply(intent, { success: false, error: '失败原因' });
     expect(reply).toBe('❌ 操作失败: 失败原因');
   });
+
+  it('awaitingConfirmation 的挂起提示不显示为「操作失败」', () => {
+    // 回归：DELETE 确认 / 单条 UPDATE 确认 / uniqueKey 撞车 / 多条选序号
+    // 都走 success=false，以前统一加「❌ 操作失败」，把设计正路显示成报错
+    const s = makeScene();
+    const intent: ParsedIntent = {
+      ...intentBase,
+      intent: 'DELETE',
+      fields: {},
+    };
+    const reply = s.formatReply(intent, {
+      success: false,
+      awaitingConfirmation: true,
+      error: '确认删除以下 2 条记录？',
+    });
+    expect(reply).toBe('⏳ 确认删除以下 2 条记录？');
+    expect(reply).not.toContain('操作失败');
+  });
 });
 
 describe('DatabaseDrivenScene.formatReply — CREATE / UPDATE', () => {
@@ -254,7 +272,22 @@ describe('DatabaseDrivenScene.formatReply — QUERY 默认渲染', () => {
     expect(reply).toContain('【第 2 条】');
   });
 
-  it('1000 条上限附加截断提示', () => {
+  it('撞上 adapter 的翻页上限时附加截断提示', () => {
+    const s = makeScene();
+    const records = Array.from({ length: 1000 }, (_, i) => ({
+      recordId: `r${i}`,
+      fields: { 名称: `n${i}` },
+    }));
+    const reply = s.formatReply(
+      { ...intentBase, intent: 'QUERY', fields: {} },
+      { success: true, records, hitQueryLimit: true },
+    );
+    expect(reply).toContain('已达单次查询上限 1000 条');
+  });
+
+  it('条数恰好 1000 但没撞上限时不误报截断', () => {
+    // 回归：以前把飞书的 1000 硬编码在渲染层，钉钉/企微的上限并不是 1000，
+    // 于是要么该提示时不提示，要么不该提示时乱提示
     const s = makeScene();
     const records = Array.from({ length: 1000 }, (_, i) => ({
       recordId: `r${i}`,
@@ -264,7 +297,7 @@ describe('DatabaseDrivenScene.formatReply — QUERY 默认渲染', () => {
       { ...intentBase, intent: 'QUERY', fields: {} },
       { success: true, records },
     );
-    expect(reply).toContain('已达查询上限');
+    expect(reply).not.toContain('已达单次查询上限');
   });
 });
 

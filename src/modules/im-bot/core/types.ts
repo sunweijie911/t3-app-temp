@@ -107,6 +107,18 @@ export interface ExecuteResult {
    * 审计日志据此记 pending 而非 error，避免污染错误率。
    */
   awaitingConfirmation?: boolean;
+  /**
+   * 本次被丢弃的字段名 —— LLM 产出了 fieldMapping 里没有的字段。
+   * 不丢的话 adapter 会用原名透传给平台，飞书回 InvalidFieldName、整条写入失败；
+   * 丢了但不说，用户会以为自己讲的内容都记下来了。所以要在回复里点名。
+   */
+  droppedFields?: string[];
+  /**
+   * QUERY 结果条数撞上了 adapter 的翻页硬上限，说明可能还有没取到的数据。
+   * 上限各平台不同，由 adapter 的 queryHardLimit 声明 ——
+   * 以前是在回复渲染里硬编码飞书的 1000，对钉钉/企微都是错的。
+   */
+  hitQueryLimit?: boolean;
   error?: string;
 }
 

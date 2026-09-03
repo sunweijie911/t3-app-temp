@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   clampReply,
+  clampReplyBytes,
   fieldMeta,
   MASKED_PLACEHOLDER,
   renderFieldEntry,
   renderRecordSummary,
+  utf8ByteLength,
 } from '@/modules/im-bot/core/field-render';
 import type { FieldMappingValue } from '@/modules/im-bot/core/types';
 
@@ -139,5 +141,44 @@ describe('clampReply', () => {
 
   it('正常长度原样返回', () => {
     expect(clampReply('短消息')).toBe('短消息');
+  });
+});
+
+describe('clampReplyBytes — 按 UTF-8 字节截断', () => {
+  it('未超限时原样返回', () => {
+    expect(clampReplyBytes('短消息', 2048)).toBe('短消息');
+  });
+
+  it('按字节而非字符判定：一个汉字算 3 字节', () => {
+    // 回归：以前只有按字符的全局阈值(20000)，20000 个汉字 = 60KB，
+    // 在企微(2048 字节)侧整条发不出去，用户一条回复都收不到
+    expect(utf8ByteLength('汉')).toBe(3);
+    const long = '汉'.repeat(1000); // 3000 字节，字符数只有 1000
+    const out = clampReplyBytes(long, 2048);
+    expect(utf8ByteLength(out)).toBeLessThanOrEqual(2048);
+    expect(out).toContain('已截断');
+  });
+
+  it('不会把多字节字符切成半个', () => {
+    // 上限落在一个汉字中间：应整字丢弃而不是产生乱码
+    const out = clampReplyBytes('汉'.repeat(10), 20);
+    expect(out.includes('�')).toBe(false);
+    expect(utf8ByteLength(out)).toBeLessThanOrEqual(20);
+  });
+
+  it('不会切断代理对（emoji 占 4 字节）', () => {
+    const out = clampReplyBytes('🎉'.repeat(10), 30);
+    // 只允许成对出现的代理项，出现落单的高位/低位即说明被从中间切开
+    const loneSurrogate =
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    expect(loneSurrogate.test(out)).toBe(false);
+    expect(out).toBe('🎉'.repeat(7)); // 30 字节放得下 7 个整 emoji
+    expect(utf8ByteLength(out)).toBeLessThanOrEqual(30);
+  });
+
+  it('上限小到放不下提示语时只做硬截断', () => {
+    const out = clampReplyBytes('汉'.repeat(10), 6);
+    expect(out).toBe('汉汉');
+    expect(utf8ByteLength(out)).toBeLessThanOrEqual(6);
   });
 });

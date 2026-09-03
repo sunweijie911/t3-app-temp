@@ -1,3 +1,5 @@
+// cspell:ignore pkey
+import { TRPCError } from '@trpc/server';
 import { and, count, desc, eq, gte, lt, lte, min, ne, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
@@ -20,7 +22,10 @@ import {
   botResourceBindings,
   botScenes,
 } from '../schema';
-import { reloadBotConfig } from '../services/bot-engine';
+import {
+  reloadBotConfig,
+  reloadPlatformCredentials,
+} from '../services/bot-engine';
 
 /**
  * 把 credentials 中的 secret 字段替换为 mask 占位符，避免明文回传浏览器。
@@ -121,6 +126,36 @@ export const imBotAdminRouter = createTRPCRouter({
     )
     .mutation(async ({ ctx, input }) => {
       const id = input.id ?? nanoid();
+
+      // sceneId 上另有唯一约束，而 ON CONFLICT 的目标是主键 id ——
+      // 撞名时覆盖不到，Postgres 直接抛 duplicate key 裸错给管理员。
+      // 先查一次，给一句能照着改的提示
+      const [taken] = await ctx.db
+        .select({ id: botScenes.id })
+        .from(botScenes)
+        .where(
+          input.id
+            ? and(eq(botScenes.sceneId, input.sceneId), ne(botScenes.id, id))
+            : eq(botScenes.sceneId, input.sceneId),
+        )
+        .limit(1);
+      if (taken) {
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: `场景 ID「${input.sceneId}」已被占用，请换一个`,
+        });
+      }
+
+      // 资源绑定是按 sceneId 字符串关联的，改了场景 ID 必须一起迁移，
+      // 否则绑定全变成孤儿：机器人匹配到场景却找不到任何资源
+      const [old] = input.id
+        ? await ctx.db
+            .select({ sceneId: botScenes.sceneId })
+            .from(botScenes)
+            .where(eq(botScenes.id, id))
+            .limit(1)
+        : [];
+
       await ctx.db
         .insert(botScenes)
         .values({
@@ -149,6 +184,14 @@ export const imBotAdminRouter = createTRPCRouter({
             sortOrder: input.sortOrder,
           },
         });
+
+      if (old && old.sceneId !== input.sceneId) {
+        await ctx.db
+          .update(botResourceBindings)
+          .set({ sceneId: input.sceneId })
+          .where(eq(botResourceBindings.sceneId, old.sceneId));
+      }
+
       reloadBotConfig();
       return { id };
     }),
@@ -246,6 +289,7 @@ export const imBotAdminRouter = createTRPCRouter({
             isActive: input.isActive,
           },
         });
+      reloadPlatformCredentials(input.platform);
       reloadBotConfig();
       return { id };
     }),
@@ -285,8 +329,24 @@ export const imBotAdminRouter = createTRPCRouter({
     )
     .mutation(async ({ ctx, input }) => {
       const id = input.id ?? nanoid();
+      // uniqueKey 用 null 而非 undefined：drizzle 会跳过 undefined 的列，
+      // 那样编辑时「清空唯一键」保存后仍是旧值
+      const columns = {
+        sceneId: input.sceneId,
+        alias: input.alias,
+        kind: input.kind,
+        provider: input.provider,
+        workspaceId: input.workspaceId,
+        resourceId: input.resourceId,
+        fieldMapping: input.fieldMapping,
+        uniqueKey: input.uniqueKey ?? null,
+        isDefault: input.isDefault,
+        isActive: input.isActive,
+      };
+
       await ctx.db.transaction(async (tx) => {
-        // 同场景内只允许一条默认资源，否则 dispatcher 的默认解析会不确定
+        // 同场景内只允许一条默认资源，否则 dispatcher 的默认解析会不确定。
+        // 编辑时按 id 排除自己 —— 用别名排除的话，改了别名就会把自己也清掉
         if (input.isDefault) {
           await tx
             .update(botResourceBindings)
@@ -294,38 +354,55 @@ export const imBotAdminRouter = createTRPCRouter({
             .where(
               and(
                 eq(botResourceBindings.sceneId, input.sceneId),
-                ne(botResourceBindings.alias, input.alias),
+                input.id
+                  ? ne(botResourceBindings.id, input.id)
+                  : ne(botResourceBindings.alias, input.alias),
               ),
             );
         }
-        await tx
-          .insert(botResourceBindings)
-          .values({
-            id,
-            sceneId: input.sceneId,
-            alias: input.alias,
-            kind: input.kind,
-            provider: input.provider,
-            workspaceId: input.workspaceId,
-            resourceId: input.resourceId,
-            fieldMapping: input.fieldMapping,
-            uniqueKey: input.uniqueKey,
-            isDefault: input.isDefault,
-            isActive: input.isActive,
-          })
-          .onConflictDoUpdate({
-            target: [botResourceBindings.sceneId, botResourceBindings.alias],
-            set: {
-              kind: input.kind,
-              provider: input.provider,
-              workspaceId: input.workspaceId,
-              resourceId: input.resourceId,
-              fieldMapping: input.fieldMapping,
-              uniqueKey: input.uniqueKey,
-              isDefault: input.isDefault,
-              isActive: input.isActive,
-            },
-          });
+
+        if (input.id) {
+          // 编辑必须按 id 更新。带着旧 id 走 insert ... on conflict (sceneId, alias)：
+          // 改了别名或换了场景时冲突不在那个目标索引上，而是撞主键，
+          // Postgres 直接抛 duplicate key ... "bot_resource_binding_pkey"，
+          // ON CONFLICT 覆盖不到 —— 表现为「改个别名就保存失败」
+          const [taken] = await tx
+            .select({ id: botResourceBindings.id })
+            .from(botResourceBindings)
+            .where(
+              and(
+                eq(botResourceBindings.sceneId, input.sceneId),
+                eq(botResourceBindings.alias, input.alias),
+                ne(botResourceBindings.id, input.id),
+              ),
+            )
+            .limit(1);
+          if (taken) {
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: `场景「${input.sceneId}」下已存在别名「${input.alias}」的资源绑定，请换一个别名`,
+            });
+          }
+          const [updated] = await tx
+            .update(botResourceBindings)
+            .set(columns)
+            .where(eq(botResourceBindings.id, input.id))
+            .returning({ id: botResourceBindings.id });
+          if (!updated) {
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: '资源绑定不存在，可能已被其他人删除',
+            });
+          }
+        } else {
+          await tx
+            .insert(botResourceBindings)
+            .values({ id, ...columns })
+            .onConflictDoUpdate({
+              target: [botResourceBindings.sceneId, botResourceBindings.alias],
+              set: columns,
+            });
+        }
       });
       reloadBotConfig();
       return { id };

@@ -267,11 +267,17 @@ function nextDayStartMs(s: string): number {
  * - { op: 'contains', value: '王' }
  * - { op: '>', value: 50 }
  * - { op: 'between', value: ['2026-05-01', '2026-05-31'] } → 日期段
+ * - { op: 'between', value: [50, 80] } + displayType 'number' → 数值区间
  * - { op: 'isEmpty' } / { op: 'isNotEmpty' }
  */
 export function buildFilterConditions(
   fieldName: string,
   raw: unknown,
+  /**
+   * 该字段在 fieldMapping 里声明的展示类型。
+   * 只有 'number' 会改变行为：把 between 从「日期区间」切回「数值区间」。
+   */
+  displayType?: 'number' | 'date',
 ): Array<{ field_name: string; operator: string; value: string[] }> {
   // 高级对象语法
   if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
@@ -286,9 +292,28 @@ export function buildFilterConditions(
       const [start, end] = obj.value as [unknown, unknown];
       const isDate = (v: unknown): v is string =>
         typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
+
+      // 数值列（分数、金额…）不能套 ExactDate —— 那是 datetime 字段专用的值格式。
+      // 裸数字在 datetime 列上表示精确毫秒（见下方分支），两者从值本身分辨不出来，
+      // 只能靠 fieldMapping 的 displayType 显式声明。
+      if (displayType === 'number') {
+        return [
+          {
+            field_name: fieldName,
+            operator: 'isGreaterEqual',
+            value: [String(start)],
+          },
+          {
+            field_name: fieldName,
+            operator: 'isLessEqual',
+            value: [String(end)],
+          },
+        ];
+      }
+
       // 下界：当天零点 - 1ms（落到前一天，isGreater 即可含当天）
       const lowerMs = isDate(start) ? dayStartMs(start) - 1 : Number(start);
-      // 上界：次日零点（日粒度下 isLess 才能含当天，见 dayEndExclusiveMs）
+      // 上界：次日零点（日粒度下 isLess 才能含当天）
       const upperMs = isDate(end) ? nextDayStartMs(end) : Number(end) + 1;
       // 飞书 datetime 字段：value 必须为 ["ExactDate", "<毫秒>"] 双元素；
       // 且不支持 isGreaterEqual/isLessEqual，用 isGreater/isLess 开区间表达
@@ -489,8 +514,13 @@ function buildMultiSelectFilterConditions(
   ];
 }
 
+/** 翻页拉取参数：单页 200 条、最多 5 页 */
+const FEISHU_PAGE_SIZE = 200;
+const FEISHU_MAX_PAGES = 5;
+
 export class FeishuBitableAdapter implements SpreadsheetAdapter {
   readonly platform = 'feishu' as const;
+  readonly queryHardLimit = FEISHU_PAGE_SIZE * FEISHU_MAX_PAGES;
 
   async createRecord(
     config: SpreadsheetTableConfig,
@@ -552,7 +582,15 @@ export class FeishuBitableAdapter implements SpreadsheetAdapter {
       } else if (mapping && isMultiSelectMapping(mapping)) {
         built = buildMultiSelectFilterConditions(mapping.name, value);
       } else {
-        built = buildFilterConditions(platformKeyOf(mapping ?? key), value);
+        const displayType =
+          mapping && typeof mapping === 'object' && mapping.type === 'plain'
+            ? mapping.displayType
+            : undefined;
+        built = buildFilterConditions(
+          platformKeyOf(mapping ?? key),
+          value,
+          displayType,
+        );
       }
 
       // 飞书 bitable filter 是单层扁平结构，表达不出 A AND (B OR C)。
@@ -570,10 +608,10 @@ export class FeishuBitableAdapter implements SpreadsheetAdapter {
       baseBody.filter = { conjunction, conditions };
     }
 
-    // 翻页拉取，避免飞书默认 20 条上限漏数据；用 PAGE_SIZE=200 + MAX_PAGES=5 上限保护
+    // 翻页拉取，避免飞书默认 20 条上限漏数据
     // (单次群聊回复展示前 10 条，1000 条已远超展示需求)
-    const PAGE_SIZE = 200;
-    const MAX_PAGES = 5;
+    const PAGE_SIZE = FEISHU_PAGE_SIZE;
+    const MAX_PAGES = FEISHU_MAX_PAGES;
     const allItems: Array<{
       record_id: string;
       fields: Record<string, unknown>;

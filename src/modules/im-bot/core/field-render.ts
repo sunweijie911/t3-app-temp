@@ -47,6 +47,54 @@ export function clampReply(s: string): string {
   return `${s.slice(0, REPLY_TOTAL_MAX_LEN)}\n\n…（消息过长已截断，详见多维表）`;
 }
 
+const TRUNCATED_SUFFIX = '\n…（消息过长已截断）';
+
+/** 单个码点的 UTF-8 字节数 */
+function utf8Len(codePoint: number): number {
+  if (codePoint < 0x80) return 1;
+  if (codePoint < 0x800) return 2;
+  if (codePoint < 0x10000) return 3;
+  return 4;
+}
+
+/** 字符串的 UTF-8 字节长度（平台的长度限制都是按字节算的） */
+export function utf8ByteLength(s: string): number {
+  let n = 0;
+  for (const ch of s) n += utf8Len(ch.codePointAt(0) ?? 0);
+  return n;
+}
+
+/**
+ * 按 **UTF-8 字节数** 截断到平台上限。
+ *
+ * clampReply 按字符算、且只有一个面向飞书的全局阈值，但
+ * - 平台的文本长度限制都是按字节计的，一个汉字占 3 字节
+ * - 企微 / 钉钉的上限比飞书小一个量级
+ * 超限时平台只返回业务错误码，reply() 里仅 console.error，
+ * 用户是**一条回复都收不到**。所以最终发送前必须按各自上限再截一次。
+ *
+ * 按码点迭代，不会把多字节序列或代理对从中间切开。
+ */
+export function clampReplyBytes(s: string, maxBytes: number): string {
+  if (utf8ByteLength(s) <= maxBytes) return s;
+
+  const suffixBytes = utf8ByteLength(TRUNCATED_SUFFIX);
+  // 上限小到放不下提示语时只做硬截断，否则加了后缀反而更长
+  const budget = maxBytes - suffixBytes;
+  const withSuffix = budget > 0;
+  const limit = withSuffix ? budget : maxBytes;
+
+  let used = 0;
+  let out = '';
+  for (const ch of s) {
+    const n = utf8Len(ch.codePointAt(0) ?? 0);
+    if (used + n > limit) break;
+    out += ch;
+    used += n;
+  }
+  return withSuffix ? out + TRUNCATED_SUFFIX : out;
+}
+
 /** 单字段展示截断，仅用于面向用户的最终输出，不影响内部值传递 */
 export function truncateForDisplay(s: string): string {
   if (s.length <= FIELD_DISPLAY_MAX_LEN) return s;

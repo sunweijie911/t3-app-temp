@@ -19,8 +19,10 @@ import type { SpreadsheetAdapter } from './types';
  */
 
 const API_BASE = 'https://qyapi.weixin.qq.com/cgi-bin/wedoc/smartsheet';
-/** 单次查询拉取上限，与飞书侧的 1000 对齐 */
-const QUERY_LIMIT = 1000;
+/** 单页拉取条数。保持 1000 不变 —— 首个请求与改动前完全一致，不引入回归 */
+const PAGE_SIZE = 1000;
+/** 续拉页数上限，防止超大表把内存和时延拖垮 */
+const MAX_PAGES = 5;
 
 async function wecomApi(path: string, body: unknown): Promise<unknown> {
   const token = await wecomTokenManager.getToken();
@@ -157,6 +159,7 @@ interface WecomRecord {
 
 export class WecomSheetAdapter implements SpreadsheetAdapter {
   readonly platform = 'wecom' as const;
+  readonly queryHardLimit = PAGE_SIZE * MAX_PAGES;
 
   async createRecord(
     config: SpreadsheetTableConfig,
@@ -198,16 +201,38 @@ export class WecomSheetAdapter implements SpreadsheetAdapter {
     config: SpreadsheetTableConfig,
     filters: Record<string, unknown>,
   ): Promise<SpreadsheetRecord[]> {
-    const data = (await wecomApi('/get_records', {
-      docid: config.workspaceId,
-      sheet_id: config.tableId,
-      limit: QUERY_LIMIT,
-    })) as { records?: WecomRecord[] };
+    // 续拉：企微按 offset 翻页。以前只发一个请求，超过单页的记录被静默丢掉，
+    // 再叠加内存过滤 —— 大表上表现为"查不到"而不是报错。
+    //
+    // offset 若不被支持，第二页会原样回第一页 —— 靠 record_id 去重识别出
+    // "这页没有新记录"并立即停止，避免把同一批记录重复计进结果。
+    const all: SpreadsheetRecord[] = [];
+    const seen = new Set<string>();
 
-    const all = (data.records ?? []).map((r) => ({
-      recordId: r.record_id,
-      fields: mapValuesFromRead(r.values ?? {}, config.fieldMapping),
-    }));
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const data = (await wecomApi('/get_records', {
+        docid: config.workspaceId,
+        sheet_id: config.tableId,
+        limit: PAGE_SIZE,
+        // 第一页不带 offset：请求体与改动前逐字节一致
+        ...(page > 0 ? { offset: all.length } : {}),
+      })) as { records?: WecomRecord[] };
+
+      const rows = data.records ?? [];
+      let fresh = 0;
+      for (const r of rows) {
+        if (r.record_id && seen.has(r.record_id)) continue;
+        if (r.record_id) seen.add(r.record_id);
+        fresh++;
+        all.push({
+          recordId: r.record_id,
+          fields: mapValuesFromRead(r.values ?? {}, config.fieldMapping),
+        });
+      }
+
+      if (fresh === 0 || rows.length < PAGE_SIZE) break;
+    }
+
     return filterRecords(all, filters);
   }
 

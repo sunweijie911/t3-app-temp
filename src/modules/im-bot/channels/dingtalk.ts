@@ -1,3 +1,4 @@
+import { clampReplyBytes } from '../core/field-render';
 import type { ChatType, UnifiedMessage } from '../core/types';
 import { getDingtalkCredentials } from '../services/credentials';
 import {
@@ -36,6 +37,14 @@ export function readDingtalkReplyContext(
   };
 }
 
+/**
+ * 转义正则元字符。robotCode 来自后台配置，直接拼进 `new RegExp()` 时
+ * 含 `.` `*` `(` 之类的值会被当成模式解析，轻则剥错前缀重则抛异常。
+ */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /** 钉钉机器人 HTTP 回调体 */
 interface DingtalkRobotPayload {
   msgId?: string;
@@ -63,6 +72,8 @@ interface DingtalkRobotPayload {
  */
 export class DingtalkChannelAdapter implements ChannelAdapter {
   readonly platform = 'dingtalk' as const;
+  /** 钉钉机器人文本消息上限 20000 字节 */
+  readonly maxReplyBytes = 20_000;
 
   async decode(req: Request): Promise<DecodeResult> {
     const timestamp = req.headers.get('timestamp');
@@ -123,7 +134,9 @@ export class DingtalkChannelAdapter implements ChannelAdapter {
     // 群聊里钉钉已经只在 @机器人 时才回调，但正文仍含 @昵称 前缀，需剥掉
     let content = (body.text?.content ?? '').trim();
     if (robotCode) {
-      content = content.replace(new RegExp(`^@?${robotCode}\\s*`), '').trim();
+      content = content
+        .replace(new RegExp(`^@?${escapeRegExp(robotCode)}\\s*`), '')
+        .trim();
     }
     // 剥掉开头的 "@昵称"：后面跟空白（正常情况），或者整条消息就只有这个 @
     // （只 @ 了机器人什么都没写 —— 这时不能让 "@昵称" 残留成业务正文）。
@@ -161,7 +174,8 @@ export class DingtalkChannelAdapter implements ChannelAdapter {
     };
   }
 
-  async reply(msg: UnifiedMessage, content: string): Promise<void> {
+  async reply(msg: UnifiedMessage, rawContent: string): Promise<void> {
+    const content = clampReplyBytes(rawContent, this.maxReplyBytes);
     const ctx = readDingtalkReplyContext(msg.raw);
     if (!ctx) {
       console.error(

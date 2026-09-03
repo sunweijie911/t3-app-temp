@@ -1,3 +1,4 @@
+import { clampReplyBytes } from '../core/field-render';
 import type { ChatType, UnifiedMessage } from '../core/types';
 import { getWecomCredentials } from '../services/credentials';
 import type { ChannelAdapter, DecodeResult } from './types';
@@ -52,6 +53,11 @@ interface WecomBotPayload {
 
 export class WecomChannelAdapter implements ChannelAdapter {
   readonly platform = 'wecom' as const;
+  /**
+   * 企微机器人文本消息 content 上限 2048 字节 —— 比飞书小一个量级。
+   * 一条 10 条记录的查询结果就可能超，超了整条发不出去。
+   */
+  readonly maxReplyBytes = 2_048;
 
   /**
    * URL 有效性验证（GET）：query 带 msg_signature/timestamp/nonce/echostr，
@@ -215,7 +221,8 @@ export class WecomChannelAdapter implements ChannelAdapter {
     };
   }
 
-  async reply(msg: UnifiedMessage, content: string): Promise<void> {
+  async reply(msg: UnifiedMessage, rawContent: string): Promise<void> {
+    const content = clampReplyBytes(rawContent, this.maxReplyBytes);
     const ctx = readWecomReplyContext(msg.raw);
     if (!ctx) {
       // 拿不到 webhook_url 说明这条消息不是智能机器人回调，或 raw 在
