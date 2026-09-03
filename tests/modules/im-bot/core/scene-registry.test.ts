@@ -111,11 +111,13 @@ describe('SceneRegistry.matchByLLM', () => {
     expect(await r.matchByLLM('hi')).toBeNull();
   });
 
-  it('LLM 抛错时降级为返回 null（不向上传播）', async () => {
+  it('LLM 抛错时向上传播，不伪装成"没有匹配的场景"', async () => {
+    // 调用方需要区分这两种情况：吞掉异常会让 LLM 故障在审计日志里
+    // 记成 ignored、errorMsg 为空，排障时看不出根因
     const r = new SceneRegistry();
     r.register(makeScene('sales', 0));
     mockedChatCompletion.mockRejectedValueOnce(new Error('network'));
-    expect(await r.matchByLLM('hi')).toBeNull();
+    await expect(r.matchByLLM('hi')).rejects.toThrow('network');
   });
 
   it('LLM prompt 包含动态场景列表 + validIds 约束', async () => {

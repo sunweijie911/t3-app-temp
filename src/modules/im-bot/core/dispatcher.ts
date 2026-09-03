@@ -177,14 +177,31 @@ export class Dispatcher {
         return;
       }
 
-      // 3. 场景匹配
+      // 3. 场景匹配：关键词优先，未命中再问 LLM
       let scene = this.registry.matchByKeyword(msg.content);
+      /** LLM 分类调用本身失败的原因（区别于"LLM 说没有匹配场景"） */
+      let matchFailure: string | undefined;
       if (!scene) {
-        scene = await this.registry.matchByLLM(msg.content);
+        try {
+          scene = await this.registry.matchByLLM(msg.content);
+        } catch (err) {
+          matchFailure = err instanceof Error ? err.message : String(err);
+          console.error('[Dispatcher] 场景 LLM 匹配失败:', matchFailure);
+        }
       }
       if (!scene) {
-        await channelAdapter.reply(msg, this.getHelpText());
-        logEvent({ result: 'ignored' });
+        // LLM 没调通时必须说实话：回 help 文本会让用户以为是自己没说清楚，
+        // 审计日志也会记成 ignored，把服务故障伪装成正常的"未匹配"
+        await channelAdapter.reply(
+          msg,
+          matchFailure
+            ? '⚠️ 语义识别服务暂时不可用，请稍后再试'
+            : this.getHelpText(),
+        );
+        logEvent({
+          result: matchFailure ? 'error' : 'ignored',
+          errorMsg: matchFailure,
+        });
         return;
       }
 

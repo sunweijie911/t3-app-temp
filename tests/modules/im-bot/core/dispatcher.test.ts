@@ -887,3 +887,64 @@ describe('Dispatcher — 文档能力', () => {
     expect(mockGetDocAdapter).toHaveBeenCalledWith('feishu');
   });
 });
+
+describe('Dispatcher — 场景匹配失败与 LLM 故障要区分开', () => {
+  it('LLM 说"none" → 回 help 文本，记 ignored', async () => {
+    const events: Array<{ result?: string; errorMsg?: string }> = [];
+    const d = new Dispatcher({
+      getBinding: () => baseBinding,
+      onEvent: (e) => events.push(e),
+    });
+    d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    const channel = makeChannel();
+    mockGetAdapter.mockReturnValue(makeAdapter());
+    mockChatCompletion.mockResolvedValueOnce('none');
+
+    await d.process(makeMsg({ content: '完全无关的闲聊' }), channel);
+
+    expect(channel.lastReply).toContain('我可以帮你处理');
+    expect(events[0]?.result).toBe('ignored');
+    expect(events[0]?.errorMsg).toBeUndefined();
+  });
+
+  it('LLM 调不通 → 明说服务不可用，并把原因记进审计日志', async () => {
+    // 回归：以前 matchByLLM 吞掉异常返回 null，用户收到的是
+    // "我可以帮你处理以下业务"，日志记成 ignored 且 errorMsg 为空
+    const events: Array<{ result?: string; errorMsg?: string }> = [];
+    const d = new Dispatcher({
+      getBinding: () => baseBinding,
+      onEvent: (e) => events.push(e),
+    });
+    d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    const channel = makeChannel();
+    mockGetAdapter.mockReturnValue(makeAdapter());
+    mockChatCompletion.mockRejectedValueOnce(new Error('Connection error.'));
+
+    await d.process(makeMsg({ content: '完全无关的闲聊' }), channel);
+
+    expect(channel.lastReply).toContain('语义识别服务暂时不可用');
+    expect(channel.lastReply).not.toContain('我可以帮你处理');
+    expect(events[0]?.result).toBe('error');
+    expect(events[0]?.errorMsg).toBe('Connection error.');
+  });
+
+  it('关键词命中时不受 LLM 故障影响（不走 matchByLLM）', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    (adapter.createRecord as ReturnType<typeof vi.fn>).mockResolvedValue({
+      recordId: 'r1',
+      fields: { 项目名称: 'x' },
+    });
+    // 只 mock 一次：意图解析用掉它；若还去调 matchByLLM 就会拿到 undefined
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"CREATE","fields":{"项目名称":"x"},"confidence":0.95,"summary":""}',
+    );
+
+    await d.process(makeMsg({ content: '新增项目 x' }), channel);
+
+    expect(mockChatCompletion).toHaveBeenCalledTimes(1);
+    expect(adapter.createRecord).toHaveBeenCalled();
+  });
+});
