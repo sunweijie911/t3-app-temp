@@ -37,12 +37,12 @@ describe('toWecomCells — 逻辑值 → 类型化单元格', () => {
     ]);
   });
 
-  it('YYYY-MM-DD → date 单元格，取 CST 当天 12:00 避免跨日', () => {
+  it('YYYY-MM-DD → date 单元格，取 CST 当天 00:00（与平台约定一致）', () => {
     const cells = toWecomCells('2026-05-11');
     expect(cells).toHaveLength(1);
     const cell = cells[0] as { type: string; date: number };
     expect(cell.type).toBe('date');
-    expect(new Date(cell.date).toISOString()).toBe('2026-05-11T04:00:00.000Z');
+    expect(new Date(cell.date).toISOString()).toBe('2026-05-10T16:00:00.000Z');
   });
 
   it('非 YYYY-MM-DD 的日期串仍当文本（与飞书侧行为一致）', () => {
@@ -189,9 +189,9 @@ describe('displayType 决定单元格类型（P1：文本列曾被写成 date �
     ]);
   });
 
-  it("声明 'date' 的列 → date 单元格", () => {
+  it("声明 'date' 的列 → date 单元格（CST 当天 00:00）", () => {
     expect(toWecomCells('2026-05-11', 'date')).toEqual([
-      { type: 'date', date: new Date('2026-05-11T12:00:00+08:00').getTime() },
+      { type: 'date', date: new Date('2026-05-11T00:00:00+08:00').getTime() },
     ]);
   });
 

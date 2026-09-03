@@ -296,15 +296,22 @@ body 丢掉，导致这两个平台的 `reply()` 根本写不出来。
 ```typescript
 type FieldMappingValue =
   | string
-  | { name; type: 'plain'; sensitive?; label?; displayType?: 'number' | 'date' | 'text' }
-  | { name; type: 'multiSelect'; sensitive?; label? }
-  | { name; type: 'link'; linkTableId; displayField; sensitive?; label? }
+  | { name; type: 'plain'; sensitive?; label?; primary?; displayType?: 'number' | 'date' | 'text' }
+  | { name; type: 'multiSelect'; sensitive?; label?; primary? }
+  | { name; type: 'link'; linkTableId; displayField; sensitive?; label?; primary? }
 ```
 
 - `link`：飞书双向关联字段。写入要 `record_id` 数组，所以按 `displayField`
   反查（带正负缓存的进程内 LRU）；筛选用 `contains` + record_id。
 - `multiSelect`：写入要 `string[]`，筛选默认用 `contains`（多选字段不支持 `is`）。
 - `sensitive`：群消息回复中脱敏。**注意脱敏只作用于 IM 回复层**。
+- `primary`：主标识。候选列表、删除确认、查询投影都优先展示它。
+  **必须显式声明**，不能靠"取 fieldMapping 的第一列"——`fieldMapping` 存在
+  jsonb 里，**Postgres 会按「键长度 + 字节序」重排键**：写进去的
+  `{商品名称, 支出分类, 日期, …}` 读回来是 `{利润, 备注, 日期, 月份, …}`。
+  实测一张财务表的删除确认因此变成
+  「利润=-108 / 备注=… / 日期=… / 月份=1月」——用户看不到商品名称，
+  根本判断不出要删的是哪条。没声明时退化为旧行为（投影侧额外跳过数字/日期列）。
 - `displayType`：声明这一列的取值语义，三处生效 ——
   渲染（区分"金额 45000000"与"日期毫秒值"）、`between`（数值区间还是日期区间）、
   **写入**（`'2026-05-11'` 要不要转成毫秒时间戳）。
@@ -407,6 +414,10 @@ flowchart TD
 
 - **幂等在待确认之前**。反过来的话，平台重试同一 `eventId` 时 pending 已被处理
   删除，会走到正常场景匹配链，白白消耗 LLM token。
+- **只剩一个可见场景时跳过 LLM 分类**。分类器此时唯一的作用是判断"这条要不要
+  处理"，而下游的 confidence 阈值与 UNKNOWN 分支已经做了两遍。实测真实群消息
+  （"本月哪些单亏了""闲鱼上卖出去的单有哪些"）关键词命中数普遍是 0，不省掉这
+  一次调用等于每条消息都串行跑两次 LLM，延迟和成本翻倍。
 - **会话过滤在匹配之前**。不可用的场景根本不参与关键词与 LLM 分类，未授权的群
   拿到的是正常帮助文本而非"该场景未授权"——后者等于把场景名泄漏出去。
 - **写权限校验在 execute 之前**。连 `queryRecords` 都不会发出。
@@ -507,6 +518,8 @@ dispatcher 在候选列表、确认提示里也要把记录摆到群里，那条
 
 - **脱敏**：`fieldMapping` 显式 `sensitive: true`，叠加字段名启发式
   （含密码/密钥/secret/token/凭证等关键字自动脱敏，即使管理员忘了勾）
+- **数字**：去掉 IEEE754 运算残留（公式算出来的 `26.612000000000023` → `26.612`），
+  真实精度不变。按字段的显示格式（飞书 `property.formatter`）取小数位还没做
 - **单字段截断**：200 字
 - **整条截断**：`clampReply` 20000 字符（面向飞书的粗兜底），之后由各 channel
   按自己的 `maxReplyBytes` 再截一次——平台按**字节**计，一个汉字 3 字节，
@@ -544,12 +557,24 @@ UPDATE / DELETE 的确认提示里也要说明"命中集可能不全"。
 | 表达 | 实际条件 |
 |------|---------|
 | `= 当天` | `is` 当天零点 |
-| `>= 当天` | `isGreater` 当天零点 − 1ms |
-| `> 当天` | `isGreater` 次日零点 |
+| `>= 当天` | `isGreater` 当天零点 − 1ms（截断落到前一天） |
+| `> 当天` | `isGreater` **当天零点**（截断后与记录相等，严格大于即排除当天） |
 | `<= 当天` | `isLess` 次日零点 |
 | `< 当天` | `isLess` 当天零点 |
 
-钉钉 / 企微侧的客户端过滤器实现同一套日粒度语义。早期它做纯字符串比较
+**这套边界只在「记录时刻 = 当天 00:00」时成立**，所以写入时刻必须同为
+00:00 CST（`spreadsheets/field-types.ts` 三平台统一）。理由是实测出来的：
+
+- 平台自己（日期选择器、导入、手工录入）写的就是当天零点。一张 99 行的真实
+  财务表里 **0 行**是非零点戳
+- 机器人早期写 12:00。同一张表混进两种时刻后，同一个 `>= 某天` 对两批行会给出
+  差一天的结果 —— 12:00 的行会把前一天也带进来
+- `> 当天` 早期编码成 `isGreater 次日零点`（按 12:00 记录推出的边界），对零点
+  记录会**整天吞掉次日**：实测「> 01-02」只回 96 条，正确应是 97 条，
+  01-03 那条被静默丢掉
+
+钉钉 / 企微侧的客户端过滤器不受这个约束：它比较的是真实毫秒与自然日边界，
+两种时刻约定都正确。早期它做纯字符串比较
 （`String(1778...000) === '2026-05-11'`），于是这两个平台上**任何按日期的查询
 都恒返回 0 条**——静默给错答案。
 
@@ -613,7 +638,7 @@ IM_BOT_FEISHU_VERIFICATION_TOKEN # 必填（DB 或 env 二选一），缺失则�
 |------|------|---------|
 | 场景管理 | `/admin/im-bot` | 列表 / dnd-kit 拖拽排序 / 启停；Modal 编辑 sceneId、关键词 Tags、system prompt、回复模板、两张权限白名单 |
 | 平台配置 | `/admin/im-bot/platforms` | 三平台凭证；secret 字段以 `********` 回显，提交时等于占位符则保留 DB 原值；展示应填的回调地址 |
-| 资源绑定 | `/admin/im-bot/resource-bindings` | 场景 × 别名 → 资源；**从飞书拉取字段**后勾选生成 `fieldMapping`（按 ui_type 建议 plain/link/multiSelect 与「取值语义」text/number/date，敏感名自动勾脱敏）。plain 一律输出为对象：裸字符串放不下 `displayType`，等于让运行时继续靠值猜类型 |
+| 资源绑定 | `/admin/im-bot/resource-bindings` | 场景 × 别名 → 资源；**从飞书拉取字段**后勾选生成 `fieldMapping`（按 ui_type 建议 plain/link/multiSelect 与「取值语义」text/number/date，敏感名自动勾脱敏，并选一个「主标识」列）。plain 一律输出为对象：裸字符串放不下 `displayType`，等于让运行时继续靠值猜类型 |
 | 事件日志 | `/admin/im-bot/event-logs` | 按平台/场景/结果/时间筛选；统计卡片（**成功率分母排除 `pending`**，并单独展示待确认数 —— 只把 pending 从 error 里拆出来、展示侧仍算进分母等于没拆）；共享状态观测（待确认堆积说明有用户卡在等待态）；过期记录与历史日志清理 |
 
 tRPC 过程一览（全部 `adminProcedure`）：`listScenes` `upsertScene`
@@ -652,7 +677,7 @@ tRPC 过程一览（全部 `adminProcedure`）：`listScenes` `upsertScene`
 
 ## 测试
 
-`tests/modules/im-bot/` 下按目录镜像源码结构（431 个用例），覆盖加解密往返、
+`tests/modules/im-bot/` 下按目录镜像源码结构（440 个用例），覆盖加解密往返、
 验签、消息解码、字段渲染与脱敏、日期边界、客户端过滤、翻页续拉与去重与截断
 上报、回复截断、场景匹配与作用域、意图解析、`displayType` 的写入/筛选分流、
 文档结果与回复模板的优先级、以及 dispatcher 的全流程编排（含权限、未知字段

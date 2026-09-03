@@ -7,6 +7,7 @@ import {
   Input,
   Modal,
   Popconfirm,
+  Radio,
   Select,
   Space,
   Switch,
@@ -47,6 +48,12 @@ type FieldPickerSelection = Record<
      * 'date' 让 prompt 里带上日期格式提示。
      */
     displayType: DisplayTypeOption;
+    /**
+     * 主标识：候选列表 / 删除确认 / 查询投影优先展示它。
+     * 全表只能有一个。必须显式选，不能靠"第一列" —— fieldMapping 存 jsonb，
+     * 键序会被 Postgres 重排。
+     */
+    primary: boolean;
     linkTableId?: string;
     displayField?: string;
   }
@@ -112,6 +119,7 @@ export default function ImBotResourceBindingsPage() {
           type: cur?.type ?? f.suggestedType,
           sensitive: cur?.sensitive ?? false,
           displayType: cur?.displayType ?? f.suggestedDisplayType,
+          primary: cur?.primary ?? false,
           linkTableId: cur?.linkTableId,
           displayField: cur?.displayField,
           ...patch,
@@ -119,17 +127,33 @@ export default function ImBotResourceBindingsPage() {
       };
     });
   };
+
+  /** 主标识全表唯一，选中一个就要清掉其它 */
+  const setPrimary = (fieldName: string) => {
+    setPickerSelection((prev) => {
+      const next: FieldPickerSelection = {};
+      for (const [k, v] of Object.entries(prev)) {
+        next[k] = { ...v, primary: k === fieldName };
+      }
+      return next;
+    });
+  };
   const fetchFields = api.imBot.admin.fetchBitableFields.useMutation({
     onSuccess: (fields) => {
       setPickerFields(fields);
       // 预填：所有字段默认勾选；按 suggestedType 设置；敏感关键字自动 sensitive
       const init: FieldPickerSelection = {};
+      // 默认把第一个文本列当主标识（飞书按真实列序返回，名称类通常在最前）
+      const defaultPrimary = fields.find(
+        (f) => f.suggestedType === 'plain' && f.suggestedDisplayType === 'text',
+      )?.fieldName;
       for (const f of fields) {
         init[f.fieldName] = {
           selected: true,
           type: f.suggestedType,
           sensitive: SENSITIVE_KEY_PATTERN.test(f.fieldName),
           displayType: f.suggestedDisplayType,
+          primary: f.fieldName === defaultPrimary,
         };
       }
       setPickerSelection(init);
@@ -509,6 +533,7 @@ export default function ImBotResourceBindingsPage() {
                   type: 'plain',
                   displayType: sel.displayType,
                   ...(sel.sensitive ? { sensitive: true } : {}),
+                  ...(sel.primary ? { primary: true } : {}),
                 };
                 continue;
               }
@@ -525,6 +550,7 @@ export default function ImBotResourceBindingsPage() {
                   linkTableId: sel.linkTableId,
                   displayField: sel.displayField,
                   ...(sel.sensitive ? { sensitive: true } : {}),
+                  ...(sel.primary ? { primary: true } : {}),
                 };
                 continue;
               }
@@ -532,6 +558,7 @@ export default function ImBotResourceBindingsPage() {
                 name: f.fieldName,
                 type: sel.type,
                 ...(sel.sensitive ? { sensitive: true } : {}),
+                ...(sel.primary ? { primary: true } : {}),
               };
             }
             setEditing({
@@ -546,6 +573,8 @@ export default function ImBotResourceBindingsPage() {
         >
           <p style={{ color: '#888', marginBottom: 8 }}>
             敏感字段建议保持「不勾选」。已勾选的敏感字段会在群消息回复中自动脱敏。
+            <br />
+            「主标识」选一个能一眼认出记录的列（通常是名称类）：删除确认和候选列表会优先展示它。
           </p>
           <Table
             columns={[
@@ -584,6 +613,16 @@ export default function ImBotResourceBindingsPage() {
                     value={
                       pickerSelection[f.fieldName]?.type ?? f.suggestedType
                     }
+                  />
+                ),
+              },
+              {
+                title: '主标识',
+                width: 70,
+                render: (_, f: FetchedField) => (
+                  <Radio
+                    checked={pickerSelection[f.fieldName]?.primary ?? false}
+                    onChange={() => setPrimary(f.fieldName)}
                   />
                 ),
               },

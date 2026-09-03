@@ -248,22 +248,37 @@ function nextDayStartMs(s: string): number {
 }
 
 /*
- * ── 飞书 datetime 字段筛选语义（2026-09 对真实 API 实测得出）──────────
+ * ── 飞书 datetime 字段筛选语义（对真实 API 实测得出）──────────────────
  *
  * 关键：**filter 里的 ExactDate 值会被按日截断到零点，而记录侧用真实毫秒比较**。
- * 三组实测数据（记录值 = 2026-05-11 12:00 CST）：
+ *
+ * 2026-09 第一轮实测（记录值 = 05-11 12:00 CST）：
  *   isLess    ExactDate(05-11 23:59:59.001) → 0 条  （值截断成 05-11 00:00，12:00 不小于它）
  *   isLess    ExactDate(05-12 00:00)        → 1 条
  *   isGreater ExactDate(05-11 00:00)        → 命中  （12:00 确实大于当天零点）
  *
- * 由此推出各操作符该取的边界（都以"整天"为语义单位）：
+ * 2026-09 第二轮实测（99 行真实财务表，记录值全是 **当天 00:00 CST**
+ * —— 平台的日期选择器/导入写的就是零点，见 field-types.ts）：
+ *   isLess    ExactDate(01-03 23:59:59) → 01-03 那条**不命中**（再次证实按日截断）
+ *   is        ExactDate(01-03 00:00)    → 1 条（按日等值）
+ *   isGreater ExactDate(01-03 00:00-1ms) → 含 01-03 ✓（>= 当天）
+ *   isGreater ExactDate(01-03 00:00)     → 不含 01-03 ✓（> 当天）
+ *   isGreater ExactDate(01-03 00:00)     → **含 01-02 的次日 01-03**
+ *     而 isGreater ExactDate(01-03 00:00) 用作「> 01-02」时，
+ *     旧编码 isGreater(次日零点) 会把 01-03 整天吞掉：96 条 vs 正确的 97 条
+ *
+ * 记录侧都是零点时，两侧都退化成"按自然日比较"，各操作符的边界是：
  *   = 当天    → is        当天零点
  *   >= 当天   → isGreater 当天零点 - 1ms   （截断落到前一天）
- *   >  当天   → isGreater 次日零点
+ *   >  当天   → isGreater 当天零点          （截断后与当天相等，> 即排除当天）
  *   <= 当天   → isLess    次日零点
  *   <  当天   → isLess    当天零点
  *
- * 原实现统一用「当天 23:59:59 ± 1ms」，截断后仍是当天零点，导致 isLess 侧
+ * ⚠️ 这套边界**只对零点记录成立**。机器人写入必须同为 00:00
+ * （field-types.ts 已统一），否则同一张表里两种时刻会让同一个筛选条件
+ * 给出差一天的结果 —— 12:00 的行在 `>= 当天` 下会连前一天一起命中。
+ *
+ * 更早的实现统一用「当天 23:59:59 ± 1ms」，截断后仍是当天零点，导致 isLess 侧
  * 把当天整个排除 —— 所有按日期查询的场景都静默返回空。
  */
 
@@ -390,13 +405,14 @@ export function buildFilterConditions(
         ];
       }
       if (op === 'isGreater') {
-        // > 当天 ⇔ > 次日零点。不能用当天零点：记录的真实时刻（如当天 12:00）
-        // 确实大于当天零点，会把"当天"这一天错误地算进来
+        // > 当天 ⇔ isGreater 当天零点：filter 值截断后与记录（同为零点）
+        // 相等，严格大于即排除当天、包含次日。
+        // 用次日零点会把次日整天也吞掉 —— 实测「> 01-02」少了 01-03 的记录。
         return [
           {
             field_name: fieldName,
             operator: 'isGreater',
-            value: ['ExactDate', String(nextDayStartMs(rawV))],
+            value: ['ExactDate', String(dayStartMs(rawV))],
           },
         ];
       }

@@ -92,7 +92,11 @@ describe('filterRecords — 客户端过滤', () => {
 });
 
 describe('filterRecords — 日期按 CST 自然日比较', () => {
-  /** 写入侧统一落在当天 12:00 CST，这里按真实存储值构造 */
+  /**
+   * 按真实存储值构造。客户端过滤器比较的是"自然日边界"，
+   * 对 00:00（平台与机器人写入）和 12:00（历史数据）两种时刻都应成立，
+   * 所以这里保留 12:00 —— 它是更容易出错的那一侧。
+   */
   const at = (day: string) => new Date(`${day}T12:00:00+08:00`).getTime();
   const records: SpreadsheetRecord[] = [
     { recordId: 'd1', fields: { 名称: 'A', 上线日期: at('2026-05-10') } },

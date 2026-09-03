@@ -44,6 +44,15 @@ export class SceneRegistry {
     const visible = this.scenesForChat(chatId);
     if (visible.length === 0) return null;
 
+    // 只有一个候选时不必再花一次 LLM 调用去"分类"：分类器此时唯一的作用
+    // 就是判断"这条消息要不要处理"，而这件事下游已经做了两遍
+    // —— 意图解析的 confidence 阈值 + UNKNOWN 分支。
+    //
+    // 实测：真实群消息（"本月哪些单亏了""闲鱼上卖出去的单有哪些"）关键词
+    // 命中数普遍是 0，于是每条消息都要串行跑两次 LLM，延迟和成本翻倍。
+    const only = visible[0];
+    if (visible.length === 1 && only) return only;
+
     const scenesDesc = visible
       .map((s) => `- ${s.id}: ${s.name} — ${s.description}`)
       .join('\n');

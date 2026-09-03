@@ -107,7 +107,9 @@ describe('SceneRegistry.matchByLLM', () => {
 
   it('LLM 返回 none 时返回 null', async () => {
     const r = new SceneRegistry();
+    // 两个候选才会真的走分类：只剩一个时直接选它、不调 LLM（见下方用例）
     r.register(makeScene('sales', 0));
+    r.register(makeScene('hr', 0));
     mockedChatCompletion.mockResolvedValueOnce('none');
     expect(await r.matchByLLM('hi')).toBeNull();
   });
@@ -115,6 +117,7 @@ describe('SceneRegistry.matchByLLM', () => {
   it('LLM 返回未注册 id 时返回 null', async () => {
     const r = new SceneRegistry();
     r.register(makeScene('sales', 0));
+    r.register(makeScene('hr', 0));
     mockedChatCompletion.mockResolvedValueOnce('unknown-id');
     expect(await r.matchByLLM('hi')).toBeNull();
   });
@@ -124,6 +127,7 @@ describe('SceneRegistry.matchByLLM', () => {
     // 记成 ignored、errorMsg 为空，排障时看不出根因
     const r = new SceneRegistry();
     r.register(makeScene('sales', 0));
+    r.register(makeScene('hr', 0));
     mockedChatCompletion.mockRejectedValueOnce(new Error('network'));
     await expect(r.matchByLLM('hi')).rejects.toThrow('network');
   });
@@ -168,7 +172,9 @@ describe('SceneRegistry — 会话作用域', () => {
 
   it('LLM 分类只在本会话可用的场景里选，且不把它们写进 prompt', async () => {
     const r = new SceneRegistry();
+    // 开放场景放两个：chatA 仍有 2 个候选，才会真的走分类
     r.register(makeScene('open', 0, '开放场景'));
+    r.register(makeScene('open2', 0, '另一个开放场景'));
     r.register(makeScene('locked', 0, '受限场景', ['chatB']));
     mockedChatCompletion.mockResolvedValue('locked');
 
@@ -186,5 +192,39 @@ describe('SceneRegistry — 会话作用域', () => {
     mockedChatCompletion.mockClear();
     expect(await r.matchByLLM('x', 'chatA')).toBeNull();
     expect(mockedChatCompletion).not.toHaveBeenCalled();
+  });
+});
+
+describe('SceneRegistry.matchByLLM — 单候选不必再分类（P1）', () => {
+  it('本会话只剩一个可见场景时直接选它，不调 LLM', async () => {
+    const r = new SceneRegistry();
+    r.register(makeScene('sales', 0));
+
+    const picked = await r.matchByLLM('本月哪些单亏了');
+
+    expect(picked?.id).toBe('sales');
+    // 分类器此时唯一的作用是"要不要处理"，下游的 confidence 阈值和
+    // UNKNOWN 分支已经做了这件事 —— 真实群消息关键词命中率很低，
+    // 不省掉这次调用等于每条消息都串行跑两次 LLM
+    expect(mockedChatCompletion).not.toHaveBeenCalled();
+  });
+
+  it('会话作用域过滤后只剩一个时同样跳过', async () => {
+    const r = new SceneRegistry();
+    r.register(makeScene('open', 0, '开放场景'));
+    r.register(makeScene('locked', 0, '受限场景', ['chatB']));
+
+    expect((await r.matchByLLM('x', 'chatA'))?.id).toBe('open');
+    expect(mockedChatCompletion).not.toHaveBeenCalled();
+  });
+
+  it('两个及以上候选仍然走分类', async () => {
+    const r = new SceneRegistry();
+    r.register(makeScene('sales', 0));
+    r.register(makeScene('hr', 0));
+    mockedChatCompletion.mockResolvedValueOnce('hr');
+
+    expect((await r.matchByLLM('x'))?.id).toBe('hr');
+    expect(mockedChatCompletion).toHaveBeenCalledTimes(1);
   });
 });

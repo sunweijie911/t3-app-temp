@@ -357,6 +357,14 @@ describe('Dispatcher.process — 无场景兜底', () => {
   it('匹配不到任何场景时返回 help text', async () => {
     const d = new Dispatcher({ getBinding: () => baseBinding });
     d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    // 注册第二个场景：只剩一个候选时会跳过分类直接选它
+    d.registry.register(
+      new DatabaseDrivenScene({
+        ...baseSceneConfig,
+        sceneId: 'other',
+        name: '另一个场景',
+      }),
+    );
     const channel = makeChannel();
     mockGetAdapter.mockReturnValue(makeAdapter());
     // 关键词不命中、LLM 返回 none
@@ -904,6 +912,13 @@ describe('Dispatcher — 场景匹配失败与 LLM 故障要区分开', () => {
       },
     });
     d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    d.registry.register(
+      new DatabaseDrivenScene({
+        ...baseSceneConfig,
+        sceneId: 'other',
+        name: '另一个场景',
+      }),
+    );
     const channel = makeChannel();
     mockGetAdapter.mockReturnValue(makeAdapter());
     mockChatCompletion.mockResolvedValueOnce('none');
@@ -926,6 +941,13 @@ describe('Dispatcher — 场景匹配失败与 LLM 故障要区分开', () => {
       },
     });
     d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    d.registry.register(
+      new DatabaseDrivenScene({
+        ...baseSceneConfig,
+        sceneId: 'other',
+        name: '另一个场景',
+      }),
+    );
     const channel = makeChannel();
     mockGetAdapter.mockReturnValue(makeAdapter());
     mockChatCompletion.mockRejectedValueOnce(new Error('Connection error.'));

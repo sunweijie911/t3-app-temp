@@ -48,12 +48,14 @@ export const FIELD_MAPPING_SCHEMA = z.record(
       displayField: z.string(),
       sensitive: z.boolean().optional(),
       label: z.string().optional(),
+      primary: z.boolean().optional(),
     }),
     z.object({
       name: z.string(),
       type: z.literal('multiSelect'),
       sensitive: z.boolean().optional(),
       label: z.string().optional(),
+      primary: z.boolean().optional(),
     }),
     z.object({
       name: z.string(),
@@ -61,6 +63,7 @@ export const FIELD_MAPPING_SCHEMA = z.record(
       sensitive: z.boolean().optional(),
       label: z.string().optional(),
       displayType: z.enum(['number', 'date', 'text']).optional(),
+      primary: z.boolean().optional(),
     }),
   ]),
 );

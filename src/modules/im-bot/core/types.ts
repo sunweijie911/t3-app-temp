@@ -230,6 +230,8 @@ export interface LinkFieldMapping {
   sensitive?: boolean;
   /** 群消息回复时展示的字段名；未配置则用 fieldMapping 的 logicalKey */
   label?: string;
+  /** 见 PlainFieldMapping.primary */
+  primary?: boolean;
 }
 
 /**
@@ -241,6 +243,8 @@ export interface MultiSelectFieldMapping {
   type: 'multiSelect';
   sensitive?: boolean;
   label?: string;
+  /** 见 PlainFieldMapping.primary */
+  primary?: boolean;
 }
 
 /**
@@ -251,6 +255,16 @@ export interface PlainFieldMapping {
   type: 'plain';
   sensitive?: boolean;
   label?: string;
+  /**
+   * 主标识字段：候选列表、删除确认、查询投影都优先展示它。
+   *
+   * 必须显式声明，不能靠"取 fieldMapping 的第一列"——**fieldMapping 存在
+   * jsonb 里，Postgres 会按「键长度 + 字节序」重排键**，写进去的
+   * `{商品名称, 支出分类, …}` 读回来是 `{利润, 备注, 日期, 月份, …}`。
+   * 于是删除确认展示成「利润=-108 / 备注=… / 日期=… / 月份=1月」——
+   * 用户看不到商品名称，根本判断不出要删的是哪条。
+   */
+  primary?: boolean;
   /**
    * 字段展示与写入类型：
    * - 'number'：原样输出数字（金额、数量、版本号等）

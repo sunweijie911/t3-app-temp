@@ -613,3 +613,69 @@ describe('查询截断提示不谎报条数（P0-4 的连带修正）', () => {
     expect(out).not.toContain('上限');
   });
 });
+
+describe('查询投影的主标识不依赖 jsonb 键序（P0）', () => {
+  // jsonb 读回来的键序：利润 在最前，商品名称 被排到后面
+  const mapping: Record<string, FieldMappingValue> = {
+    利润: { name: '利润', type: 'plain', displayType: 'number' },
+    日期: { name: '日期', type: 'plain', displayType: 'date' },
+    商品名称: {
+      name: '商品名称',
+      type: 'plain',
+      displayType: 'text',
+      primary: true,
+    },
+    支出金额: { name: '支出金额', type: 'plain', displayType: 'number' },
+  };
+  const records = [
+    {
+      recordId: 'r1',
+      fields: {
+        利润: -108,
+        日期: new Date('2026-01-03T00:00:00+08:00').getTime(),
+        商品名称: '韩束精华',
+        支出金额: 108,
+      },
+    },
+  ];
+
+  it('投影模式用 primary 作标识，而不是排在最前的公式列', () => {
+    const s = makeScene();
+
+    const out = s.formatReply(
+      {
+        ...intentBase,
+        intent: 'QUERY',
+        fields: {},
+        projectFields: ['支出金额'],
+      },
+      { success: true, records },
+      mapping,
+    );
+
+    // 回归：以前取"记录第一个非空字段"，渲染成「-108 → 支出金额：108」
+    expect(out).toContain('韩束精华 → 支出金额：108');
+    expect(out).not.toContain('-108 →');
+  });
+
+  it('没配 primary 时退化路径也会跳过数字/日期列', () => {
+    const s = makeScene();
+    const noPrimary: Record<string, FieldMappingValue> = {
+      ...mapping,
+      商品名称: { name: '商品名称', type: 'plain', displayType: 'text' },
+    };
+
+    const out = s.formatReply(
+      {
+        ...intentBase,
+        intent: 'QUERY',
+        fields: {},
+        projectFields: ['支出金额'],
+      },
+      { success: true, records },
+      noPrimary,
+    );
+
+    expect(out).toContain('韩束精华 → 支出金额：108');
+  });
+});

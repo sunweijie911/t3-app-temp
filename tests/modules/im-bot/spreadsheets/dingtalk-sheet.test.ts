@@ -19,11 +19,11 @@ const makeConfig = (
 });
 
 describe('toDingtalkValue', () => {
-  it('YYYY-MM-DD → CST 12:00 毫秒时间戳（与飞书/企微侧对齐避免跨日）', () => {
+  it('YYYY-MM-DD → CST 当天 00:00 毫秒时间戳（三平台一致）', () => {
     const ms = toDingtalkValue('2026-05-11');
     expect(typeof ms).toBe('number');
     expect(new Date(ms as number).toISOString()).toBe(
-      '2026-05-11T04:00:00.000Z',
+      '2026-05-10T16:00:00.000Z',
     );
   });
 
@@ -114,9 +114,9 @@ describe('displayType 决定值是否按日期解释（P1）', () => {
     expect(toDingtalkValue('2026-05-11', 'number')).toBe('2026-05-11');
   });
 
-  it("声明 'date' 的列仍转 CST 12:00 毫秒值", () => {
+  it("声明 'date' 的列转 CST 当天 00:00 毫秒值", () => {
     expect(toDingtalkValue('2026-05-11', 'date')).toBe(
-      new Date('2026-05-11T12:00:00+08:00').getTime(),
+      new Date('2026-05-11T00:00:00+08:00').getTime(),
     );
   });
 

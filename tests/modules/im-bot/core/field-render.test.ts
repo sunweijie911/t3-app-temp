@@ -3,7 +3,9 @@ import {
   clampReply,
   clampReplyBytes,
   fieldMeta,
+  fieldToString,
   MASKED_PLACEHOLDER,
+  primaryKeyOf,
   renderFieldEntry,
   renderRecordSummary,
   utf8ByteLength,
@@ -180,5 +182,79 @@ describe('clampReplyBytes — 按 UTF-8 字节截断', () => {
     const out = clampReplyBytes('汉'.repeat(10), 6);
     expect(out).toBe('汉汉');
     expect(utf8ByteLength(out)).toBeLessThanOrEqual(6);
+  });
+});
+
+describe('主标识与浮点噪声（P0/P1）', () => {
+  // 模拟 jsonb 读回来的键序：Postgres 按「键长度 + 字节序」重排，
+  // 写进去的「商品名称, 支出分类, …」变成下面这样
+  const jsonbOrdered: Record<string, FieldMappingValue> = {
+    利润: { name: '利润', type: 'plain', displayType: 'number' },
+    备注: { name: '备注', type: 'plain', displayType: 'text' },
+    日期: { name: '日期', type: 'plain', displayType: 'date' },
+    月份: { name: '月份', type: 'plain', displayType: 'text' },
+    商品名称: { name: '商品名称', type: 'plain', displayType: 'text' },
+    支出金额: { name: '支出金额', type: 'plain', displayType: 'number' },
+  };
+  const record = {
+    利润: -108,
+    备注: '订单号：5116777000035406',
+    日期: new Date('2026-01-03T00:00:00+08:00').getTime(),
+    月份: '1月',
+    商品名称: '韩束紧致抚纹精华乳100ml',
+    支出金额: 108,
+  };
+
+  it('primaryKeyOf 取显式声明的主标识', () => {
+    expect(primaryKeyOf(jsonbOrdered)).toBeUndefined();
+    expect(
+      primaryKeyOf({
+        ...jsonbOrdered,
+        商品名称: {
+          name: '商品名称',
+          type: 'plain',
+          displayType: 'text',
+          primary: true,
+        },
+      }),
+    ).toBe('商品名称');
+  });
+
+  it('声明了 primary 的字段排在摘要最前', () => {
+    const withPrimary: Record<string, FieldMappingValue> = {
+      ...jsonbOrdered,
+      商品名称: {
+        name: '商品名称',
+        type: 'plain',
+        displayType: 'text',
+        primary: true,
+      },
+    };
+
+    const summary = renderRecordSummary(record, withPrimary);
+
+    // 回归：不声明 primary 时，jsonb 键序会让删除确认展示成
+    // 「利润=-108 / 备注=… / 日期=… / 月份=1月」，看不到商品名称
+    expect(summary.startsWith('商品名称=韩束紧致抚纹精华乳100ml')).toBe(true);
+    // 主标识占掉第一格，其余字段顺次跟上（仍受 maxFields 限制）
+    expect(summary.split(' / ')).toHaveLength(4);
+  });
+
+  it('没声明 primary 时行为不变（不引入回归）', () => {
+    expect(renderRecordSummary(record, jsonbOrdered)).toBe(
+      '利润=-108 / 备注=订单号：5116777000035406 / 日期=2026/01/03 / 月份=1月',
+    );
+  });
+
+  it('公式字段的浮点残留被收敛，真实精度不变', () => {
+    const t = (v: number) => fieldToString(v, 'number');
+    expect(t(26.612000000000023)).toBe('26.612');
+    expect(t(8.729999999999997)).toBe('8.73');
+    expect(t(2.4999999999999982)).toBe('2.5');
+    // 真实精度不能被抹掉
+    expect(t(172.188)).toBe('172.188');
+    expect(t(0.0001)).toBe('0.0001');
+    expect(t(108)).toBe('108');
+    expect(t(-108)).toBe('-108');
   });
 });

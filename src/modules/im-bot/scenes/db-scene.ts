@@ -3,6 +3,7 @@ import {
   fieldMeta,
   fieldToString,
   maskSensitive,
+  primaryKeyOf,
   renderFieldEntry,
   truncateForDisplay,
 } from '../core/field-render';
@@ -228,13 +229,25 @@ export class DatabaseDrivenScene implements BotScene {
       if (project.length > 0) {
         const DISPLAY_LIMIT = 20; // 投影模式更紧凑，可多显示几条
         const displayed = result.records.slice(0, DISPLAY_LIMIT);
+        // 主标识：优先取显式声明 primary 的字段。
+        // 不能"取记录第一个非空字段"——fieldMapping 存 jsonb，键序被
+        // Postgres 重排过，实测会把公式列「利润」当成标识，渲染出
+        // 「-108 → 商品名称：…」这种前后颠倒的行。
+        const primary = primaryKeyOf(fieldMapping);
         const lines = displayed.map((r) => {
-          // 主标识：取记录第一个非空字段（fieldMapping 第一列通常是名称类）
-          const labelEntry = Object.entries(r.fields).find(
-            ([k, v]) => !project.includes(k) && v != null && v !== '',
-          );
-          const labelStr = labelEntry
-            ? renderFieldEntry(labelEntry[0], labelEntry[1], fieldMapping)
+          const labelKey =
+            primary && !project.includes(primary) && r.fields[primary]
+              ? primary
+              : // 退化路径：跳过数字/日期列，它们几乎不可能是名称类标识
+                Object.keys(r.fields).find((k) => {
+                  if (project.includes(k)) return false;
+                  const v = r.fields[k];
+                  if (v == null || v === '') return false;
+                  const { displayType } = fieldMeta(k, fieldMapping);
+                  return displayType !== 'number' && displayType !== 'date';
+                });
+          const labelStr = labelKey
+            ? renderFieldEntry(labelKey, r.fields[labelKey], fieldMapping)
                 .display
             : '';
           const cols = project

@@ -22,11 +22,11 @@ const makeConfig = (
 });
 
 describe('coerceFieldValue', () => {
-  it('YYYY-MM-DD 字符串 → CST 12:00 毫秒时间戳', () => {
+  it('YYYY-MM-DD 字符串 → CST 当天 00:00 毫秒时间戳', () => {
     const ms = coerceFieldValue('2026-05-11');
     expect(typeof ms).toBe('number');
     expect(new Date(ms as number).toISOString()).toBe(
-      '2026-05-11T04:00:00.000Z',
+      '2026-05-10T16:00:00.000Z',
     );
   });
 
@@ -271,11 +271,13 @@ describe('日期边界语义 — 由真实 API 实测反推（回归保护）', 
     });
   });
 
-  it('> 当天 → isGreater 次日零点（用当天零点会把当天错误算进来）', () => {
-    // 记录的真实时刻（如当天 12:00）确实大于当天零点，所以不能用当天零点
+  it('> 当天 → isGreater 当天零点（用次日零点会把次日整天吞掉）', () => {
+    // 记录侧也是当天零点（见 field-types.ts），filter 值截断后与之相等，
+    // 严格大于即"排除当天、包含次日"。
+    // 实测：用次日零点时「> 01-02」少了 01-03 的记录（96 条 vs 97 条）
     expect(only({ op: '>', value: '2026-05-11' })).toEqual({
       op: 'isGreater',
-      ms: start('2026-05-11') + DAY,
+      ms: start('2026-05-11'),
     });
   });
 
@@ -349,9 +351,11 @@ describe('displayType 决定值是否按日期解释（P1：文本列的 2026-05
     expect(coerceFieldValue('2026-05-11', 'number')).toBe('2026-05-11');
   });
 
-  it("声明 'date' 的列：仍转成 CST 12:00 毫秒值", () => {
+  it("声明 'date' 的列：转成 CST 当天 00:00 毫秒值", () => {
+    // 00:00 而不是 12:00：与平台自己写入日期的时刻一致，
+    // 否则 ExactDate 按日截断后各操作符的边界会差一天
     expect(coerceFieldValue('2026-05-11', 'date')).toBe(
-      new Date('2026-05-11T12:00:00+08:00').getTime(),
+      new Date('2026-05-11T00:00:00+08:00').getTime(),
     );
   });
 

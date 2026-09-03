@@ -103,6 +103,18 @@ export function truncateForDisplay(s: string): string {
 
 export type DisplayType = 'number' | 'date' | 'text';
 
+/**
+ * 去掉 IEEE754 运算残留：26.612000000000023 → 26.612。
+ *
+ * 公式字段（利润、利润率）算出来的钱经常带一串 ...0000023，直接 String()
+ * 丢进群里很难看。用 12 位有效数字收敛，不改变字段真实精度
+ * ——按字段的显示格式（飞书 property.formatter）取小数位是另一件事。
+ */
+function trimFloatNoise(v: number): string {
+  if (!Number.isFinite(v) || Number.isInteger(v)) return String(v);
+  return String(Number.parseFloat(v.toPrecision(12)));
+}
+
 function formatDateMs(v: number): string {
   return new Date(v).toLocaleDateString('zh-CN', {
     timeZone: 'Asia/Shanghai',
@@ -125,10 +137,12 @@ export function fieldToStringRaw(
 ): string {
   if (v == null || v === '') return '';
   if (typeof v === 'number') {
-    if (displayType === 'number' || displayType === 'text') return String(v);
+    if (displayType === 'number' || displayType === 'text') {
+      return trimFloatNoise(v);
+    }
     if (displayType === 'date') return formatDateMs(v);
     if (v >= DATE_MS_MIN && v <= DATE_MS_MAX) return formatDateMs(v);
-    return String(v);
+    return trimFloatNoise(v);
   }
   if (typeof v === 'string' || typeof v === 'boolean') return String(v);
   if (Array.isArray(v)) {
@@ -190,21 +204,39 @@ export function renderFieldEntry(
   };
 }
 
+/** 取显式声明为主标识的逻辑字段名 */
+export function primaryKeyOf(
+  fieldMapping?: Record<string, FieldMappingValue>,
+): string | undefined {
+  if (!fieldMapping) return undefined;
+  for (const [key, m] of Object.entries(fieldMapping)) {
+    if (typeof m === 'object' && m.primary === true) return key;
+  }
+  return undefined;
+}
+
 /**
  * 把一条记录压成单行摘要，供候选列表（UPDATE 多条命中 / DELETE 确认）使用。
  * 走完整的脱敏 + 单字段截断，并限制字段个数，避免一行刷屏。
+ *
+ * 主标识排在最前。**不能靠 fieldMapping 的键顺序**——它存在 jsonb 里，
+ * Postgres 按「键长度 + 字节序」重排，"第一列是名称类"的假设根本不成立：
+ * 实测一张财务表的摘要变成「利润=-108 / 备注=… / 日期=… / 月份=1月」，
+ * 删除确认时用户看不到商品名称，判断不出要删哪条。
  */
 export function renderRecordSummary(
   fields: Record<string, unknown>,
   fieldMapping?: Record<string, FieldMappingValue>,
   maxFields = 4,
 ): string {
-  // 有 fieldMapping 时按配置顺序取（第一列通常是名称类主标识），否则按记录自身顺序
-  const keys = fieldMapping
+  const configured = fieldMapping
     ? Object.keys(fieldMapping).filter((k) => k in fields)
     : Object.keys(fields);
-  const extra = Object.keys(fields).filter((k) => !keys.includes(k));
-  const parts = [...keys, ...extra]
+  const extra = Object.keys(fields).filter((k) => !configured.includes(k));
+  const primary = primaryKeyOf(fieldMapping);
+  const rest = [...configured, ...extra].filter((k) => k !== primary);
+  const keys = primary && primary in fields ? [primary, ...rest] : rest;
+  const parts = keys
     .map((k) => renderFieldEntry(k, fields[k], fieldMapping))
     .filter((e) => e.display !== '')
     .slice(0, maxFields)
