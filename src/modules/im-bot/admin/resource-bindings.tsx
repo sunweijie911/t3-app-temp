@@ -347,7 +347,15 @@ export default function ImBotResourceBindingsPage() {
               </Form.Item>
               <Form.Item label="资源类型" required>
                 <Select
-                  onChange={(val) => setEditing({ ...editing, kind: val })}
+                  onChange={(val) =>
+                    setEditing({
+                      ...editing,
+                      kind: val,
+                      // 只有飞书实现了文档能力，切过去时顺带纠正平台，
+                      // 免得留下一个存得下、跑不通的组合
+                      provider: val === 'doc' ? 'feishu' : editing.provider,
+                    })
+                  }
                   options={[
                     { value: 'table', label: '多维表格' },
                     { value: 'doc', label: '文档' },
@@ -365,8 +373,16 @@ export default function ImBotResourceBindingsPage() {
                   onChange={(val) => setEditing({ ...editing, provider: val })}
                   options={[
                     { value: 'feishu', label: '飞书' },
-                    { value: 'wecom', label: '企业微信' },
-                    { value: 'dingtalk', label: '钉钉' },
+                    {
+                      value: 'wecom',
+                      label: '企业微信',
+                      disabled: editing.kind === 'doc',
+                    },
+                    {
+                      value: 'dingtalk',
+                      label: '钉钉',
+                      disabled: editing.kind === 'doc',
+                    },
                   ]}
                   value={editing.provider}
                 />

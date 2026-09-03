@@ -274,3 +274,40 @@ describe('群聊 @ 判定：被 @ 的必须是机器人自己（P2）', () => {
     expect(r.kind).toBe('ok');
   });
 });
+
+describe('ack 前的查询并发发出，不叠加超时（P2）', () => {
+  it('单聊不查机器人自身 open_id', async () => {
+    mockBotOpenId.mockResolvedValue('ou_bot');
+
+    const r = await adapter.decode(
+      makeReq(
+        makeEvent({ chatType: 'p2p', mentions: [], text: '查一下项目 A' }),
+      ),
+    );
+
+    expect(r.kind).toBe('ok');
+    expect(mockBotOpenId).not.toHaveBeenCalled();
+  });
+
+  it('群聊里三个查询并发发出（互不等待）', async () => {
+    const order: string[] = [];
+    const gate = (tag: string, ms: number) => async () => {
+      order.push(`${tag}:start`);
+      await new Promise((res) => setTimeout(res, ms));
+      order.push(`${tag}:end`);
+      return tag;
+    };
+    mockBotOpenId.mockImplementation(gate('bot', 20));
+    mockUserName.mockImplementation(gate('user', 10));
+    mockChatName.mockImplementation(gate('chat', 10));
+
+    await adapter.decode(makeReq(makeEvent({})));
+
+    // 串行的话 order 会是 start/end 交替；并发时三个 start 先挤在一起
+    expect(order.slice(0, 3)).toEqual([
+      'bot:start',
+      'user:start',
+      'chat:start',
+    ]);
+  });
+});

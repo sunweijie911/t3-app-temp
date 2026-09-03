@@ -363,3 +363,60 @@ describe('DingtalkChannelAdapter.decode — robotCode 含正则元字符', () =>
     if (res.kind === 'ok') expect(res.message.content).toBe('新增项目 督导2.0');
   });
 });
+
+describe('@ 前缀只在群聊剥离（P2）', () => {
+  it('单聊里以 @ 开头的正文完整保留', async () => {
+    const r = await adapter.decode(
+      makeReq({
+        ...basePayload,
+        conversationType: '1',
+        text: { content: '@张三 的项目进度' },
+      }),
+    );
+
+    expect(r.kind).toBe('ok');
+    if (r.kind !== 'ok') return;
+    // 剥离不设条件时会变成「的项目进度」
+    expect(r.message.content).toBe('@张三 的项目进度');
+  });
+
+  it('单聊里只发一个 @昵称 也不会被剥空丢弃', async () => {
+    const r = await adapter.decode(
+      makeReq({
+        ...basePayload,
+        conversationType: '1',
+        text: { content: '@张三' },
+      }),
+    );
+
+    expect(r.kind).toBe('ok');
+    if (r.kind !== 'ok') return;
+    expect(r.message.content).toBe('@张三');
+  });
+
+  it('群聊仍然剥掉 @机器人 前缀', async () => {
+    const r = await adapter.decode(
+      makeReq({
+        ...basePayload,
+        conversationType: '2',
+        text: { content: '@机器人 新增项目 A' },
+      }),
+    );
+
+    expect(r.kind).toBe('ok');
+    if (r.kind !== 'ok') return;
+    expect(r.message.content).toBe('新增项目 A');
+  });
+
+  it('群聊只 @ 机器人不写内容 → 忽略', async () => {
+    const r = await adapter.decode(
+      makeReq({
+        ...basePayload,
+        conversationType: '2',
+        text: { content: '@机器人' },
+      }),
+    );
+
+    expect(r.kind).toBe('ignored');
+  });
+});

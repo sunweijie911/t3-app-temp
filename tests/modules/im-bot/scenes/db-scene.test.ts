@@ -282,7 +282,8 @@ describe('DatabaseDrivenScene.formatReply — QUERY 默认渲染', () => {
       { ...intentBase, intent: 'QUERY', fields: {} },
       { success: true, records, hitQueryLimit: true },
     );
-    expect(reply).toContain('已达单次查询上限 1000 条');
+    // 不报具体条数：截断由 adapter 上报，钉钉/企微过滤后的条数不等于上限
+    expect(reply).toContain('数据量已达单次拉取上限');
   });
 
   it('条数恰好 1000 但没撞上限时不误报截断', () => {
@@ -297,7 +298,7 @@ describe('DatabaseDrivenScene.formatReply — QUERY 默认渲染', () => {
       { ...intentBase, intent: 'QUERY', fields: {} },
       { success: true, records },
     );
-    expect(reply).not.toContain('已达单次查询上限');
+    expect(reply).not.toContain('数据量已达单次拉取上限');
   });
 });
 
@@ -579,3 +580,36 @@ describe('文档结果不被表格取向的回复模板吃掉（P1）', () => {
   });
 });
 // biome-ignore-end lint/suspicious/noTemplateCurlyInString: end
+
+describe('查询截断提示不谎报条数（P0-4 的连带修正）', () => {
+  it('过滤后只剩少量记录时，不把返回条数说成"上限"', () => {
+    const s = makeScene();
+
+    const out = s.formatReply(
+      { ...intentBase, intent: 'QUERY', fields: {} },
+      {
+        success: true,
+        hitQueryLimit: true,
+        records: [
+          { recordId: 'r1', fields: { a: 'x' } },
+          { recordId: 'r2', fields: { a: 'y' } },
+        ],
+      },
+    );
+
+    expect(out).toContain('数据量已达单次拉取上限');
+    // 旧文案会渲染成"已达单次查询上限 2 条"
+    expect(out).not.toContain('上限 2 条');
+  });
+
+  it('没撞上限时不带任何提示', () => {
+    const s = makeScene();
+
+    const out = s.formatReply(
+      { ...intentBase, intent: 'QUERY', fields: {} },
+      { success: true, records: [{ recordId: 'r1', fields: { a: 'x' } }] },
+    );
+
+    expect(out).not.toContain('上限');
+  });
+});

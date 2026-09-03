@@ -1692,7 +1692,7 @@ describe('Dispatcher — 查询截断由 adapter 上报（P0：钉钉/企微过�
     await d.process(makeMsg({ content: '查项目 A' }), channel);
 
     expect(adapter.queryRecordsWithMeta).toHaveBeenCalled();
-    expect(channel.lastReply).toContain('单次查询上限');
+    expect(channel.lastReply).toContain('数据量已达单次拉取上限');
   });
 
   it('DELETE：命中集可能不全时，确认提示里要说明', async () => {
@@ -1730,7 +1730,7 @@ describe('Dispatcher — 查询截断由 adapter 上报（P0：钉钉/企微过�
 
     await d.process(makeMsg({ content: '查所有项目' }), channel);
 
-    expect(channel.lastReply).toContain('单次查询上限');
+    expect(channel.lastReply).toContain('数据量已达单次拉取上限');
   });
 });
 
@@ -1806,5 +1806,157 @@ describe('Dispatcher — 确认后的执行失败要记进审计（P2：一律�
     expect(adapter.deleteRecord).not.toHaveBeenCalled();
     expect(events.at(-1)?.result).toBe('ignored');
     expect(channel.lastReply).toContain('确认删除');
+  });
+});
+
+describe('Dispatcher — 无效筛选项要剔除而不是只不计数（P2）', () => {
+  it('QUERY：空串占位的筛选键不下发给平台', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { recordId: 'r1', fields: { 项目名称: 'A' } },
+    ]);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"QUERY","fields":{},"filters":{"项目名称":"A","Node版本":""},"confidence":0.95,"summary":"查"}',
+    );
+
+    await d.process(makeMsg({ content: '查项目 A' }), channel);
+
+    // 带上 Node版本:'' 的话平台会收到 `is ['']`，结果恒为空
+    expect(adapter.queryRecords).toHaveBeenCalledWith(expect.anything(), {
+      项目名称: 'A',
+    });
+  });
+
+  it('保留键仍然透传（_conjunction 是协议的一部分）', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"QUERY","fields":{},"filters":{"项目名称":"A","_conjunction":"or","Node版本":"*"},"confidence":0.95,"summary":"查"}',
+    );
+
+    await d.process(makeMsg({ content: '查项目 A' }), channel);
+
+    expect(adapter.queryRecords).toHaveBeenCalledWith(expect.anything(), {
+      项目名称: 'A',
+      _conjunction: 'or',
+    });
+  });
+
+  it('DELETE：筛选项全是空值 → 拒绝，不查表', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"DELETE","filters":{"项目名称":""},"confidence":0.95,"summary":"删"}',
+    );
+
+    await d.process(makeMsg({ content: '删除项目' }), channel);
+
+    expect(adapter.queryRecords).not.toHaveBeenCalled();
+    expect(channel.lastReply).toContain('需要指定筛选条件');
+  });
+});
+
+describe('Dispatcher — 能力层抛出的错要说给用户（P2）', () => {
+  it('adapter 抛错时回复原因，而不是"服务暂时繁忙"', async () => {
+    const events: BotEvent[] = [];
+    const d = new Dispatcher({
+      getBinding: () => baseBinding,
+      onEvent: (e) => {
+        events.push(e);
+      },
+    });
+    d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error(
+        '筛选条件「上线日期」是一个区间（需要「且」），无法与「或」条件混用',
+      ),
+    );
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"QUERY","fields":{},"filters":{"项目名称":"A"},"confidence":0.95,"summary":"查"}',
+    );
+
+    await d.process(makeMsg({ content: '查项目 A' }), channel);
+
+    expect(channel.lastReply).toContain('无法与「或」条件混用');
+    expect(channel.lastReply).not.toContain('服务暂时繁忙');
+    expect(events.at(-1)?.result).toBe('error');
+  });
+
+  it('文档能力未实现的平台：回复 adapter 给的原因', async () => {
+    const docBinding: ResourceBinding = {
+      ...baseBinding,
+      kind: 'doc',
+      provider: 'dingtalk',
+      fieldMapping: {},
+    };
+    const d = new Dispatcher({ getBinding: () => docBinding });
+    d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    const channel = makeChannel();
+    mockGetDocAdapter.mockReturnValue({
+      platform: 'dingtalk',
+      readDocument: vi.fn(async () => {
+        throw new Error('钉钉文档适配器尚未实现');
+      }),
+      appendText: vi.fn(),
+    });
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"READ","fields":{},"confidence":0.95,"summary":"读"}',
+    );
+
+    await d.process(makeMsg({ content: '看下项目周报' }), channel);
+
+    expect(channel.lastReply).toContain('钉钉文档适配器尚未实现');
+    expect(channel.lastReply).not.toContain('服务暂时繁忙');
+  });
+});
+
+describe('Dispatcher — 协议保留键不能进写入字段（P2）', () => {
+  it('CREATE：_conjunction 被静默丢弃，不当成未知字段回显', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    (adapter.createRecord as ReturnType<typeof vi.fn>).mockResolvedValue({
+      recordId: 'r1',
+      fields: { 项目名称: 'A' },
+    });
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"CREATE","fields":{"项目名称":"A","_conjunction":"or"},"confidence":0.95,"summary":"新增"}',
+    );
+
+    await d.process(makeMsg({ content: '新增项目 A' }), channel);
+
+    // 透传下去会被 adapter 当平台列名，飞书直接 InvalidFieldName、整条失败
+    expect(adapter.createRecord).toHaveBeenCalledWith(expect.anything(), {
+      项目名称: 'A',
+    });
+    // 协议键不是用户说的字段，不该出现在"已忽略未配置的字段"里
+    expect(channel.lastReply).not.toContain('_conjunction');
+  });
+
+  it('CREATE：只有保留键时按"没有可写入内容"拒绝', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"CREATE","fields":{"_conjunction":"or"},"confidence":0.95,"summary":"新增"}',
+    );
+
+    await d.process(makeMsg({ content: '新增项目' }), channel);
+
+    expect(adapter.createRecord).not.toHaveBeenCalled();
+    expect(channel.lastReply).toContain('没有解析出要写入的字段');
   });
 });

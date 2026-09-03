@@ -64,21 +64,41 @@ interface DispatcherConfig {
   pendingStore?: PendingActionStore;
 }
 
+/** 该筛选项是否构成一个真正的条件 */
+function isEffectiveFilter(key: string, value: unknown): boolean {
+  // `_` 开头是协议保留键（如 _conjunction），下游 queryRecords 会跳过，
+  // 不能算作用户指定的筛选条件
+  if (key.startsWith('_')) return false;
+  // 值为空/通配也算无效：LLM 经常拿空串占位，下发后会生成 `is ['']` 条件
+  return value != null && value !== '' && value !== '*';
+}
+
 /**
- * 判断 filters 是否含有「有效」筛选键。
- * 排除以 _ 开头的保留键（如 _conjunction），这些键会被下游 queryRecords 跳过，
- * 不能作为筛选条件。用于 UPDATE/DELETE 前的空值守卫，防止保留键绕过判空导致全表命中。
+ * 剔除无效筛选项，保留协议保留键。
+ *
+ * 只做判空是不够的：无效项仍留在传给 adapter 的对象里，
+ * `{状态: '', 项目名称: 'X'}` 会真的下发 `状态 is [''] AND 项目名称 is ['X']`，
+ * 结果恒为空 —— 用户看到"未找到匹配记录"，而记录明明存在。
+ */
+function stripIneffectiveFilters(
+  filters: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(filters)) {
+    if (key.startsWith('_') || isEffectiveFilter(key, value)) out[key] = value;
+  }
+  return out;
+}
+
+/**
+ * 是否还剩下有效筛选键。用于 UPDATE/DELETE 的空值守卫 ——
+ * 防止 `{_conjunction:'or'}` 这类只有保留键的 filters 绕过判空命中全表。
  */
 function hasEffectiveFilters(
   filters: Record<string, unknown> | null | undefined,
 ): boolean {
   if (!filters) return false;
-  return Object.entries(filters).some(
-    // 值为空也算无效：LLM 返回 {"状态": ""} 时下游会生成 `is ['']` 条件，
-    // 匹配范围不可控，不能当成"用户指定了筛选条件"
-    ([key, value]) =>
-      !key.startsWith('_') && value != null && value !== '' && value !== '*',
-  );
+  return Object.entries(filters).some(([k, v]) => isEffectiveFilter(k, v));
 }
 
 /**
@@ -110,18 +130,28 @@ function resolveOperatorKey(
  * （`fieldMapping[key] ?? key`），飞书直接回 InvalidFieldName —— **整条写入失败**，
  * 用户只看到一句笼统的报错。写入侧丢掉未知字段并回显，比整条失败可用得多。
  *
- * 以 `_` 开头的保留键（如 `_conjunction`）不参与白名单，原样带过。
  * 绑定没配 fieldMapping 时整体透传，否则等于把这条绑定的写入全禁掉。
+ *
+ * @param keepReserved `_` 开头的保留键（如 `_conjunction`）是否原样带过。
+ *   **只有 filters 桶该开**：写入侧带过去的话，三个 adapter 都会把它当平台
+ *   列名下发，飞书回 InvalidFieldName、整条写入失败 —— 正是这个守卫要防的
+ *   那类失败。写入侧直接静默丢弃，也不计入 unknownKeys（协议键不是用户
+ *   说的字段，报「已忽略未配置的字段：_conjunction」只会让人困惑）。
  */
 function splitByMapping(
   input: Record<string, unknown>,
   fieldMapping: Record<string, FieldMappingValue>,
+  keepReserved = false,
 ): { known: Record<string, unknown>; unknownKeys: string[] } {
   const known: Record<string, unknown> = {};
   const unknownKeys: string[] = [];
   const hasMapping = Object.keys(fieldMapping).length > 0;
   for (const [k, v] of Object.entries(input)) {
-    if (k.startsWith('_') || !hasMapping || k in fieldMapping) {
+    if (k.startsWith('_')) {
+      if (keepReserved) known[k] = v;
+      continue;
+    }
+    if (!hasMapping || k in fieldMapping) {
       known[k] = v;
       continue;
     }
@@ -538,10 +568,22 @@ export class Dispatcher {
       };
     }
 
-    if (binding.kind === 'doc') {
-      return this.executeDoc(binding, parsed);
+    // adapter 抛出的错必须在这里收住：往上会被 process 的兜底 catch 压成
+    // 一句"服务暂时繁忙"，而这些消息本来就是写给用户看的 ——
+    // 「区间条件不能与『或』混用，请拆成两次查询」「关联记录要先去子表创建」
+    // 「钉钉/企微文档适配器尚未实现」，压掉之后用户完全不知道该怎么改。
+    try {
+      if (binding.kind === 'doc') {
+        return await this.executeDoc(binding, parsed);
+      }
+      return await this.executeTable(binding, scene, parsed, msg);
+    } catch (err) {
+      console.error('[Dispatcher] 能力层执行失败:', err);
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : '执行失败',
+      };
     }
-    return this.executeTable(binding, scene, parsed, msg);
   }
 
   /** 文档能力：读取 / 追加 */
@@ -592,10 +634,14 @@ export class Dispatcher {
       parsed.fields,
       mapping,
     );
-    const { known: filters, unknownKeys: badFilterKeys } = splitByMapping(
+    const { known: rawFilters, unknownKeys: badFilterKeys } = splitByMapping(
       parsed.filters ?? {},
       mapping,
+      // filters 需要 _conjunction 这类保留键
+      true,
     );
+    // 未知键的拒绝先于剔除：字段名写错就该报错，哪怕它的值恰好是空的
+    const filters = stripIneffectiveFilters(rawFilters);
     if (badFilterKeys.length > 0) {
       const available = Object.keys(mapping).join('、');
       return {

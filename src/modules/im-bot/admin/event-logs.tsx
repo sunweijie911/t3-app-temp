@@ -219,12 +219,15 @@ export default function ImBotEventLogsPage() {
     total: 0,
     success: 0,
     error: 0,
+    pending: 0,
     avgCostMs: 0,
   };
+  // 分母排除待确认：二次确认是破坏性操作的设计正路、还等着用户回复，
+  // 把它算进分母等于每次 DELETE 都拉低成功率 —— 当初把 pending 从 error
+  // 里拆出来就是为了这个，只拆了存储侧没拆展示侧等于没拆
+  const ratedTotal = todayStats.total - todayStats.pending;
   const successRate =
-    todayStats.total > 0
-      ? Math.round((todayStats.success / todayStats.total) * 100)
-      : 0;
+    ratedTotal > 0 ? Math.round((todayStats.success / ratedTotal) * 100) : 0;
 
   return (
     <main className="min-h-screen bg-gray-50">
@@ -241,12 +244,22 @@ export default function ImBotEventLogsPage() {
           </Space>
         </div>
 
-        <div className="mb-4 grid grid-cols-3 gap-4">
+        <div className="mb-4 grid grid-cols-4 gap-4">
           <Card size="small">
             <Statistic title="今日消息" value={todayStats.total} />
           </Card>
           <Card size="small">
             <Statistic suffix="%" title="成功率" value={successRate} />
+            <div className="text-gray-400 text-xs">不计待确认</div>
+          </Card>
+          <Card size="small">
+            <Statistic
+              title="待确认"
+              value={todayStats.pending}
+              valueStyle={{
+                color: todayStats.pending > 0 ? '#d46b08' : undefined,
+              }}
+            />
           </Card>
           <Card size="small">
             <Statistic

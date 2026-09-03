@@ -361,6 +361,12 @@ export const imBotAdminRouter = createTRPCRouter({
         .refine((v) => v.kind !== 'table' || v.workspaceId.length > 0, {
           message: '表格资源必须填写 Workspace ID (飞书 app_token)',
           path: ['workspaceId'],
+        })
+        // 钉钉/企微的文档 adapter 是抛错占位。不在这里拦住的话，绑定能存下来，
+        // 到运行期才抛「尚未实现」—— 用户只会看到机器人报错，不知道是配置问题
+        .refine((v) => v.kind !== 'doc' || v.provider === 'feishu', {
+          message: '文档资源目前只支持飞书（钉钉 / 企微文档适配器尚未实现）',
+          path: ['provider'],
         }),
     )
     .mutation(async ({ ctx, input }) => {

@@ -116,18 +116,8 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       | undefined;
     // 群聊要求 @机器人；单聊天然是对机器人说话，不该要求 @
     // （以前无条件要求 mentions 非空，导致所有私聊消息被静默丢弃）
-    if (chatType === 'group') {
-      if (!mentions || mentions.length === 0) {
-        return { kind: 'ignored', reason: '群聊未 @机器人' };
-      }
-      // mentions 里是**所有**被 @ 的人。标准权限下平台只推送 @机器人 的消息，
-      // 但开通"接收群里所有消息"后，只判断非空会让机器人去应答
-      // 「@张三 帮我看下」这类跟它无关的消息。
-      // 拿不到自身 open_id 时 fail-open（退回旧行为）—— 见 auth/feishu-bot.ts
-      const botOpenId = await getFeishuBotOpenId();
-      if (botOpenId && !mentions.some((m) => m.id?.open_id === botOpenId)) {
-        return { kind: 'ignored', reason: '群聊 @ 的不是机器人' };
-      }
+    if (chatType === 'group' && (!mentions || mentions.length === 0)) {
+      return { kind: 'ignored', reason: '群聊未 @机器人' };
     }
 
     let content = '';
@@ -150,11 +140,27 @@ export class FeishuChannelAdapter implements ChannelAdapter {
     const senderId = senderInfo?.open_id ?? senderInfo?.user_id ?? '';
     const chatId = message.chat_id as string;
 
-    // 用户名与群名并发查询，两者都有独立缓存与 3s 超时，失败各自降级
-    const [senderName, chatName] = await Promise.all([
+    // 三个查询一起发。各自都有独立缓存、3s 超时、失败各自降级，但**串行**
+    // 起来就会把 ack 时间叠成 9s+（冷启动还要叠上 token 刷新的 10s），
+    // 而飞书 3s 内不回 200 就重试 —— decode() 整个跑在 ack 之前。
+    // 机器人自身 open_id 只有群聊的 @ 判定要用，单聊不查。
+    const [botOpenId, senderName, chatName] = await Promise.all([
+      chatType === 'group' ? getFeishuBotOpenId() : Promise.resolve(null),
       senderId ? getFeishuUserName(senderId) : Promise.resolve(null),
       chatType === 'group' ? getFeishuChatName(chatId) : Promise.resolve(null),
     ]);
+
+    // mentions 里是**所有**被 @ 的人。标准权限下平台只推送 @机器人 的消息，
+    // 但开通"接收群里所有消息"后，只判断非空会让机器人去应答
+    // 「@张三 帮我看下」这类跟它无关的消息。
+    // 拿不到自身 open_id 时 fail-open（退回旧行为）—— 见 auth/feishu-bot.ts
+    if (
+      chatType === 'group' &&
+      botOpenId &&
+      !mentions?.some((m) => m.id?.open_id === botOpenId)
+    ) {
+      return { kind: 'ignored', reason: '群聊 @ 的不是机器人' };
+    }
 
     return {
       kind: 'ok',

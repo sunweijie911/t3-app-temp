@@ -212,10 +212,14 @@ export class DatabaseDrivenScene implements BotScene {
       if (result.records.length === 0)
         return `📊 查询结果: 未找到匹配的${this.name}`;
 
-      // 命中 adapter 的翻页硬上限说明真实匹配可能更多、被静默截断了，
-      // 提示用户缩窄条件。上限各平台不同，由 adapter 声明后经 ExecuteResult 传过来
+      // 拉取撞上 adapter 的翻页硬上限，说明真实匹配可能更多、被静默截断了。
+      //
+      // 这里**不能**把 records.length 当成"上限"报出来：截断由 adapter 上报，
+      // 而钉钉/企微的截断发生在内存过滤之前，过滤后可能只剩 3 条 ——
+      // 会渲染成"已达单次查询上限 3 条"这种自相矛盾的话。上限值各平台不同、
+      // 也没必要让用户知道，说清"结果可能不全 + 怎么办"就够了。
       const limitHint = result.hitQueryLimit
-        ? `\n\n⚠️ 已达单次查询上限 ${result.records.length} 条，可能还有未展示的数据，请缩窄筛选条件`
+        ? '\n\n⚠️ 数据量已达单次拉取上限，结果可能不完整，请缩窄筛选条件'
         : '';
 
       // 投影模式：LLM 标记了 projectFields → 只渲染主标识 + 指定列，

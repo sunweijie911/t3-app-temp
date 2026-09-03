@@ -413,6 +413,13 @@ flowchart TD
 - **审计日志要 await**。整个流程跑在 Next 的 `after()` 里，游离的
   fire-and-forget 写库会在 after 回调 resolve 时被冻结，serverless 上表现为
   日志随机丢失。
+- **ack 之前的网络往返必须并发**。`decode()` 整个跑在返回 200 之前，飞书侧
+  要解析用户名、群名、机器人自身 open_id 三样，各自 3s 超时 —— 串起来就把
+  ack 时间叠成 9s+（冷启动还要叠 token 刷新的 10s），而平台 3s 不回就重试。
+  三个查询走一个 `Promise.all`，@ 判定拿到结果后再做。
+- **能力层抛出的错要收在 `execute()` 里**。往上会被兜底 catch 压成一句
+  "服务暂时繁忙"，而这些消息本来就是写给用户看的（区间条件不能与"或"混用、
+  关联记录要先去子表创建、该平台文档能力未实现）。
 
 ### 破坏性操作的闸门
 
@@ -469,6 +476,16 @@ LLM 幻觉出表里没有的字段时，adapter 会用原名透传给平台（`f
   在 DELETE / UPDATE 上就是放大影响面。
 
 绑定未配 `fieldMapping` 时整体透传，否则等于把这条绑定的写入全禁掉。
+
+两条与"键"有关的补充规则：
+
+- **协议保留键（`_` 开头）只对筛选侧放行**。写入侧带过去的话，三个 adapter
+  都会把 `_conjunction` 当平台列名下发，飞书回 `InvalidFieldName`、整条写入
+  失败 —— 正是这个守卫要防的那类失败。写入侧静默丢弃，且不计入"已忽略的
+  字段"（协议键不是用户说的字段，报出来只会让人困惑）。
+- **无效筛选项要剔除，不能只是不计入判空**。`{状态:'', 项目名称:'X'}` 里
+  空串占位很常见，留着它就会下发 `状态 is ['']`，结果恒为空 ——
+  用户看到"未找到匹配记录"，而记录明明存在。
 
 ## 权限模型
 
@@ -597,7 +614,7 @@ IM_BOT_FEISHU_VERIFICATION_TOKEN # 必填（DB 或 env 二选一），缺失则�
 | 场景管理 | `/admin/im-bot` | 列表 / dnd-kit 拖拽排序 / 启停；Modal 编辑 sceneId、关键词 Tags、system prompt、回复模板、两张权限白名单 |
 | 平台配置 | `/admin/im-bot/platforms` | 三平台凭证；secret 字段以 `********` 回显，提交时等于占位符则保留 DB 原值；展示应填的回调地址 |
 | 资源绑定 | `/admin/im-bot/resource-bindings` | 场景 × 别名 → 资源；**从飞书拉取字段**后勾选生成 `fieldMapping`（按 ui_type 建议 plain/link/multiSelect 与「取值语义」text/number/date，敏感名自动勾脱敏）。plain 一律输出为对象：裸字符串放不下 `displayType`，等于让运行时继续靠值猜类型 |
-| 事件日志 | `/admin/im-bot/event-logs` | 按平台/场景/结果/时间筛选；统计卡片；共享状态观测（待确认堆积说明有用户卡在等待态）；过期记录与历史日志清理 |
+| 事件日志 | `/admin/im-bot/event-logs` | 按平台/场景/结果/时间筛选；统计卡片（**成功率分母排除 `pending`**，并单独展示待确认数 —— 只把 pending 从 error 里拆出来、展示侧仍算进分母等于没拆）；共享状态观测（待确认堆积说明有用户卡在等待态）；过期记录与历史日志清理 |
 
 tRPC 过程一览（全部 `adminProcedure`）：`listScenes` `upsertScene`
 `reorderScenes` `deleteScene` `toggleScene` `listPlatforms` `upsertPlatform`
@@ -625,7 +642,7 @@ tRPC 过程一览（全部 `adminProcedure`）：`listScenes` `upsertScene`
 | 项 | 说明 |
 |----|------|
 | **单消息单意图** | 意图协议是扁平 JSON 而非 tool calling，做不了"先查再改"这类多步任务；字段校验只能靠 prompt 约束 + 事后守卫 |
-| **文档能力不完整** | 只有飞书 docx，且只能读全文 + 末尾追加纯文本；钉钉 / 企微是抛错占位；定位编辑需要改用 blocks API |
+| **文档能力不完整** | 只有飞书 docx，且只能读全文 + 末尾追加纯文本；定位编辑需要改用 blocks API。钉钉 / 企微是抛错占位，`upsertResourceBinding` 已在保存时拒绝 `kind=doc` × 非飞书 provider，不让这种组合存进库到运行期才炸 |
 | **`file` 资源类型未实现** | `ACTIONS_BY_KIND.file` 是空数组，绑定后任何操作都会被拒 |
 | **跨实例配置不即时** | 只有 TTL 收敛，没有 pub/sub |
 | **审计日志留存原文** | `content` 存用户原始消息；`resultData` 已只存摘要，但脱敏仍只作用于 IM 回复层 |
@@ -635,7 +652,7 @@ tRPC 过程一览（全部 `adminProcedure`）：`listScenes` `upsertScene`
 
 ## 测试
 
-`tests/modules/im-bot/` 下按目录镜像源码结构（416 个用例），覆盖加解密往返、
+`tests/modules/im-bot/` 下按目录镜像源码结构（431 个用例），覆盖加解密往返、
 验签、消息解码、字段渲染与脱敏、日期边界、客户端过滤、翻页续拉与去重与截断
 上报、回复截断、场景匹配与作用域、意图解析、`displayType` 的写入/筛选分流、
 文档结果与回复模板的优先级、以及 dispatcher 的全流程编排（含权限、未知字段

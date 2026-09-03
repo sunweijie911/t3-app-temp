@@ -131,19 +131,24 @@ export class DingtalkChannelAdapter implements ChannelAdapter {
 
     const chatType: ChatType = body.conversationType === '1' ? 'p2p' : 'group';
 
-    // 群聊里钉钉已经只在 @机器人 时才回调，但正文仍含 @昵称 前缀，需剥掉
     let content = (body.text?.content ?? '').trim();
-    if (robotCode) {
-      content = content
-        .replace(new RegExp(`^@?${escapeRegExp(robotCode)}\\s*`), '')
-        .trim();
+    // 只在群聊剥 @ 前缀。单聊钉钉不会加 @机器人，照剥会吃掉用户正文的第一个
+    // token：私聊「@张三 的项目进度」变成「的项目进度」，只发「@张三」
+    // 会被剥空后当成"内容为空"直接丢弃。
+    if (chatType === 'group') {
+      // 群聊里钉钉已经只在 @机器人 时才回调，但正文仍含 @昵称 前缀，需剥掉
+      if (robotCode) {
+        content = content
+          .replace(new RegExp(`^@?${escapeRegExp(robotCode)}\\s*`), '')
+          .trim();
+      }
+      // 剥掉开头的 "@昵称"：后面跟空白（正常情况），或者整条消息就只有这个 @
+      // （只 @ 了机器人什么都没写 —— 这时不能让 "@昵称" 残留成业务正文）。
+      // 只剥一次，所以 "@机器人 @张三的进度" 会保留后面那个 @张三。
+      content = content.replace(/^@\S+(?:\s+|$)/, '').trim();
     }
-    // 剥掉开头的 "@昵称"：后面跟空白（正常情况），或者整条消息就只有这个 @
-    // （只 @ 了机器人什么都没写 —— 这时不能让 "@昵称" 残留成业务正文）。
-    // 只剥一次，所以 "@机器人 @张三的进度" 会保留后面那个 @张三。
-    content = content.replace(/^@\S+(?:\s+|$)/, '').trim();
     if (!content) {
-      return { kind: 'ignored', reason: '@ 之后内容为空' };
+      return { kind: 'ignored', reason: '正文为空' };
     }
 
     if (!body.sessionWebhook) {
