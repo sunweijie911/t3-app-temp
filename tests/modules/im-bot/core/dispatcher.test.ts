@@ -1352,3 +1352,55 @@ describe('Dispatcher — 审计事件', () => {
     expect(channel.lastReply).not.toContain('服务暂时繁忙');
   });
 });
+
+describe('Dispatcher — 字段清单注入 prompt', () => {
+  it('把绑定的字段清单喂给 LLM（不再依赖管理员手抄）', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"QUERY","filters":{"项目名称":"x"},"confidence":0.95,"summary":"查"}',
+    );
+
+    await d.process(makeMsg({ content: '查项目 x' }), channel);
+
+    const systemPrompt = mockChatCompletion.mock.calls.at(-1)?.[0] ?? '';
+    expect(systemPrompt).toContain('可操作的资源与字段');
+    expect(systemPrompt).toContain('项目名称');
+    expect(systemPrompt).toContain('Node版本');
+    expect(systemPrompt).toContain('CREATE / UPDATE / QUERY / DELETE');
+  });
+
+  it('listBindings 提供多资源时，prompt 里列出全部并说明怎么选', async () => {
+    const docBinding: ResourceBinding = {
+      alias: '周报文档',
+      kind: 'doc',
+      provider: 'feishu',
+      workspaceId: '',
+      resourceId: 'doc1',
+      fieldMapping: {},
+      isDefault: false,
+    };
+    const d = new Dispatcher({
+      getBinding: () => baseBinding,
+      listBindings: () => [baseBinding, docBinding],
+    });
+    d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"QUERY","filters":{"项目名称":"x"},"confidence":0.95,"summary":"查"}',
+    );
+
+    await d.process(makeMsg({ content: '查项目 x' }), channel);
+
+    const systemPrompt = mockChatCompletion.mock.calls.at(-1)?.[0] ?? '';
+    expect(systemPrompt).toContain('周报文档');
+    expect(systemPrompt).toContain('用 resource 字段');
+    expect(systemPrompt).toContain('fields.content');
+  });
+});

@@ -118,6 +118,7 @@ export const imBotAdminRouter = createTRPCRouter({
         description: z.string().optional(),
         keywords: z.string().optional(),
         systemPrompt: z.string().optional(),
+        /** @deprecated 见 schema 里的说明；字段清单已改为从资源绑定自动派生 */
         fieldSchema: z.any().optional(),
         replyTemplate: z.string().optional(),
         isActive: z.boolean().default(true),

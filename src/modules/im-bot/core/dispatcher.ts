@@ -22,10 +22,12 @@ import type {
   ParsedIntent,
   PendingAction,
   ResourceBinding,
+  SceneContext,
+  SceneResource,
   SpreadsheetRecord,
   UnifiedMessage,
 } from './types';
-import { ACTIONS_BY_KIND, tableConfigOf } from './types';
+import { ACTIONS_BY_KIND, sceneResourceOf, tableConfigOf } from './types';
 
 interface DispatcherConfig {
   /**
@@ -35,6 +37,11 @@ interface DispatcherConfig {
    * 与消息来自哪个 IM 无关。以前是 getTableConfig(sceneId, msg.platform)。
    */
   getBinding: (sceneId: string, alias?: string) => ResourceBinding | null;
+  /**
+   * 列出场景的**全部**绑定，用于把字段清单注入 prompt。
+   * 省略时退化为只用默认资源 —— 单资源场景行为不变。
+   */
+  listBindings?: (sceneId: string) => ResourceBinding[];
   /**
    * 审计事件回调。允许返回 Promise —— dispatcher 会 await：
    * 整个 process 跑在 Next 的 after() 里，游离的 fire-and-forget 写库
@@ -301,10 +308,12 @@ export class Dispatcher {
       }
 
       // 4. LLM 意图解析
-      const ctx = {
+      const ctx: SceneContext = {
         today: new Date().toISOString().slice(0, 10),
         senderName: msg.senderName,
         chatName: msg.chatName,
+        // 字段清单从绑定实时派生，不再依赖管理员在 prompt 里手抄
+        resources: this.resourcesOf(scene.id),
       };
       const systemPrompt = scene.getSystemPrompt(ctx);
       // systemPrompt 来自 admin 配置可能含业务敏感规则；LLM 原始输出可能含用户内容回显，
@@ -418,6 +427,16 @@ export class Dispatcher {
         errorMsg: err instanceof Error ? err.message : '未知错误',
       });
     }
+  }
+
+  /** 场景绑定的资源描述，喂给 prompt。listBindings 缺省时退化为默认资源 */
+  private resourcesOf(sceneId: string): SceneResource[] {
+    const bindings = this.config.listBindings
+      ? this.config.listBindings(sceneId)
+      : [this.config.getBinding(sceneId)].filter(
+          (b): b is ResourceBinding => b !== null,
+        );
+    return bindings.map(sceneResourceOf);
   }
 
   /**

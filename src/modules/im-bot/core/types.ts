@@ -127,6 +127,70 @@ export interface SceneContext {
   today: string;
   senderName: string;
   chatName?: string;
+  /**
+   * 场景当前绑定的资源（含字段清单）。由 dispatcher 从 ResourceBinding 派生，
+   * 渲染进 system prompt。
+   *
+   * 以前 prompt 里的字段清单是管理员**手抄**的，多维表加一列、改个列名
+   * 都不会同步：LLM 继续输出旧字段名，新字段用户说了也记不进去。
+   */
+  resources?: SceneResource[];
+}
+
+/** 字段在 prompt 里的描述 */
+export interface SceneResourceField {
+  /** 逻辑字段名 —— LLM 在 fields / filters 里必须使用这个名字 */
+  key: string;
+  /**
+   * 取值约定提示。只在**确定**时给（多选/关联/显式声明了 displayType），
+   * 其余留空 —— 硬猜一个"文本"反而会误导 LLM 给数字加引号。
+   */
+  hint?: string;
+  /** true 时回复里会脱敏，写进 prompt 让 LLM 知道不必回显 */
+  sensitive?: boolean;
+}
+
+/** 场景可操作的一个资源 —— 由 ResourceBinding 派生，喂给 prompt */
+export interface SceneResource {
+  alias: string;
+  kind: ResourceKind;
+  isDefault: boolean;
+  actions: readonly IntentVerb[];
+  fields: SceneResourceField[];
+  uniqueKey?: string;
+}
+
+/** 字段映射 → prompt 里的取值约定提示 */
+function fieldHintOf(mapping: FieldMappingValue): string | undefined {
+  if (typeof mapping === 'string') return undefined;
+  switch (mapping.type) {
+    case 'link':
+      return `关联字段，直接给「${mapping.displayField}」的显示值`;
+    case 'multiSelect':
+      return '多选，可以给数组';
+    case 'plain':
+      if (mapping.displayType === 'date') return '日期，格式 YYYY-MM-DD';
+      if (mapping.displayType === 'number') return '数字，不要加引号';
+      return undefined;
+    default:
+      return undefined;
+  }
+}
+
+/** 把资源绑定派生成 prompt 侧的资源描述 */
+export function sceneResourceOf(binding: ResourceBinding): SceneResource {
+  return {
+    alias: binding.alias,
+    kind: binding.kind,
+    isDefault: binding.isDefault,
+    actions: ACTIONS_BY_KIND[binding.kind],
+    fields: Object.entries(binding.fieldMapping).map(([key, mapping]) => ({
+      key,
+      hint: fieldHintOf(mapping),
+      sensitive: typeof mapping === 'object' && mapping.sensitive === true,
+    })),
+    uniqueKey: binding.uniqueKey,
+  };
 }
 
 /** 统一记录结构 */

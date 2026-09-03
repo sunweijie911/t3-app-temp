@@ -497,3 +497,33 @@ describe('敏感字段脱敏', () => {
     expect(reply).toContain('发版账号：admin');
   });
 });
+
+describe('DatabaseDrivenScene.getSystemPrompt — 字段清单自动注入', () => {
+  const resource = {
+    alias: '项目台账表',
+    kind: 'table' as const,
+    isDefault: true,
+    actions: ['CREATE', 'UPDATE', 'QUERY', 'DELETE'] as const,
+    fields: [{ key: '项目名称' }, { key: '上线日期', hint: '日期' }],
+    uniqueKey: '项目名称',
+  };
+
+  it('管理员 prompt 在前，自动生成的字段清单追加在后', () => {
+    const s = makeScene({ systemPrompt: '你是台账助手' });
+    const out = s.getSystemPrompt({
+      today: '2026-05-11',
+      senderName: '张三',
+      resources: [resource],
+    });
+    expect(out.startsWith('你是台账助手')).toBe(true);
+    expect(out).toContain('可操作的资源与字段');
+    expect(out).toContain('项目名称');
+  });
+
+  it('没有 resources 时与改动前完全一致（不追加任何内容）', () => {
+    const s = makeScene({ systemPrompt: '你是台账助手' });
+    expect(s.getSystemPrompt({ today: '2026-05-11', senderName: '张三' })).toBe(
+      '你是台账助手',
+    );
+  });
+});

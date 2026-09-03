@@ -6,6 +6,7 @@ import {
   renderFieldEntry,
   truncateForDisplay,
 } from '../core/field-render';
+import { renderResourceSchema } from '../core/schema-prompt';
 import type {
   ExecuteResult,
   FieldMappingValue,
@@ -87,11 +88,16 @@ export class DatabaseDrivenScene implements BotScene {
 
   getSystemPrompt(ctx: SceneContext): string {
     // biome-ignore-start lint/suspicious/noTemplateCurlyInString: 字面占位符，由 replaceAll 在 runtime 替换为上下文值
-    return this.systemPrompt
+    const base = this.systemPrompt
       .replaceAll('${today}', ctx.today)
       .replaceAll('${senderName}', ctx.senderName)
       .replaceAll('${chatName}', ctx.chatName ?? '');
     // biome-ignore-end lint/suspicious/noTemplateCurlyInString: end
+
+    // 字段清单由绑定自动生成并追加，管理员的 prompt 只需要写业务规则。
+    // 没有 resources（老调用方、未配绑定）时行为与之前完全一致
+    const schema = renderResourceSchema(ctx.resources ?? []);
+    return schema ? `${base}\n\n${schema}` : base;
   }
 
   parseResult(json: string): ParsedIntent | null {

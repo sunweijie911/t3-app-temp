@@ -131,6 +131,7 @@ async function getDispatcher(): Promise<Dispatcher> {
 
     const d = new Dispatcher({
       getBinding: (sceneId, alias) => resolveBinding(bindings, sceneId, alias),
+      listBindings: (sceneId) => bindings.get(sceneId) ?? [],
       onEvent: logBotEvent,
       dedupStore,
       pendingStore,

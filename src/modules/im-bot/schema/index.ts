@@ -48,6 +48,11 @@ export const botScenes = createTable(
     description: text(),
     keywords: text(),
     systemPrompt: text(),
+    /**
+     * @deprecated 全代码无人读取。字段清单现在由 bot_resource_binding 的
+     * fieldMapping 自动派生并注入 prompt（见 core/schema-prompt.ts），
+     * 不再需要在场景上另存一份 schema。保留列只为不破坏历史数据。
+     */
     fieldSchema: jsonb(),
     replyTemplate: text(),
     isActive: d.boolean().notNull().default(true),

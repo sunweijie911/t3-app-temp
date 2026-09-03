@@ -360,17 +360,21 @@ export default function ImBotScenesPage() {
               <Form.Item
                 label="System Prompt"
                 required
-                tooltip="发送给 LLM 的系统提示词，定义字段结构和意图判断规则"
+                tooltip="发送给 LLM 的系统提示词。只需写业务规则 —— 字段清单由资源绑定自动生成并追加"
               >
                 <Input.TextArea
                   onChange={(e) =>
                     setEditing({ ...editing, systemPrompt: e.target.value })
                   }
-                  placeholder="定义 LLM 的角色、字段结构、意图判断规则和输出 JSON 格式"
+                  placeholder="只写业务规则与输出 JSON 格式；字段清单不用手写"
                   rows={10}
                   value={editing.systemPrompt}
                 />
                 <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                  <b>不需要在这里手写字段清单</b>
+                  ：资源绑定里的字段名、类型、唯一键、可用 intent
+                  会在每次调用时按当前配置自动追加到提示词末尾。手写反而会在改表后过期。
+                  <br />
                   {/* biome-ignore-start lint/suspicious/noTemplateCurlyInString: 文档展示给用户的占位符语法 */}
                   支持模板变量：{'${today}'} 当前日期、{'${senderName}'}{' '}
                   发送者、{'${chatName}'} 群名
