@@ -2,6 +2,7 @@
 import { eq } from 'drizzle-orm';
 import { after } from 'next/server';
 import { db } from '@/server/db';
+import { dingtalkTokenManager } from '../auth/dingtalk-token';
 import { resetFeishuChatNameCache } from '../auth/feishu-chat';
 import { feishuTokenManager } from '../auth/feishu-token';
 import { wecomTokenManager } from '../auth/wecom-token';
@@ -174,6 +175,7 @@ export function reloadBotConfig() {
   resetCredentialsCache();
   feishuTokenManager.reset();
   wecomTokenManager.reset();
+  dingtalkTokenManager.reset();
   resetFeishuChatNameCache();
 }
 

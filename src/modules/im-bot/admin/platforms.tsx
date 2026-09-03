@@ -70,8 +70,8 @@ function PlatformCard({
     setWebhookUrl(`${window.location.origin}/api/bot/${platform}/webhook`);
   }, [platform]);
 
-  // 飞书与企微已打通；钉钉 Channel/表格 adapter 仍是占位实现
-  const disabled = platform === 'dingtalk';
+  // 三平台均已打通
+  const disabled = false;
 
   return (
     <Card

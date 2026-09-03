@@ -20,6 +20,15 @@ export interface WecomCredentials {
   encodingAesKey?: string;
 }
 
+export interface DingtalkCredentials {
+  appKey?: string;
+  appSecret?: string;
+  /** 机器人 robotCode，用于剥离正文里的 @机器人 前缀 */
+  robotCode?: string;
+  /** 群机器人加签密钥，用于 HTTP 回调验签 */
+  botSecret?: string;
+}
+
 /**
  * 凭证缓存 TTL：10 分钟。
  * - 凭证轮换时多实例部署里其它实例无法收到 reloadBotConfig 广播，靠 TTL 兜底
@@ -34,6 +43,10 @@ let feishuPromise: Promise<FeishuCredentials> | null = null;
 let wecomCache: WecomCredentials | null = null;
 let wecomCacheExpiresAt = 0;
 let wecomPromise: Promise<WecomCredentials> | null = null;
+
+let dingtalkCache: DingtalkCredentials | null = null;
+let dingtalkCacheExpiresAt = 0;
+let dingtalkPromise: Promise<DingtalkCredentials> | null = null;
 
 /**
  * 读取飞书凭证：优先 DB（botPlatforms.credentials），缺失字段回退到 env。
@@ -105,9 +118,42 @@ export async function getWecomCredentials(): Promise<WecomCredentials> {
   return wecomPromise;
 }
 
+/** 读取钉钉凭证。与企微一致：只从后台配置读，不开 env 兜底 */
+export async function getDingtalkCredentials(): Promise<DingtalkCredentials> {
+  if (dingtalkCache && Date.now() < dingtalkCacheExpiresAt) {
+    return dingtalkCache;
+  }
+  if (dingtalkPromise) return dingtalkPromise;
+
+  dingtalkPromise = (async () => {
+    const [row] = await db
+      .select()
+      .from(botPlatforms)
+      .where(eq(botPlatforms.platform, 'dingtalk'))
+      .limit(1);
+
+    const c = (row?.credentials as Record<string, string> | null) ?? {};
+    const merged: DingtalkCredentials = {
+      appKey: c.appKey || undefined,
+      appSecret: c.appSecret || undefined,
+      robotCode: c.robotCode || undefined,
+      botSecret: c.botSecret || undefined,
+    };
+    dingtalkCache = merged;
+    dingtalkCacheExpiresAt = Date.now() + CREDENTIALS_TTL_MS;
+    return merged;
+  })().finally(() => {
+    dingtalkPromise = null;
+  });
+
+  return dingtalkPromise;
+}
+
 export function resetCredentialsCache() {
   feishuCache = null;
   feishuCacheExpiresAt = 0;
   wecomCache = null;
   wecomCacheExpiresAt = 0;
+  dingtalkCache = null;
+  dingtalkCacheExpiresAt = 0;
 }
