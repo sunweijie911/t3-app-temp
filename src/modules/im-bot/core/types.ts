@@ -45,6 +45,21 @@ export const INTENT_VERBS = [
 
 export type IntentVerb = (typeof INTENT_VERBS)[number];
 
+/**
+ * 会改动数据的意图 —— 受场景的 writerIds 白名单约束。
+ * QUERY / READ 是只读，不受限制。
+ */
+export const WRITE_INTENTS: readonly IntentVerb[] = [
+  'CREATE',
+  'UPDATE',
+  'DELETE',
+  'APPEND',
+];
+
+export function isWriteIntent(intent: IntentVerb): boolean {
+  return WRITE_INTENTS.includes(intent);
+}
+
 /** 各资源类型支持的意图动词 */
 export const ACTIONS_BY_KIND: Record<ResourceKind, readonly IntentVerb[]> = {
   table: ['CREATE', 'UPDATE', 'QUERY', 'DELETE'],

@@ -84,6 +84,8 @@ type SceneRow = {
   systemPrompt?: string | null;
   fieldSchema?: unknown;
   replyTemplate?: string | null;
+  allowedChatIds?: string[] | null;
+  writerIds?: string[] | null;
 };
 
 type EditingScene = {
@@ -94,6 +96,8 @@ type EditingScene = {
   keywordTags: string[];
   systemPrompt: string;
   replyTemplate: string;
+  allowedChatIds: string[];
+  writerIds: string[];
   isActive: boolean;
 };
 
@@ -104,6 +108,8 @@ const emptyScene: EditingScene = {
   keywordTags: [],
   systemPrompt: '',
   replyTemplate: '',
+  allowedChatIds: [],
+  writerIds: [],
   isActive: true,
 };
 
@@ -240,6 +246,8 @@ export default function ImBotScenesPage() {
                 keywordTags: parseKeywordTags(record.keywords),
                 systemPrompt: record.systemPrompt ?? '',
                 replyTemplate: record.replyTemplate ?? '',
+                allowedChatIds: record.allowedChatIds ?? [],
+                writerIds: record.writerIds ?? [],
                 isActive: record.isActive,
               })
             }
@@ -305,6 +313,8 @@ export default function ImBotScenesPage() {
               keywords: JSON.stringify(editing.keywordTags),
               systemPrompt: editing.systemPrompt,
               replyTemplate: editing.replyTemplate,
+              allowedChatIds: editing.allowedChatIds,
+              writerIds: editing.writerIds,
               isActive: editing.isActive,
             });
           }}
@@ -408,6 +418,38 @@ export default function ImBotScenesPage() {
                   {'${sceneName}'} 场景名
                   {/* biome-ignore-end lint/suspicious/noTemplateCurlyInString: end */}
                 </Typography.Text>
+              </Form.Item>
+              <Form.Item
+                label="会话白名单（留空 = 不限制）"
+                tooltip="只有名单里的会话能触发该场景；不在名单里的群连帮助文本都看不到它。填会话 ID（飞书 chat_id / 企微 chatid / 钉钉 conversationId），可在事件日志页复制"
+              >
+                <Select
+                  mode="tags"
+                  onChange={(tags: string[]) =>
+                    setEditing({ ...editing, allowedChatIds: tags })
+                  }
+                  open={false}
+                  placeholder="留空则任何群都可用；粘贴会话 ID 后回车"
+                  style={{ width: '100%' }}
+                  tokenSeparators={[',', '，', ' ']}
+                  value={editing.allowedChatIds}
+                />
+              </Form.Item>
+              <Form.Item
+                label="可写用户白名单（留空 = 所有人可写）"
+                tooltip="只有名单里的用户能新增/修改/删除，其他人仍可查询。填用户 ID（飞书 open_id / 企微 userid / 钉钉 staffId），可在事件日志页复制"
+              >
+                <Select
+                  mode="tags"
+                  onChange={(tags: string[]) =>
+                    setEditing({ ...editing, writerIds: tags })
+                  }
+                  open={false}
+                  placeholder="留空则所有人都能写；粘贴用户 ID 后回车"
+                  style={{ width: '100%' }}
+                  tokenSeparators={[',', '，', ' ']}
+                  value={editing.writerIds}
+                />
               </Form.Item>
             </Form>
           )}

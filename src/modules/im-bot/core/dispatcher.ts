@@ -27,7 +27,12 @@ import type {
   SpreadsheetRecord,
   UnifiedMessage,
 } from './types';
-import { ACTIONS_BY_KIND, sceneResourceOf, tableConfigOf } from './types';
+import {
+  ACTIONS_BY_KIND,
+  isWriteIntent,
+  sceneResourceOf,
+  tableConfigOf,
+} from './types';
 
 interface DispatcherConfig {
   /**
@@ -280,12 +285,12 @@ export class Dispatcher {
       }
 
       // 3. 场景匹配：关键词优先，未命中再问 LLM
-      let scene = this.registry.matchByKeyword(msg.content);
+      let scene = this.registry.matchByKeyword(msg.content, msg.chatId);
       /** LLM 分类调用本身失败的原因（区别于"LLM 说没有匹配场景"） */
       let matchFailure: string | undefined;
       if (!scene) {
         try {
-          scene = await this.registry.matchByLLM(msg.content);
+          scene = await this.registry.matchByLLM(msg.content, msg.chatId);
         } catch (err) {
           matchFailure = err instanceof Error ? err.message : String(err);
           console.error('[Dispatcher] 场景 LLM 匹配失败:', matchFailure);
@@ -298,7 +303,7 @@ export class Dispatcher {
           msg,
           matchFailure
             ? '⚠️ 语义识别服务暂时不可用，请稍后再试'
-            : this.getHelpText(),
+            : this.getHelpText(msg.chatId),
         );
         await logEvent({
           result: matchFailure ? 'error' : 'ignored',
@@ -385,6 +390,22 @@ export class Dispatcher {
           intent: parsed.intent,
           result: 'ignored',
           errorMsg: 'UNKNOWN 意图',
+        });
+        return;
+      }
+
+      // 6.6 写权限：只拦改动数据的意图，查询不受限。
+      //     放在 execute 之前 —— 拦在真正落库前，且不消耗额外的平台调用
+      if (isWriteIntent(parsed.intent) && !scene.allowsWrite(msg.senderId)) {
+        await channelAdapter.reply(
+          msg,
+          `🔒 你没有「${scene.name}」的写入权限，可以查询但不能新增/修改/删除。\n如需权限请联系管理员`,
+        );
+        await logEvent({
+          sceneId: scene.id,
+          intent: parsed.intent,
+          result: 'ignored',
+          errorMsg: '无写入权限',
         });
         return;
       }
@@ -721,6 +742,17 @@ export class Dispatcher {
     const adapter = getSpreadsheetAdapter(binding.provider);
     const scene = this.registry.getById(action.sceneId);
 
+    // 挂起的四种交互全是写操作。挂起时已校验过写权限，这里再查一次
+    // 是为了覆盖 TTL 窗口内被管理员撤权的情形
+    if (scene && !scene.allowsWrite(msg.senderId)) {
+      await this.pending.delete(pendingKeyOf(msg));
+      await channelAdapter.reply(
+        msg,
+        '🔒 你的写入权限已变更，刚才的操作已作废',
+      );
+      return true;
+    }
+
     if (action.type === 'confirm_delete' && content.includes('确认删除')) {
       await this.pending.delete(pendingKeyOf(msg));
       // 并发删除并汇总成功/失败：串行 await 中途抛错会让已删的记录无法回滚、
@@ -861,8 +893,8 @@ export class Dispatcher {
     return false;
   }
 
-  private getHelpText(): string {
-    const scenes = this.registry.getScenes();
+  private getHelpText(chatId?: string): string {
+    const scenes = this.registry.scenesForChat(chatId);
     if (scenes.length === 0) return '🤖 当前没有可用的业务场景';
     const list = scenes.map((s) => `• ${s.name}: ${s.description}`).join('\n');
     return `🤖 我可以帮你处理以下业务：\n\n${list}\n\n直接 @我 发送消息即可！`;

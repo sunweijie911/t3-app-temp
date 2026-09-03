@@ -53,6 +53,10 @@ export interface DbSceneConfig {
   keywords: string[];
   systemPrompt: string;
   replyTemplate?: string;
+  /** 允许触发的会话白名单；空 = 不限制 */
+  allowedChatIds?: string[];
+  /** 允许写操作的用户白名单；空 = 所有人都能写 */
+  writerIds?: string[];
 }
 
 /**
@@ -66,6 +70,8 @@ export class DatabaseDrivenScene implements BotScene {
   private keywords: string[];
   private systemPrompt: string;
   private replyTemplate?: string;
+  private allowedChatIds: string[];
+  private writerIds: string[];
 
   constructor(config: DbSceneConfig) {
     this.id = config.sceneId;
@@ -74,6 +80,25 @@ export class DatabaseDrivenScene implements BotScene {
     this.keywords = config.keywords;
     this.systemPrompt = config.systemPrompt;
     this.replyTemplate = config.replyTemplate;
+    this.allowedChatIds = config.allowedChatIds ?? [];
+    this.writerIds = config.writerIds ?? [];
+  }
+
+  /**
+   * 空名单 = 不限制。默认放开是刻意的：历史场景没有这两列，
+   * 默认收紧会让所有现有配置在升级瞬间失效，
+   * 也容易让管理员把自己锁在外面。
+   */
+  allowsChat(chatId: string): boolean {
+    return this.allowedChatIds.length === 0
+      ? true
+      : this.allowedChatIds.includes(chatId);
+  }
+
+  allowsWrite(senderId: string): boolean {
+    return this.writerIds.length === 0
+      ? true
+      : this.writerIds.includes(senderId);
   }
 
   /**

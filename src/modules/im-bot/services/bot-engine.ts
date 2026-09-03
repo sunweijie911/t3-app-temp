@@ -147,6 +147,8 @@ async function getDispatcher(): Promise<Dispatcher> {
           keywords: parseKeywords(s.keywords),
           systemPrompt: s.systemPrompt,
           replyTemplate: s.replyTemplate ?? undefined,
+          allowedChatIds: s.allowedChatIds ?? [],
+          writerIds: s.writerIds ?? [],
         }),
       );
     }

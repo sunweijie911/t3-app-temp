@@ -10,6 +10,13 @@ export interface BotScene {
   readonly name: string;
   readonly description: string;
   match(content: string): number;
+  /**
+   * 该场景在这个会话里是否可用。不可用时场景对该会话完全不可见 ——
+   * 连帮助文本里都不列出，不泄漏场景名。
+   */
+  allowsChat(chatId: string): boolean;
+  /** 该用户是否能执行写操作（CREATE / UPDATE / DELETE / APPEND） */
+  allowsWrite(senderId: string): boolean;
   getSystemPrompt(ctx: SceneContext): string;
   parseResult(json: string): ParsedIntent | null;
   /**

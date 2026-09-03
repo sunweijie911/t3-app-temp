@@ -1404,3 +1404,124 @@ describe('Dispatcher — 字段清单注入 prompt', () => {
     expect(systemPrompt).toContain('fields.content');
   });
 });
+
+describe('Dispatcher — 场景作用域与写权限', () => {
+  function sceneWith(access: {
+    allowedChatIds?: string[];
+    writerIds?: string[];
+  }) {
+    return new DatabaseDrivenScene({ ...baseSceneConfig, ...access });
+  }
+
+  it('会话不在白名单时场景不可见：不匹配、不进 LLM、也不列进帮助文本', async () => {
+    // 回归：以前没有作用域，机器人被拉进第二个群，那个群立刻能全量 CRUD
+    const d = new Dispatcher({ getBinding: () => baseBinding });
+    d.registry.register(sceneWith({ allowedChatIds: ['chatB'] }));
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+
+    await d.process(
+      makeMsg({ chatId: 'chatA', content: '新增项目 督导2.0' }),
+      channel,
+    );
+
+    expect(adapter.createRecord).not.toHaveBeenCalled();
+    // 场景被过滤在匹配之前：连意图解析的 LLM 都不该被调用
+    expect(mockChatCompletion).not.toHaveBeenCalled();
+    // 场景名不该泄漏给未授权的群
+    expect(channel.lastReply).toContain('当前没有可用的业务场景');
+    expect(channel.lastReply).not.toContain(baseSceneConfig.name);
+  });
+
+  it('会话在白名单时正常工作', async () => {
+    const d = new Dispatcher({ getBinding: () => baseBinding });
+    d.registry.register(sceneWith({ allowedChatIds: ['chatA'] }));
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    (adapter.createRecord as ReturnType<typeof vi.fn>).mockResolvedValue({
+      recordId: 'r1',
+      fields: {},
+    });
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"CREATE","fields":{"项目名称":"督导2.0"},"confidence":0.95,"summary":"新增"}',
+    );
+
+    await d.process(
+      makeMsg({ chatId: 'chatA', content: '新增项目 督导2.0' }),
+      channel,
+    );
+
+    expect(adapter.createRecord).toHaveBeenCalled();
+  });
+
+  it('不在可写名单的用户能查询', async () => {
+    const d = new Dispatcher({ getBinding: () => baseBinding });
+    d.registry.register(sceneWith({ writerIds: ['boss'] }));
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"QUERY","filters":{"项目名称":"x"},"confidence":0.95,"summary":"查"}',
+    );
+
+    await d.process(makeMsg({ senderId: 'uX', content: '查项目 x' }), channel);
+
+    expect(adapter.queryRecords).toHaveBeenCalled();
+  });
+
+  it('不在可写名单的用户不能删除，且拦在调用平台之前', async () => {
+    const d = new Dispatcher({ getBinding: () => baseBinding });
+    d.registry.register(sceneWith({ writerIds: ['boss'] }));
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"DELETE","filters":{"项目名称":"x"},"confidence":0.95,"summary":"删"}',
+    );
+
+    await d.process(
+      makeMsg({ senderId: 'uX', content: '删除项目 x' }),
+      channel,
+    );
+
+    // 连 queryRecords 都不该发生 —— 拦在真正落库和平台调用之前
+    expect(adapter.queryRecords).not.toHaveBeenCalled();
+    expect(adapter.deleteRecord).not.toHaveBeenCalled();
+    expect(channel.lastReply).toContain('写入权限');
+  });
+
+  it('写权限在待确认窗口内被撤销时，确认动作作废', async () => {
+    const pendingStore = new MemoryPendingActionStore();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+
+    // 第一步：有权限时挂起删除确认
+    const allowed = new Dispatcher({
+      getBinding: () => baseBinding,
+      pendingStore,
+    });
+    allowed.registry.register(sceneWith({}));
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { recordId: 'r1', fields: { 项目名称: 'x' } },
+    ]);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"DELETE","filters":{"项目名称":"x"},"confidence":0.95,"summary":"删"}',
+    );
+    await allowed.process(makeMsg({ content: '删除项目 x' }), channel);
+
+    // 第二步：管理员改了白名单（新的 dispatcher 实例 = 配置已重载）
+    const revoked = new Dispatcher({
+      getBinding: () => baseBinding,
+      pendingStore,
+    });
+    revoked.registry.register(sceneWith({ writerIds: ['boss'] }));
+    await revoked.process(makeMsg({ content: '确认删除' }), channel);
+
+    expect(adapter.deleteRecord).not.toHaveBeenCalled();
+    expect(channel.lastReply).toContain('权限已变更');
+  });
+});

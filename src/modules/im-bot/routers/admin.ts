@@ -121,6 +121,10 @@ export const imBotAdminRouter = createTRPCRouter({
         /** @deprecated 见 schema 里的说明；字段清单已改为从资源绑定自动派生 */
         fieldSchema: z.any().optional(),
         replyTemplate: z.string().optional(),
+        /** 空数组 = 任何会话都能触发 */
+        allowedChatIds: z.array(z.string().min(1)).default([]),
+        /** 空数组 = 任何人都能写 */
+        writerIds: z.array(z.string().min(1)).default([]),
         isActive: z.boolean().default(true),
         sortOrder: z.number().int().default(0),
       }),
@@ -168,6 +172,8 @@ export const imBotAdminRouter = createTRPCRouter({
           systemPrompt: input.systemPrompt,
           fieldSchema: input.fieldSchema,
           replyTemplate: input.replyTemplate,
+          allowedChatIds: input.allowedChatIds,
+          writerIds: input.writerIds,
           isActive: input.isActive,
           sortOrder: input.sortOrder,
         })
@@ -181,6 +187,8 @@ export const imBotAdminRouter = createTRPCRouter({
             systemPrompt: input.systemPrompt,
             fieldSchema: input.fieldSchema,
             replyTemplate: input.replyTemplate,
+            allowedChatIds: input.allowedChatIds,
+            writerIds: input.writerIds,
             isActive: input.isActive,
             sortOrder: input.sortOrder,
           },

@@ -11,12 +11,20 @@ import type { BotScene } from '@/modules/im-bot/scenes/types';
 
 const mockedChatCompletion = vi.mocked(chatCompletion);
 
-function makeScene(id: string, score: number, description = ''): BotScene {
+function makeScene(
+  id: string,
+  score: number,
+  description = '',
+  allowedChatIds: string[] = [],
+): BotScene {
   return {
     id,
     name: id,
     description,
     match: () => score,
+    allowsChat: (chatId) =>
+      allowedChatIds.length === 0 || allowedChatIds.includes(chatId),
+    allowsWrite: () => true,
     getSystemPrompt: () => '',
     parseResult: () => null,
     formatReply: () => '',
@@ -133,5 +141,50 @@ describe('SceneRegistry.matchByLLM', () => {
     // 旧 prompt 的硬编码 sales / tasks 关键字应该已被去掉
     expect(systemPrompt).not.toContain('sales');
     expect(systemPrompt).not.toContain('商品名称');
+  });
+});
+
+describe('SceneRegistry — 会话作用域', () => {
+  it('scenesForChat 过滤掉本会话不可用的场景', () => {
+    const r = new SceneRegistry();
+    r.register(makeScene('open', 1));
+    r.register(makeScene('locked', 5, '', ['chatB']));
+    expect(r.scenesForChat('chatA').map((s) => s.id)).toEqual(['open']);
+    expect(r.scenesForChat('chatB').map((s) => s.id)).toEqual([
+      'open',
+      'locked',
+    ]);
+    // 不传 chatId 时返回全部（后台/测试用）
+    expect(r.scenesForChat()).toHaveLength(2);
+  });
+
+  it('关键词匹配不会选中本会话不可用的场景（哪怕它得分更高）', () => {
+    const r = new SceneRegistry();
+    r.register(makeScene('open', 1));
+    r.register(makeScene('locked', 5, '', ['chatB']));
+    expect(r.matchByKeyword('x', 'chatA')?.id).toBe('open');
+    expect(r.matchByKeyword('x', 'chatB')?.id).toBe('locked');
+  });
+
+  it('LLM 分类只在本会话可用的场景里选，且不把它们写进 prompt', async () => {
+    const r = new SceneRegistry();
+    r.register(makeScene('open', 0, '开放场景'));
+    r.register(makeScene('locked', 0, '受限场景', ['chatB']));
+    mockedChatCompletion.mockResolvedValue('locked');
+
+    // chatA 看不到 locked：即便 LLM 返回它也匹配不上
+    expect(await r.matchByLLM('x', 'chatA')).toBeNull();
+    const prompt = mockedChatCompletion.mock.calls.at(-1)?.[0] ?? '';
+    expect(prompt).not.toContain('受限场景');
+
+    expect((await r.matchByLLM('x', 'chatB'))?.id).toBe('locked');
+  });
+
+  it('本会话没有任何可用场景时不调 LLM', async () => {
+    const r = new SceneRegistry();
+    r.register(makeScene('locked', 0, '', ['chatB']));
+    mockedChatCompletion.mockClear();
+    expect(await r.matchByLLM('x', 'chatA')).toBeNull();
+    expect(mockedChatCompletion).not.toHaveBeenCalled();
   });
 });

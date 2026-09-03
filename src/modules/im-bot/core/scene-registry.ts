@@ -12,14 +12,25 @@ export class SceneRegistry {
     return [...this.scenes];
   }
 
+  /**
+   * 在指定会话里可见的场景。不传 chatId 时返回全部（供后台/测试用）。
+   * 过滤放在**匹配之前**：不可用的场景根本不参与关键词与 LLM 分类，
+   * 于是未授权的群拿到的是正常的帮助文本，而不是"该场景未授权"
+   * —— 后者等于把场景名泄漏给了不该看到的群。
+   */
+  scenesForChat(chatId?: string): BotScene[] {
+    if (!chatId) return [...this.scenes];
+    return this.scenes.filter((s) => s.allowsChat(chatId));
+  }
+
   getById(id: string): BotScene | undefined {
     return this.scenes.find((s) => s.id === id);
   }
 
-  matchByKeyword(content: string): BotScene | null {
+  matchByKeyword(content: string, chatId?: string): BotScene | null {
     let best: BotScene | null = null;
     let bestScore = 0;
-    for (const scene of this.scenes) {
+    for (const scene of this.scenesForChat(chatId)) {
       const score = scene.match(content);
       if (score > bestScore) {
         bestScore = score;
@@ -29,13 +40,14 @@ export class SceneRegistry {
     return bestScore > 0 ? best : null;
   }
 
-  async matchByLLM(content: string): Promise<BotScene | null> {
-    if (this.scenes.length === 0) return null;
+  async matchByLLM(content: string, chatId?: string): Promise<BotScene | null> {
+    const visible = this.scenesForChat(chatId);
+    if (visible.length === 0) return null;
 
-    const scenesDesc = this.scenes
+    const scenesDesc = visible
       .map((s) => `- ${s.id}: ${s.name} — ${s.description}`)
       .join('\n');
-    const validIds = this.scenes.map((s) => s.id).join(' | ');
+    const validIds = visible.map((s) => s.id).join(' | ');
 
     const systemPrompt = `你是一个意图分类器。根据用户消息判断属于下面哪个业务场景。
 
@@ -56,6 +68,6 @@ ${scenesDesc}
     // 两侧不分大小写比较：sceneId 在 admin 允许大写，
     // 不能因为 LLM 返回值小写化就匹配不上（否则静默退化为无场景）。
     const sceneId = raw.toLowerCase();
-    return this.scenes.find((s) => s.id.toLowerCase() === sceneId) ?? null;
+    return visible.find((s) => s.id.toLowerCase() === sceneId) ?? null;
   }
 }

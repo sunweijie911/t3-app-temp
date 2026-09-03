@@ -55,6 +55,19 @@ export const botScenes = createTable(
      */
     fieldSchema: jsonb(),
     replyTemplate: text(),
+    /**
+     * 允许触发该场景的会话 ID 白名单。**空数组 = 不限制**（向后兼容）。
+     *
+     * 以前没有任何作用域概念：机器人被拉进第二个群，那个群立刻能对
+     * 绑定的表做全量 CRUD。场景对不在名单里的会话直接不可见 ——
+     * 连帮助文本里都不出现，不泄漏场景名。
+     */
+    allowedChatIds: jsonb().$type<string[]>().notNull().default([]),
+    /**
+     * 允许执行写操作（CREATE / UPDATE / DELETE / APPEND）的用户 ID 白名单。
+     * **空数组 = 所有人都能写**（向后兼容）。查询不受限制。
+     */
+    writerIds: jsonb().$type<string[]>().notNull().default([]),
     isActive: d.boolean().notNull().default(true),
     sortOrder: d.integer().notNull().default(0),
     createdAt: d
