@@ -70,7 +70,8 @@ function PlatformCard({
     setWebhookUrl(`${window.location.origin}/api/bot/${platform}/webhook`);
   }, [platform]);
 
-  const disabled = platform !== 'feishu';
+  // 飞书与企微已打通；钉钉 Channel/表格 adapter 仍是占位实现
+  const disabled = platform === 'dingtalk';
 
   return (
     <Card

@@ -10,6 +10,16 @@ export interface FeishuCredentials {
   verificationToken?: string;
 }
 
+export interface WecomCredentials {
+  corpId?: string;
+  /** 应用 secret，用于换 access_token */
+  botSecret?: string;
+  /** 回调验签用的 Token */
+  botToken?: string;
+  /** 回调消息加解密密钥（43 位） */
+  encodingAesKey?: string;
+}
+
 /**
  * 凭证缓存 TTL：10 分钟。
  * - 凭证轮换时多实例部署里其它实例无法收到 reloadBotConfig 广播，靠 TTL 兜底
@@ -20,6 +30,10 @@ const CREDENTIALS_TTL_MS = 10 * 60 * 1000;
 let feishuCache: FeishuCredentials | null = null;
 let feishuCacheExpiresAt = 0;
 let feishuPromise: Promise<FeishuCredentials> | null = null;
+
+let wecomCache: WecomCredentials | null = null;
+let wecomCacheExpiresAt = 0;
+let wecomPromise: Promise<WecomCredentials> | null = null;
 
 /**
  * 读取飞书凭证：优先 DB（botPlatforms.credentials），缺失字段回退到 env。
@@ -59,7 +73,41 @@ export async function getFeishuCredentials(): Promise<FeishuCredentials> {
   return feishuPromise;
 }
 
+/**
+ * 读取企微凭证。与飞书不同，企微没有 env 兜底 —— 只从后台配置读，
+ * 避免又开一批 env 变量却和 UI 两处配置容易不一致。
+ */
+export async function getWecomCredentials(): Promise<WecomCredentials> {
+  if (wecomCache && Date.now() < wecomCacheExpiresAt) return wecomCache;
+  if (wecomPromise) return wecomPromise;
+
+  wecomPromise = (async () => {
+    const [row] = await db
+      .select()
+      .from(botPlatforms)
+      .where(eq(botPlatforms.platform, 'wecom'))
+      .limit(1);
+
+    const c = (row?.credentials as Record<string, string> | null) ?? {};
+    const merged: WecomCredentials = {
+      corpId: c.corpId || undefined,
+      botSecret: c.botSecret || undefined,
+      botToken: c.botToken || undefined,
+      encodingAesKey: c.encodingAesKey || undefined,
+    };
+    wecomCache = merged;
+    wecomCacheExpiresAt = Date.now() + CREDENTIALS_TTL_MS;
+    return merged;
+  })().finally(() => {
+    wecomPromise = null;
+  });
+
+  return wecomPromise;
+}
+
 export function resetCredentialsCache() {
   feishuCache = null;
   feishuCacheExpiresAt = 0;
+  wecomCache = null;
+  wecomCacheExpiresAt = 0;
 }

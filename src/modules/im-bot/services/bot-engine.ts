@@ -4,6 +4,7 @@ import { after } from 'next/server';
 import { db } from '@/server/db';
 import { resetFeishuChatNameCache } from '../auth/feishu-chat';
 import { feishuTokenManager } from '../auth/feishu-token';
+import { wecomTokenManager } from '../auth/wecom-token';
 import { DingtalkChannelAdapter } from '../channels/dingtalk';
 import { FeishuChannelAdapter } from '../channels/feishu';
 import type { ChannelAdapter } from '../channels/types';
@@ -172,6 +173,7 @@ export function reloadBotConfig() {
   lastInitError = null;
   resetCredentialsCache();
   feishuTokenManager.reset();
+  wecomTokenManager.reset();
   resetFeishuChatNameCache();
 }
 

@@ -329,8 +329,8 @@ export default function ImBotResourceBindingsPage() {
                   onChange={(val) => setEditing({ ...editing, provider: val })}
                   options={[
                     { value: 'feishu', label: '飞书' },
+                    { value: 'wecom', label: '企业微信' },
                     { value: 'dingtalk', label: '钉钉 (TODO)', disabled: true },
-                    { value: 'wecom', label: '企微 (TODO)', disabled: true },
                   ]}
                   value={editing.provider}
                 />
@@ -348,7 +348,9 @@ export default function ImBotResourceBindingsPage() {
                 label={
                   editing.kind === 'doc'
                     ? 'Workspace ID (飞书 folder_token，可留空)'
-                    : 'Workspace ID (飞书 app_token)'
+                    : editing.provider === 'wecom'
+                      ? 'Workspace ID (企微智能表格 docid)'
+                      : 'Workspace ID (飞书 app_token)'
                 }
                 required
               >
