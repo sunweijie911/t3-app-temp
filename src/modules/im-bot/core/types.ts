@@ -26,9 +26,42 @@ export interface UnifiedMessage {
   raw?: unknown;
 }
 
+/**
+ * 意图动词。
+ *
+ * CREATE/UPDATE/QUERY/DELETE 是表格语义（历史意图集，现有场景的
+ * systemPrompt 只会产出这四种，必须保持兼容）；READ/APPEND 是文档语义。
+ * 哪些动词在当前场景可用，由绑定资源的 kind 决定 —— 见 ACTIONS_BY_KIND。
+ */
+export const INTENT_VERBS = [
+  'CREATE',
+  'UPDATE',
+  'QUERY',
+  'DELETE',
+  'READ',
+  'APPEND',
+  'UNKNOWN',
+] as const;
+
+export type IntentVerb = (typeof INTENT_VERBS)[number];
+
+/** 各资源类型支持的意图动词 */
+export const ACTIONS_BY_KIND: Record<ResourceKind, readonly IntentVerb[]> = {
+  table: ['CREATE', 'UPDATE', 'QUERY', 'DELETE'],
+  // QUERY 也接受：现有场景的 prompt 习惯用 QUERY 表达"查看"，
+  // 对文档而言等价于 READ，不该因为动词选得不同就报错
+  doc: ['READ', 'APPEND', 'QUERY'],
+  file: [],
+};
+
 /** 意图解析结果 */
 export interface ParsedIntent {
-  intent: 'CREATE' | 'UPDATE' | 'QUERY' | 'DELETE' | 'UNKNOWN';
+  intent: IntentVerb;
+  /**
+   * 目标资源别名。一个场景可绑多个资源时用它指定操作对象；
+   * 省略则用场景的默认资源。
+   */
+  resource?: string;
   fields: Record<string, unknown>;
   /**
    * 过滤条件。普通字段 key→value；保留键 `_conjunction` 控制多条件合取
@@ -44,11 +77,30 @@ export interface ParsedIntent {
   summary: string;
 }
 
-/** 执行结果 */
+/** 文档内容 */
+export interface DocumentContent {
+  title: string;
+  /** 纯文本正文 */
+  text: string;
+  /** 可点击的文档链接（回复里给用户跳转用） */
+  url?: string;
+}
+
+/**
+ * 执行结果。表格字段（record/records）与文档字段（doc）并存，
+ * 由 formatReply 按 intent 分流渲染 —— 加新能力时在这里加字段，
+ * 不用改 BotScene 接口签名。
+ */
 export interface ExecuteResult {
   success: boolean;
+  /** 表格：单条写入/更新的结果 */
   record?: SpreadsheetRecord;
+  /** 表格：查询结果 */
   records?: SpreadsheetRecord[];
+  /** 文档：读取到的内容，或追加后的文档信息 */
+  doc?: DocumentContent;
+  /** 文档：本次追加进去的文本（用于回复里回显写了什么） */
+  appendedText?: string;
   error?: string;
 }
 

@@ -4,6 +4,7 @@ import {
   fieldToString,
   maskSensitive,
   renderFieldEntry,
+  truncateForDisplay,
 } from '../core/field-render';
 import type {
   ExecuteResult,
@@ -11,6 +12,7 @@ import type {
   ParsedIntent,
   SceneContext,
 } from '../core/types';
+import { INTENT_VERBS } from '../core/types';
 import type { BotScene } from './types';
 
 function applyFieldVars(
@@ -96,16 +98,18 @@ export class DatabaseDrivenScene implements BotScene {
     try {
       const obj = JSON.parse(json) as Record<string, unknown>;
       const intent = obj.intent as string;
-      if (!['CREATE', 'UPDATE', 'QUERY', 'DELETE', 'UNKNOWN'].includes(intent))
-        return null;
+      if (!(INTENT_VERBS as readonly string[]).includes(intent)) return null;
       const rawProject = obj.projectFields;
       const projectFields = Array.isArray(rawProject)
         ? (rawProject as unknown[]).filter(
             (s): s is string => typeof s === 'string' && s.length > 0,
           )
         : undefined;
+      const resource =
+        typeof obj.resource === 'string' ? obj.resource : undefined;
       return {
         intent: intent as ParsedIntent['intent'],
+        resource: resource || undefined,
         fields: (obj.fields as Record<string, unknown>) ?? {},
         filters: (obj.filters as Record<string, unknown>) ?? undefined,
         projectFields:
@@ -137,6 +141,19 @@ export class DatabaseDrivenScene implements BotScene {
     // 有自定义回复模板时使用模板
     if (this.replyTemplate) {
       return clampReply(this.applyReplyTemplate(intent, result, fieldMapping));
+    }
+
+    // ── 文档能力 ───────────────────────────────────────────
+    if (result.doc) {
+      const { title, text, url } = result.doc;
+      const link = url ? `\n🔗 ${url}` : '';
+      if (intent.intent === 'APPEND') {
+        const written = truncateForDisplay(result.appendedText ?? text);
+        return clampReply(`✅ 已写入《${title}》\n\n${written}${link}`);
+      }
+      // READ / QUERY：正文可能很长，按群消息上限截断
+      const body = text.trim() || '(文档为空)';
+      return clampReply(`📄 《${title}》\n\n${body}${link}`);
     }
 
     // 通用默认格式

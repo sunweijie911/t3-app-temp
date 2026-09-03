@@ -22,6 +22,19 @@ vi.mock('@/modules/im-bot/spreadsheets/factory', () => ({
   getSpreadsheetAdapter: vi.fn(),
 }));
 
+vi.mock('@/modules/im-bot/documents/factory', () => ({
+  getDocumentAdapter: vi.fn(),
+  documentConfigOf: (b: {
+    provider: string;
+    workspaceId: string;
+    resourceId: string;
+  }) => ({
+    platform: b.provider,
+    workspaceId: b.workspaceId,
+    documentId: b.resourceId,
+  }),
+}));
+
 import type { ChannelAdapter } from '@/modules/im-bot/channels/types';
 import { DESTRUCTIVE_CONCURRENCY } from '@/modules/im-bot/constants';
 import { MemoryDedupStore } from '@/modules/im-bot/core/dedup';
@@ -32,12 +45,14 @@ import type {
   ResourceBinding,
   UnifiedMessage,
 } from '@/modules/im-bot/core/types';
+import { getDocumentAdapter } from '@/modules/im-bot/documents/factory';
 import { DatabaseDrivenScene } from '@/modules/im-bot/scenes/db-scene';
 import { getSpreadsheetAdapter } from '@/modules/im-bot/spreadsheets/factory';
 import type { SpreadsheetAdapter } from '@/modules/im-bot/spreadsheets/types';
 
 const mockChatCompletion = vi.mocked(chatCompletion);
 const mockGetAdapter = vi.mocked(getSpreadsheetAdapter);
+const mockGetDocAdapter = vi.mocked(getDocumentAdapter);
 
 function makeMsg(overrides: Partial<UnifiedMessage> = {}): UnifiedMessage {
   return {
@@ -105,6 +120,7 @@ function makeDispatcher(binding: ResourceBinding | null = baseBinding) {
 beforeEach(() => {
   mockChatCompletion.mockReset();
   mockGetAdapter.mockReset();
+  mockGetDocAdapter.mockReset();
 });
 
 describe('Dispatcher.process — 主链路', () => {
@@ -562,7 +578,7 @@ describe('Dispatcher — 数据平台与消息来源解耦', () => {
     expect(adapter.deleteRecord).toHaveBeenCalledTimes(1);
   });
 
-  it('绑定的是非 table 资源时给出明确提示，而不是打到表格 adapter', async () => {
+  it('对 doc 资源用表格动词时提示可用动词，而不是打到表格 adapter', async () => {
     const d = makeDispatcher({ ...baseBinding, kind: 'doc' });
     const channel = makeChannel();
     const adapter = makeAdapter();
@@ -574,8 +590,49 @@ describe('Dispatcher — 数据平台与消息来源解耦', () => {
     await d.process(makeMsg({ content: '新增项目 x' }), channel);
 
     expect(adapter.createRecord).not.toHaveBeenCalled();
-    expect(channel.lastReply).toContain('doc');
-    expect(channel.lastReply).toContain('只支持表格');
+    expect(channel.lastReply).toContain('不支持「CREATE」');
+    // 提示里要给出这个资源实际可用的动词
+    expect(channel.lastReply).toContain('READ');
+    expect(channel.lastReply).toContain('APPEND');
+  });
+
+  it('对 table 资源用文档动词时同样被拦住', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"APPEND","fields":{"content":"x"},"confidence":0.95,"summary":""}',
+    );
+
+    await d.process(makeMsg({ content: '记一下项目进展' }), channel);
+
+    expect(channel.lastReply).toContain('不支持「APPEND」');
+    expect(channel.lastReply).toContain('CREATE');
+  });
+
+  it('parsed.resource 指定别名时按别名解析绑定', async () => {
+    const seen: Array<string | undefined> = [];
+    const d = new Dispatcher({
+      getBinding: (_s, alias) => {
+        seen.push(alias);
+        return baseBinding;
+      },
+    });
+    d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    (adapter.createRecord as ReturnType<typeof vi.fn>).mockResolvedValue({
+      recordId: 'r1',
+      fields: {},
+    });
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"CREATE","resource":"周报表","fields":{"项目名称":"x"},"confidence":0.95,"summary":""}',
+    );
+
+    await d.process(makeMsg({ content: '新增项目 x' }), channel);
+    expect(seen).toContain('周报表');
   });
 
   it('场景没有任何资源绑定时给出可懂的提示', async () => {
@@ -678,5 +735,155 @@ describe('Dispatcher — 多实例共享状态', () => {
     await Promise.all([a.process(msg, channel), b.process(msg, channel)]);
 
     expect(adapter.createRecord).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Dispatcher — 文档能力', () => {
+  const docBinding: ResourceBinding = {
+    alias: '周报文档',
+    kind: 'doc',
+    provider: 'feishu',
+    workspaceId: 'fld1',
+    resourceId: 'doccn123',
+    fieldMapping: {},
+    isDefault: true,
+  };
+
+  function makeDocAdapter() {
+    return {
+      platform: 'feishu' as const,
+      readDocument: vi.fn(),
+      appendText: vi.fn(),
+    };
+  }
+
+  it('READ：读取文档并把标题/正文/链接渲染进群消息', async () => {
+    const d = makeDispatcher(docBinding);
+    const channel = makeChannel();
+    const doc = makeDocAdapter();
+    mockGetDocAdapter.mockReturnValue(doc);
+    doc.readDocument.mockResolvedValue({
+      title: '第 36 周周报',
+      text: '本周完成督导2.0 联调',
+      url: 'https://feishu.cn/docx/doccn123',
+    });
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"READ","fields":{},"confidence":0.95,"summary":"读周报"}',
+    );
+
+    await d.process(makeMsg({ content: '看下项目周报' }), channel);
+
+    expect(doc.readDocument).toHaveBeenCalledWith({
+      platform: 'feishu',
+      workspaceId: 'fld1',
+      documentId: 'doccn123',
+    });
+    expect(channel.lastReply).toContain('第 36 周周报');
+    expect(channel.lastReply).toContain('本周完成督导2.0 联调');
+    expect(channel.lastReply).toContain('https://feishu.cn/docx/doccn123');
+  });
+
+  it('QUERY 对文档等价于 READ（兼容现有场景习惯用 QUERY 表达查看）', async () => {
+    const d = makeDispatcher(docBinding);
+    const channel = makeChannel();
+    const doc = makeDocAdapter();
+    mockGetDocAdapter.mockReturnValue(doc);
+    doc.readDocument.mockResolvedValue({ title: 'T', text: 'body' });
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"QUERY","fields":{},"confidence":0.95,"summary":""}',
+    );
+
+    await d.process(makeMsg({ content: '查下项目周报' }), channel);
+    expect(doc.readDocument).toHaveBeenCalled();
+    expect(channel.lastReply).toContain('T');
+  });
+
+  it('空文档给出可读占位而不是空回复', async () => {
+    const d = makeDispatcher(docBinding);
+    const channel = makeChannel();
+    const doc = makeDocAdapter();
+    mockGetDocAdapter.mockReturnValue(doc);
+    doc.readDocument.mockResolvedValue({ title: 'T', text: '   ' });
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"READ","fields":{},"confidence":0.95,"summary":""}',
+    );
+
+    await d.process(makeMsg({ content: '看下项目周报' }), channel);
+    expect(channel.lastReply).toContain('(文档为空)');
+  });
+
+  it('APPEND：把 fields.content 追加进文档并回显写入内容', async () => {
+    const d = makeDispatcher(docBinding);
+    const channel = makeChannel();
+    const doc = makeDocAdapter();
+    mockGetDocAdapter.mockReturnValue(doc);
+    doc.appendText.mockResolvedValue({
+      title: '第 36 周周报',
+      text: '联调完成',
+      url: 'https://feishu.cn/docx/doccn123',
+    });
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"APPEND","fields":{"content":"联调完成"},"confidence":0.95,"summary":""}',
+    );
+
+    await d.process(makeMsg({ content: '项目周报记一下 联调完成' }), channel);
+
+    expect(doc.appendText).toHaveBeenCalledWith(
+      expect.objectContaining({ documentId: 'doccn123' }),
+      '联调完成',
+    );
+    expect(channel.lastReply).toContain('已写入');
+    expect(channel.lastReply).toContain('联调完成');
+  });
+
+  it('APPEND 也接受 fields.text / fields.正文 作为正文来源', async () => {
+    for (const key of ['text', '正文']) {
+      const d = makeDispatcher(docBinding);
+      const channel = makeChannel();
+      const doc = makeDocAdapter();
+      mockGetDocAdapter.mockReturnValue(doc);
+      doc.appendText.mockResolvedValue({ title: 'T', text: 'v' });
+      mockChatCompletion.mockResolvedValueOnce(
+        `{"intent":"APPEND","fields":{"${key}":"内容 v"},"confidence":0.95,"summary":""}`,
+      );
+      await d.process(
+        makeMsg({ eventId: `k-${key}`, content: '项目周报记一下' }),
+        channel,
+      );
+      expect(doc.appendText).toHaveBeenCalledWith(expect.anything(), '内容 v');
+    }
+  });
+
+  it('APPEND 但没解析出正文时不调 adapter，给出引导', async () => {
+    const d = makeDispatcher(docBinding);
+    const channel = makeChannel();
+    const doc = makeDocAdapter();
+    mockGetDocAdapter.mockReturnValue(doc);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"APPEND","fields":{},"confidence":0.95,"summary":""}',
+    );
+
+    await d.process(makeMsg({ content: '项目周报记一下' }), channel);
+
+    expect(doc.appendText).not.toHaveBeenCalled();
+    expect(channel.lastReply).toContain('没有解析出要写入文档的内容');
+  });
+
+  it('文档 adapter 按 provider 选（跨平台同样成立）', async () => {
+    const d = makeDispatcher(docBinding);
+    const channel = makeChannel();
+    const doc = makeDocAdapter();
+    mockGetDocAdapter.mockReturnValue(doc);
+    doc.readDocument.mockResolvedValue({ title: 'T', text: 'b' });
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"READ","fields":{},"confidence":0.95,"summary":""}',
+    );
+
+    // 消息来自钉钉，文档在飞书
+    await d.process(
+      makeMsg({ platform: 'dingtalk', content: '看下项目周报' }),
+      channel,
+    );
+    expect(mockGetDocAdapter).toHaveBeenCalledWith('feishu');
   });
 });

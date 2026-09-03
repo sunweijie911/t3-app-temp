@@ -375,6 +375,14 @@ export default function ImBotScenesPage() {
                   支持模板变量：{'${today}'} 当前日期、{'${senderName}'}{' '}
                   发送者、{'${chatName}'} 群名
                   {/* biome-ignore-end lint/suspicious/noTemplateCurlyInString: end */}
+                  <br />
+                  输出 JSON 的 intent 取值按绑定资源类型区分：表格用{' '}
+                  <code>CREATE / UPDATE / QUERY / DELETE</code>，文档用{' '}
+                  <code>READ / APPEND</code>（APPEND 时把正文放在{' '}
+                  <code>fields.content</code>）。
+                  <br />
+                  一个场景绑了多个资源时，用 <code>resource</code>{' '}
+                  字段指定资源别名；省略则用默认资源。
                 </Typography.Text>
               </Form.Item>
               <Form.Item

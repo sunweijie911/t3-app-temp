@@ -5,6 +5,7 @@ import {
   MAX_CANDIDATE_DISPLAY,
   MAX_DESTRUCTIVE_BATCH,
 } from '../constants';
+import { documentConfigOf, getDocumentAdapter } from '../documents/factory';
 import type { BotScene } from '../scenes/types';
 import { getSpreadsheetAdapter } from '../spreadsheets/factory';
 import { MemoryDedupStore } from './dedup';
@@ -24,7 +25,7 @@ import type {
   SpreadsheetRecord,
   UnifiedMessage,
 } from './types';
-import { tableConfigOf } from './types';
+import { ACTIONS_BY_KIND, tableConfigOf } from './types';
 
 interface DispatcherConfig {
   /**
@@ -268,10 +269,10 @@ export class Dispatcher {
       }
 
       // 7. 执行 CRUD
-      const result = await this.executeCrud(scene, parsed, msg);
+      const result = await this.execute(scene, parsed, msg);
 
       // 8. 回复（fieldMapping 用于渲染时取 label / displayType；缺失时退化为 logicalKey）
-      const binding = this.config.getBinding(scene.id);
+      const binding = this.config.getBinding(scene.id, parsed.resource);
       const reply = scene.formatReply(parsed, result, binding?.fieldMapping);
       await channelAdapter.reply(msg, reply);
       logEvent({
@@ -297,24 +298,79 @@ export class Dispatcher {
     }
   }
 
-  private async executeCrud(
+  /**
+   * 能力分发：按绑定资源的 kind 路由到对应能力层，再按 intent 执行动作。
+   * 加新能力（文件、日历…）只需要在这里加一个 kind 分支 + 一个 adapter，
+   * 不用改 BotScene 接口或 core 类型。
+   */
+  private async execute(
     scene: BotScene,
     parsed: ParsedIntent,
     msg: UnifiedMessage,
   ): Promise<ExecuteResult> {
-    const binding = this.config.getBinding(scene.id);
+    const binding = this.config.getBinding(scene.id, parsed.resource);
     if (!binding) {
       return {
         success: false,
-        error: `场景 "${scene.name}" 未配置数据资源绑定`,
+        error: parsed.resource
+          ? `场景 "${scene.name}" 下找不到名为「${parsed.resource}」的资源`
+          : `场景 "${scene.name}" 未配置数据资源绑定`,
       };
     }
-    if (binding.kind !== 'table') {
+
+    // 动词与资源类型不匹配时给出可操作的提示，而不是打到不支持的 adapter
+    const allowed = ACTIONS_BY_KIND[binding.kind];
+    if (!allowed.includes(parsed.intent)) {
       return {
         success: false,
-        error: `场景 "${scene.name}" 绑定的资源「${binding.alias}」是 ${binding.kind} 类型，当前只支持表格`,
+        error:
+          allowed.length === 0
+            ? `资源「${binding.alias}」是 ${binding.kind} 类型，暂不支持任何操作`
+            : `「${binding.alias}」是 ${binding.kind} 类型资源，不支持「${parsed.intent}」操作（可用：${allowed.join(' / ')}）`,
       };
     }
+
+    if (binding.kind === 'doc') {
+      return this.executeDoc(binding, parsed);
+    }
+    return this.executeTable(binding, scene, parsed, msg);
+  }
+
+  /** 文档能力：读取 / 追加 */
+  private async executeDoc(
+    binding: ResourceBinding,
+    parsed: ParsedIntent,
+  ): Promise<ExecuteResult> {
+    const adapter = getDocumentAdapter(binding.provider);
+    const config = documentConfigOf(binding);
+
+    // QUERY 与 READ 同义：现有场景的 prompt 习惯用 QUERY 表达"查看"
+    if (parsed.intent === 'READ' || parsed.intent === 'QUERY') {
+      const doc = await adapter.readDocument(config);
+      return { success: true, doc };
+    }
+
+    // APPEND：正文优先取 fields.content / fields.text，退回 summary
+    const raw =
+      parsed.fields.content ?? parsed.fields.text ?? parsed.fields.正文;
+    const text = typeof raw === 'string' ? raw : '';
+    if (!text.trim()) {
+      return {
+        success: false,
+        error: '没有解析出要写入文档的内容，请把要记录的正文说清楚',
+      };
+    }
+    const doc = await adapter.appendText(config, text);
+    return { success: true, doc, appendedText: text.trim() };
+  }
+
+  /** 表格能力：CRUD */
+  private async executeTable(
+    binding: ResourceBinding,
+    scene: BotScene,
+    parsed: ParsedIntent,
+    msg: UnifiedMessage,
+  ): Promise<ExecuteResult> {
     const tableConfig = tableConfigOf(binding);
 
     // adapter 按**数据所在平台**选，而不是消息来源平台 —— 这是跨平台访问的落点

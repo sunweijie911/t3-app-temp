@@ -314,7 +314,7 @@ export default function ImBotResourceBindingsPage() {
                   onChange={(val) => setEditing({ ...editing, kind: val })}
                   options={[
                     { value: 'table', label: '多维表格' },
-                    { value: 'doc', label: '文档 (未实现)', disabled: true },
+                    { value: 'doc', label: '文档' },
                     { value: 'file', label: '文件 (未实现)', disabled: true },
                   ]}
                   value={editing.kind}
@@ -344,7 +344,14 @@ export default function ImBotResourceBindingsPage() {
                   onChange={(val) => setEditing({ ...editing, isDefault: val })}
                 />
               </Form.Item>
-              <Form.Item label="Workspace ID (飞书 app_token)" required>
+              <Form.Item
+                label={
+                  editing.kind === 'doc'
+                    ? 'Workspace ID (飞书 folder_token，可留空)'
+                    : 'Workspace ID (飞书 app_token)'
+                }
+                required
+              >
                 <Input
                   onChange={(e) =>
                     setEditing({ ...editing, workspaceId: e.target.value })

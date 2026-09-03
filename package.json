@@ -57,8 +57,10 @@
       "dashscope",
       "dedup",
       "deepseek",
+      "dentries",
       "devlog",
       "dingtalk",
+      "doccn",
       "doesnotcontain",
       "echostr",
       "encryptkey",
@@ -90,7 +92,8 @@
       "unstub",
       "varchar",
       "wbout",
-      "wecom"
+      "wecom",
+      "wedoc"
     ],
     "ignorePaths": [
       "drizzle/**"

@@ -259,20 +259,29 @@ export const imBotAdminRouter = createTRPCRouter({
 
   upsertResourceBinding: adminProcedure
     .input(
-      z.object({
-        id: z.string().optional(),
-        sceneId: z.string().min(1),
-        alias: z.string().min(1).max(64),
-        kind: BOT_RESOURCE_KIND_ENUM.default('table'),
-        /** 数据所在平台，与消息来源平台无关 */
-        provider: BOT_PLATFORM_ENUM,
-        workspaceId: z.string().min(1),
-        resourceId: z.string().min(1),
-        fieldMapping: FIELD_MAPPING_SCHEMA.default({}),
-        uniqueKey: z.string().max(64).optional(),
-        isDefault: z.boolean().default(true),
-        isActive: z.boolean().default(true),
-      }),
+      z
+        .object({
+          id: z.string().optional(),
+          sceneId: z.string().min(1),
+          alias: z.string().min(1).max(64),
+          kind: BOT_RESOURCE_KIND_ENUM.default('table'),
+          /** 数据所在平台，与消息来源平台无关 */
+          provider: BOT_PLATFORM_ENUM,
+          /**
+           * 表格必填（飞书 app_token）；文档可留空 —— 飞书 docx 的读写
+           * 只需要 document_id，folder_token 仅在创建新文档时才用得上。
+           */
+          workspaceId: z.string().default(''),
+          resourceId: z.string().min(1),
+          fieldMapping: FIELD_MAPPING_SCHEMA.default({}),
+          uniqueKey: z.string().max(64).optional(),
+          isDefault: z.boolean().default(true),
+          isActive: z.boolean().default(true),
+        })
+        .refine((v) => v.kind !== 'table' || v.workspaceId.length > 0, {
+          message: '表格资源必须填写 Workspace ID (飞书 app_token)',
+          path: ['workspaceId'],
+        }),
     )
     .mutation(async ({ ctx, input }) => {
       const id = input.id ?? nanoid();
