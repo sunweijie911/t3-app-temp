@@ -227,10 +227,37 @@ const OP_ALIASES: Record<string, string> = {
   islessequal: 'isLessEqual',
 };
 
-function dateStringToMs(s: string, end = false): number {
-  const time = end ? 'T23:59:59+08:00' : 'T00:00:00+08:00';
-  return new Date(`${s}${time}`).getTime();
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+/** YYYY-MM-DD → 该日 CST 零点的毫秒值 */
+function dayStartMs(s: string): number {
+  return new Date(`${s}T00:00:00+08:00`).getTime();
 }
+
+/** YYYY-MM-DD → 次日 CST 零点的毫秒值 */
+function nextDayStartMs(s: string): number {
+  return dayStartMs(s) + ONE_DAY_MS;
+}
+
+/*
+ * ── 飞书 datetime 字段筛选语义（2026-09 对真实 API 实测得出）──────────
+ *
+ * 关键：**filter 里的 ExactDate 值会被按日截断到零点，而记录侧用真实毫秒比较**。
+ * 三组实测数据（记录值 = 2026-05-11 12:00 CST）：
+ *   isLess    ExactDate(05-11 23:59:59.001) → 0 条  （值截断成 05-11 00:00，12:00 不小于它）
+ *   isLess    ExactDate(05-12 00:00)        → 1 条
+ *   isGreater ExactDate(05-11 00:00)        → 命中  （12:00 确实大于当天零点）
+ *
+ * 由此推出各操作符该取的边界（都以"整天"为语义单位）：
+ *   = 当天    → is        当天零点
+ *   >= 当天   → isGreater 当天零点 - 1ms   （截断落到前一天）
+ *   >  当天   → isGreater 次日零点
+ *   <= 当天   → isLess    次日零点
+ *   <  当天   → isLess    当天零点
+ *
+ * 原实现统一用「当天 23:59:59 ± 1ms」，截断后仍是当天零点，导致 isLess 侧
+ * 把当天整个排除 —— 所有按日期查询的场景都静默返回空。
+ */
 
 /**
  * 把 LLM 输出的单字段 filter 值转换为飞书 Bitable filter conditions。
@@ -257,26 +284,24 @@ export function buildFilterConditions(
       obj.value.length === 2
     ) {
       const [start, end] = obj.value as [unknown, unknown];
-      const startMs =
-        typeof start === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(start)
-          ? dateStringToMs(start, false)
-          : Number(start);
-      const endMs =
-        typeof end === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(end)
-          ? dateStringToMs(end, true)
-          : Number(end);
+      const isDate = (v: unknown): v is string =>
+        typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
+      // 下界：当天零点 - 1ms（落到前一天，isGreater 即可含当天）
+      const lowerMs = isDate(start) ? dayStartMs(start) - 1 : Number(start);
+      // 上界：次日零点（日粒度下 isLess 才能含当天，见 dayEndExclusiveMs）
+      const upperMs = isDate(end) ? nextDayStartMs(end) : Number(end) + 1;
       // 飞书 datetime 字段：value 必须为 ["ExactDate", "<毫秒>"] 双元素；
-      // 且不支持 isGreaterEqual/isLessEqual，用 isGreater/isLess ±1ms 模拟
+      // 且不支持 isGreaterEqual/isLessEqual，用 isGreater/isLess 开区间表达
       return [
         {
           field_name: fieldName,
           operator: 'isGreater',
-          value: ['ExactDate', String(startMs - 1)],
+          value: ['ExactDate', String(lowerMs)],
         },
         {
           field_name: fieldName,
           operator: 'isLess',
-          value: ['ExactDate', String(endMs + 1)],
+          value: ['ExactDate', String(upperMs)],
         },
       ];
     }
@@ -292,25 +317,46 @@ export function buildFilterConditions(
     }
     const rawV: unknown = obj.value;
     if (typeof rawV === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(rawV)) {
-      const isEnd = op === 'isLess' || op === 'isLessEqual';
-      const ms = dateStringToMs(rawV, isEnd);
       // 飞书 datetime 字段：value 必须 ["ExactDate", "<毫秒>"] 双元素；
-      // 且不支持 isGreaterEqual/isLessEqual，降级为 isGreater/isLess ±1ms
+      // 且不支持 isGreaterEqual/isLessEqual，用开区间 + 日粒度边界表达
       if (op === 'isGreaterEqual') {
+        // >= 当天 ⇔ > 当天零点前一毫秒（落在前一天）
         return [
           {
             field_name: fieldName,
             operator: 'isGreater',
-            value: ['ExactDate', String(ms - 1)],
+            value: ['ExactDate', String(dayStartMs(rawV) - 1)],
           },
         ];
       }
       if (op === 'isLessEqual') {
+        // <= 当天 ⇔ < 次日零点
         return [
           {
             field_name: fieldName,
             operator: 'isLess',
-            value: ['ExactDate', String(ms + 1)],
+            value: ['ExactDate', String(nextDayStartMs(rawV))],
+          },
+        ];
+      }
+      if (op === 'isLess') {
+        // < 当天 ⇔ < 当天零点
+        return [
+          {
+            field_name: fieldName,
+            operator: 'isLess',
+            value: ['ExactDate', String(dayStartMs(rawV))],
+          },
+        ];
+      }
+      if (op === 'isGreater') {
+        // > 当天 ⇔ > 次日零点。不能用当天零点：记录的真实时刻（如当天 12:00）
+        // 确实大于当天零点，会把"当天"这一天错误地算进来
+        return [
+          {
+            field_name: fieldName,
+            operator: 'isGreater',
+            value: ['ExactDate', String(nextDayStartMs(rawV))],
           },
         ];
       }
@@ -318,29 +364,24 @@ export function buildFilterConditions(
         {
           field_name: fieldName,
           operator: op,
-          value: ['ExactDate', String(ms)],
+          value: ['ExactDate', String(dayStartMs(rawV))],
         },
       ];
     }
     return [{ field_name: fieldName, operator: op, value: [String(rawV)] }];
   }
 
-  // 简单值：YYYY-MM-DD → 当天范围
-  // 飞书 datetime 字段：value 必须 ["ExactDate", "<毫秒>"] 双元素；
-  // 且不支持 isGreaterEqual/isLessEqual，用 isGreater/isLess ±1ms 严格不等式
+  // 简单值：YYYY-MM-DD → 用单条 `is` 匹配当天。
+  //
+  // 实测确认 ExactDate 是日粒度比较，所以 `is 当天零点` 就等价于"当天"，
+  // 不需要拆成 isGreater + isLess 两条。这样还顺带消掉了与 `_conjunction:'or'`
+  // 的冲突 —— 单条件不触发 requiresAndConjunction。
   if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw)) {
-    const startMs = dateStringToMs(raw, false);
-    const endMs = dateStringToMs(raw, true);
     return [
       {
         field_name: fieldName,
-        operator: 'isGreater',
-        value: ['ExactDate', String(startMs - 1)],
-      },
-      {
-        field_name: fieldName,
-        operator: 'isLess',
-        value: ['ExactDate', String(endMs + 1)],
+        operator: 'is',
+        value: ['ExactDate', String(dayStartMs(raw))],
       },
     ];
   }

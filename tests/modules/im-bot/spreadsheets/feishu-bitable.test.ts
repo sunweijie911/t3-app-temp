@@ -114,13 +114,16 @@ describe('buildFilterConditions — 简单值', () => {
     ]);
   });
 
-  it('YYYY-MM-DD → 当天范围 (isGreater + isLess + ExactDate)', () => {
+  it('YYYY-MM-DD → 单条 is + 当天零点（不再拆成两条区间）', () => {
+    // 实测确认 filter 值按日截断，`is 当天零点` 即等价于"当天"；
+    // 单条件还顺带消掉了与 _conjunction:'or' 的冲突
     const conds = buildFilterConditions('date', '2026-05-11');
-    expect(conds).toHaveLength(2);
-    expect(conds[0]?.operator).toBe('isGreater');
+    expect(conds).toHaveLength(1);
+    expect(conds[0]?.operator).toBe('is');
     expect(conds[0]?.value[0]).toBe('ExactDate');
-    expect(conds[1]?.operator).toBe('isLess');
-    expect(conds[1]?.value[0]).toBe('ExactDate');
+    expect(Number(conds[0]?.value[1])).toBe(
+      new Date('2026-05-11T00:00:00+08:00').getTime(),
+    );
   });
 });
 
@@ -220,10 +223,11 @@ describe('requiresAndConjunction — or 与区间条件不兼容', () => {
     expect(requiresAndConjunction(conds)).toBe(true);
   });
 
-  it('裸 YYYY-MM-DD 展开的当天范围同样必须 AND', () => {
+  it('裸 YYYY-MM-DD 现在是单条件，可以与 or 混用', () => {
+    // 改成单条 is 之后不再需要 AND —— 修掉了"按日期查询无法配 or"的限制
     expect(
       requiresAndConjunction(buildFilterConditions('d', '2026-05-11')),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it('单条件不构成冲突', () => {
@@ -239,5 +243,84 @@ describe('requiresAndConjunction — or 与区间条件不兼容', () => {
       { field_name: 'tags', operator: 'contains', value: ['督导'] },
     ];
     expect(requiresAndConjunction(conds)).toBe(false);
+  });
+});
+
+describe('日期边界语义 — 由真实 API 实测反推（回归保护）', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const start = (d: string) => new Date(`${d}T00:00:00+08:00`).getTime();
+  const only = (raw: unknown) => {
+    const c = buildFilterConditions('date', raw);
+    expect(c).toHaveLength(1);
+    return { op: c[0]?.operator, ms: Number(c[0]?.value[1]) };
+  };
+
+  /*
+   * 飞书把 filter 的 ExactDate 值按日截断到零点，记录侧用真实毫秒比较。
+   * 所以"整天"语义的边界必须这样取，用「当天 23:59:59 ± 1ms」会静默查空。
+   */
+
+  it('= 当天 → is 当天零点', () => {
+    expect(only('2026-05-11')).toEqual({ op: 'is', ms: start('2026-05-11') });
+  });
+
+  it('>= 当天 → isGreater 当天零点减 1ms（截断落到前一天，从而含当天）', () => {
+    expect(only({ op: '>=', value: '2026-05-11' })).toEqual({
+      op: 'isGreater',
+      ms: start('2026-05-11') - 1,
+    });
+  });
+
+  it('> 当天 → isGreater 次日零点（用当天零点会把当天错误算进来）', () => {
+    // 记录的真实时刻（如当天 12:00）确实大于当天零点，所以不能用当天零点
+    expect(only({ op: '>', value: '2026-05-11' })).toEqual({
+      op: 'isGreater',
+      ms: start('2026-05-11') + DAY,
+    });
+  });
+
+  it('<= 当天 → isLess 次日零点', () => {
+    expect(only({ op: '<=', value: '2026-05-11' })).toEqual({
+      op: 'isLess',
+      ms: start('2026-05-11') + DAY,
+    });
+  });
+
+  it('< 当天 → isLess 当天零点', () => {
+    expect(only({ op: '<', value: '2026-05-11' })).toEqual({
+      op: 'isLess',
+      ms: start('2026-05-11'),
+    });
+  });
+
+  it('between 的上界取终点次日零点，终点当天必须含在内', () => {
+    const conds = buildFilterConditions('date', {
+      op: 'between',
+      value: ['2026-05-01', '2026-05-31'],
+    });
+    expect(conds).toHaveLength(2);
+    expect(conds[0]?.operator).toBe('isGreater');
+    expect(Number(conds[0]?.value[1])).toBe(start('2026-05-01') - 1);
+    expect(conds[1]?.operator).toBe('isLess');
+    // 关键：不是 05-31 23:59:59+1ms（那样会漏掉 05-31 当天）
+    expect(Number(conds[1]?.value[1])).toBe(start('2026-05-31') + DAY);
+  });
+
+  it('单日 between（起止同一天）也能覆盖到那天', () => {
+    const conds = buildFilterConditions('date', {
+      op: 'between',
+      value: ['2026-05-11', '2026-05-11'],
+    });
+    expect(Number(conds[0]?.value[1])).toBe(start('2026-05-11') - 1);
+    expect(Number(conds[1]?.value[1])).toBe(start('2026-05-11') + DAY);
+  });
+
+  it('between 传毫秒数值时不做日截断（保留精确区间能力）', () => {
+    const conds = buildFilterConditions('date', {
+      op: 'between',
+      value: [1000, 2000],
+    });
+    expect(Number(conds[0]?.value[1])).toBe(1000);
+    expect(Number(conds[1]?.value[1])).toBe(2001);
   });
 });
