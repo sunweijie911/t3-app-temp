@@ -3,6 +3,7 @@ import type {
   FieldMappingValue,
   ParsedIntent,
   SceneContext,
+  WriteDenialReason,
 } from '../core/types';
 
 export interface BotScene {
@@ -15,8 +16,15 @@ export interface BotScene {
    * 连帮助文本里都不列出，不泄漏场景名。
    */
   allowsChat(chatId: string): boolean;
-  /** 该用户是否能执行写操作（CREATE / UPDATE / DELETE / APPEND） */
-  allowsWrite(senderId: string): boolean;
+  /**
+   * 该用户在该会话里能否执行写操作（CREATE / UPDATE / DELETE / APPEND）。
+   *
+   * 会话维度与用户维度是**与**关系：被配成只读的群，即使白名单里的用户
+   * 也不能写；不在白名单里的用户，在可写的群里同样不能写。
+   *
+   * @returns null = 允许；否则返回被拒原因码
+   */
+  writeDenial(senderId: string, chatId: string): WriteDenialReason | null;
   getSystemPrompt(ctx: SceneContext): string;
   parseResult(json: string): ParsedIntent | null;
   /**

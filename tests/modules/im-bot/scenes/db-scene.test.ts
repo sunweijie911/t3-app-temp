@@ -720,3 +720,105 @@ describe('parseResult — fields / filters 必须是对象（回归）', () => {
     expect(p?.filters).toEqual({ 名称: 'A' });
   });
 });
+
+describe('DatabaseDrivenScene — 写权限（writeMode × 会话级 canWrite）', () => {
+  const base = {
+    sceneId: 's',
+    name: '台账',
+    description: '',
+    keywords: [],
+    systemPrompt: 'p',
+  };
+
+  it('open：任何人任何群都能写，忽略 writerIds', () => {
+    const s = new DatabaseDrivenScene({
+      ...base,
+      writeMode: 'open',
+      writerIds: ['boss'],
+    });
+    expect(s.writeDenial('anyone', 'chatX')).toBeNull();
+  });
+
+  it('readonly：谁都不能写 —— 不再需要往名单里塞假 ID', () => {
+    const s = new DatabaseDrivenScene({
+      ...base,
+      writeMode: 'readonly',
+      writerIds: ['boss'],
+    });
+    // 连白名单里的人也不能写，否则 readonly 就名不副实
+    expect(s.writeDenial('boss', 'chatX')).toBe('scene_readonly');
+  });
+
+  it('whitelist：只有名单内可写', () => {
+    const s = new DatabaseDrivenScene({
+      ...base,
+      writeMode: 'whitelist',
+      writerIds: ['boss'],
+    });
+    expect(s.writeDenial('boss', 'chatX')).toBeNull();
+    expect(s.writeDenial('other', 'chatX')).toBe('user_not_writer');
+  });
+
+  it('whitelist + 空名单 = 谁都不能写', () => {
+    const s = new DatabaseDrivenScene({
+      ...base,
+      writeMode: 'whitelist',
+      writerIds: [],
+    });
+    expect(s.writeDenial('anyone', 'chatX')).toBe('user_not_writer');
+  });
+
+  it('★ 会话级只读：A 群只读、B 群可写（此前必须建两个场景才能表达）', () => {
+    const s = new DatabaseDrivenScene({
+      ...base,
+      writeMode: 'open',
+      allowedChats: [
+        { chatId: 'chatA', canWrite: false },
+        { chatId: 'chatB', canWrite: true },
+      ],
+    });
+    expect(s.writeDenial('u1', 'chatA')).toBe('chat_readonly');
+    expect(s.writeDenial('u1', 'chatB')).toBeNull();
+    // 不在名单里的群场景本身就不可见
+    expect(s.allowsChat('chatC')).toBe(false);
+    expect(s.allowsChat('chatA')).toBe(true);
+  });
+
+  it('★ 两个维度是「与」：可写名单里的人在只读群里也不能写', () => {
+    const s = new DatabaseDrivenScene({
+      ...base,
+      writeMode: 'whitelist',
+      writerIds: ['boss'],
+      allowedChats: [{ chatId: 'chatA', canWrite: false }],
+    });
+    expect(s.writeDenial('boss', 'chatA')).toBe('chat_readonly');
+  });
+
+  it('★ 反向也是「与」：可写群里不在名单的人依然不能写', () => {
+    const s = new DatabaseDrivenScene({
+      ...base,
+      writeMode: 'whitelist',
+      writerIds: ['boss'],
+      allowedChats: [{ chatId: 'chatA', canWrite: true }],
+    });
+    expect(s.writeDenial('other', 'chatA')).toBe('user_not_writer');
+    expect(s.writeDenial('boss', 'chatA')).toBeNull();
+  });
+
+  it('拒绝原因按作用范围从大到小判：只读场景不该报「你不在白名单」', () => {
+    // 那样会误导用户去申请加白名单，而加了也照样不能写
+    const s = new DatabaseDrivenScene({
+      ...base,
+      writeMode: 'readonly',
+      writerIds: [],
+      allowedChats: [{ chatId: 'chatA', canWrite: false }],
+    });
+    expect(s.writeDenial('other', 'chatA')).toBe('scene_readonly');
+  });
+
+  it('空会话名单 = 不限制，也就不存在会话级只读', () => {
+    const s = new DatabaseDrivenScene({ ...base, allowedChats: [] });
+    expect(s.allowsChat('任何群')).toBe(true);
+    expect(s.writeDenial('u1', '任何群')).toBeNull();
+  });
+});

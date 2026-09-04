@@ -178,6 +178,26 @@ export interface ExecuteResult {
   error?: string;
 }
 
+/** 会话级访问项：这个会话能否用该场景、能否写 */
+export interface SceneChatAccess {
+  chatId: string;
+  canWrite: boolean;
+}
+
+/**
+ * 写操作被拒的原因。返回**原因码**而不是布尔或文案：
+ * - 布尔说不清是"这个群只读"还是"你没权限"，两者的处理方式完全不同
+ *   （前者找管理员改群配置，后者申请加白名单）
+ * - 文案留在 dispatcher 统一渲染，权限判定本身不该关心措辞
+ */
+export type WriteDenialReason =
+  /** 场景整体只读 */
+  | 'scene_readonly'
+  /** 该会话被配成只读 */
+  | 'chat_readonly'
+  /** 用户不在可写白名单里 */
+  | 'user_not_writer';
+
 /** 场景上下文 */
 export interface SceneContext {
   today: string;

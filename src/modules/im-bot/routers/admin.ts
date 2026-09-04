@@ -9,10 +9,12 @@ import {
   BOT_EVENT_RESULT_ENUM,
   BOT_PLATFORM_ENUM,
   BOT_RESOURCE_KIND_ENUM,
+  BOT_WRITE_MODE_ENUM,
   type BotPlatform,
   CREDENTIAL_MASK,
   FIELD_MAPPING_SCHEMA,
   PLATFORM_SECRET_FIELDS,
+  SCENE_CHAT_ACCESS_SCHEMA,
 } from '../constants';
 import {
   botEventDedup,
@@ -265,9 +267,15 @@ export const imBotAdminRouter = createTRPCRouter({
         /** @deprecated 见 schema 里的说明；字段清单已改为从资源绑定自动派生 */
         fieldSchema: z.any().optional(),
         replyTemplate: z.string().optional(),
-        /** 空数组 = 任何会话都能触发 */
-        allowedChatIds: z.array(z.string().min(1)).default([]),
-        /** 空数组 = 任何人都能写 */
+        /**
+         * 允许触发的会话及其读写权限。空数组 = 任何会话都能触发。
+         * `canWrite: false` 让该群只能查询 —— 这是「A 群只读、B 群可写」
+         * 唯一的表达方式，以前只能建两个场景绑同一张表。
+         */
+        allowedChats: z.array(SCENE_CHAT_ACCESS_SCHEMA).default([]),
+        /** 写入模式。readonly 让整个场景只读，不再需要往名单里塞假 ID */
+        writeMode: BOT_WRITE_MODE_ENUM.default('open'),
+        /** 仅 writeMode='whitelist' 时生效 */
         writerIds: z.array(z.string().min(1)).default([]),
         isActive: z.boolean().default(true),
         sortOrder: z.number().int().default(0),
@@ -316,7 +324,8 @@ export const imBotAdminRouter = createTRPCRouter({
           systemPrompt: input.systemPrompt,
           fieldSchema: input.fieldSchema,
           replyTemplate: input.replyTemplate,
-          allowedChatIds: input.allowedChatIds,
+          allowedChats: input.allowedChats,
+          writeMode: input.writeMode,
           writerIds: input.writerIds,
           isActive: input.isActive,
           sortOrder: input.sortOrder,
@@ -331,7 +340,8 @@ export const imBotAdminRouter = createTRPCRouter({
             systemPrompt: input.systemPrompt,
             fieldSchema: input.fieldSchema,
             replyTemplate: input.replyTemplate,
-            allowedChatIds: input.allowedChatIds,
+            allowedChats: input.allowedChats,
+            writeMode: input.writeMode,
             writerIds: input.writerIds,
             isActive: input.isActive,
             sortOrder: input.sortOrder,

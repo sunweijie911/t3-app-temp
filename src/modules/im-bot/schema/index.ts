@@ -37,6 +37,13 @@ export const botResourceKindEnum = pgEnum('bot_resource_kind', [
   'file',
 ]);
 
+/** 场景写入模式。见 constants.ts 的 BOT_WRITE_MODE_VALUES */
+export const botWriteModeEnum = pgEnum('bot_write_mode', [
+  'open',
+  'whitelist',
+  'readonly',
+]);
+
 // ── 场景配置表 ────────────────────────────────────────────────
 
 export const botScenes = createTable(
@@ -56,17 +63,27 @@ export const botScenes = createTable(
     fieldSchema: jsonb(),
     replyTemplate: text(),
     /**
-     * 允许触发该场景的会话 ID 白名单。**空数组 = 不限制**（向后兼容）。
+     * 允许触发该场景的会话，以及每个会话能否写。**空数组 = 不限制会话**。
      *
-     * 以前没有任何作用域概念：机器人被拉进第二个群，那个群立刻能对
-     * 绑定的表做全量 CRUD。场景对不在名单里的会话直接不可见 ——
-     * 连帮助文本里都不出现，不泄漏场景名。
+     * 形如 `[{ chatId: 'oc_xxx', canWrite: false }]`。
+     * 场景对不在名单里的会话直接不可见 —— 连帮助文本里都不出现，
+     * 不泄漏场景名。`canWrite: false` 则该群只能查询。
+     *
+     * 取代原来的 `allowedChatIds: string[]`：那个形状只能控制「能不能用」，
+     * 表达不了「A 群只读、B 群可读写」，只能建两个场景绑同一张表。
      */
-    allowedChatIds: jsonb().$type<string[]>().notNull().default([]),
+    allowedChats: jsonb()
+      .$type<Array<{ chatId: string; canWrite: boolean }>>()
+      .notNull()
+      .default([]),
     /**
-     * 允许执行写操作（CREATE / UPDATE / DELETE / APPEND）的用户 ID 白名单。
-     * **空数组 = 所有人都能写**（向后兼容）。查询不受限制。
+     * 写入模式。与 writerIds 配合：
+     * - open      任何人可写（忽略 writerIds）
+     * - whitelist 仅 writerIds 内的用户可写
+     * - readonly  谁都不能写
      */
+    writeMode: botWriteModeEnum().notNull().default('open'),
+    /** writeMode = 'whitelist' 时生效的用户 ID 白名单 */
     writerIds: jsonb().$type<string[]>().notNull().default([]),
     isActive: d.boolean().notNull().default(true),
     sortOrder: d.integer().notNull().default(0),

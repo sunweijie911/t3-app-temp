@@ -34,6 +34,7 @@ import type {
   SpreadsheetRecord,
   SpreadsheetTableConfig,
   UnifiedMessage,
+  WriteDenialReason,
 } from './types';
 import {
   ACTIONS_BY_KIND,
@@ -506,6 +507,36 @@ function aggregateRecords(
 }
 
 /**
+ * 拒绝原因 → 给用户看的文案。
+ *
+ * 三种原因的处置方式完全不同，不能糊成一句"你没有写入权限"：
+ * 只读场景要改场景配置、只读会话要改那个群的配置、不在白名单要申请加名单。
+ * 说错了会让用户去找错的人。
+ */
+function writeDenialMessage(
+  reason: WriteDenialReason,
+  sceneName: string,
+): string {
+  switch (reason) {
+    case 'scene_readonly':
+      return `🔒 「${sceneName}」目前是只读的，只能查询，不能新增/修改/删除。\n如需开放写入请联系管理员`;
+    case 'chat_readonly':
+      return `🔒 本群对「${sceneName}」只有查询权限，不能新增/修改/删除。\n如需在本群写入请联系管理员`;
+    case 'user_not_writer':
+      return `🔒 你没有「${sceneName}」的写入权限，可以查询但不能新增/修改/删除。\n如需权限请联系管理员`;
+    default:
+      return `🔒 没有「${sceneName}」的写入权限`;
+  }
+}
+
+/** 拒绝原因 → 审计日志里的 errorMsg。要能一眼看出是哪个维度拦的 */
+const WRITE_DENIAL_LOG: Record<WriteDenialReason, string> = {
+  scene_readonly: '场景为只读模式',
+  chat_readonly: '该会话为只读',
+  user_not_writer: '用户不在可写白名单',
+};
+
+/**
  * 一次「解析 → 校验 → 执行」的去向。
  *
  * `stop` 与 `retry` 都带齐了用户可见文案与审计字段 —— 重试次数用光时
@@ -915,14 +946,17 @@ export class Dispatcher {
 
     // 写权限：拦在真正落库前，且不消耗额外的平台调用。不重试 —— 换个
     // JSON 写法也不会让没权限的人有权限
-    if (isWriteIntent(parsed.intent) && !scene.allowsWrite(msg.senderId)) {
-      return {
-        kind: 'stop',
-        parsed,
-        reply: `🔒 你没有「${scene.name}」的写入权限，可以查询但不能新增/修改/删除。\n如需权限请联系管理员`,
-        errorMsg: '无写入权限',
-        logResult: 'ignored',
-      };
+    if (isWriteIntent(parsed.intent)) {
+      const denial = scene.writeDenial(msg.senderId, msg.chatId);
+      if (denial) {
+        return {
+          kind: 'stop',
+          parsed,
+          reply: writeDenialMessage(denial, scene.name),
+          errorMsg: WRITE_DENIAL_LOG[denial],
+          logResult: 'ignored',
+        };
+      }
     }
 
     const result = await this.execute(scene, parsed, msg);
@@ -1499,13 +1533,17 @@ export class Dispatcher {
       );
       return { handled: true, resultData: { aborted: '场景已停用或删除' } };
     }
-    if (!scene.allowsWrite(msg.senderId)) {
+    const denial = scene.writeDenial(msg.senderId, msg.chatId);
+    if (denial) {
       await this.pending.delete(pendingKeyOf(msg));
       await channelAdapter.reply(
         msg,
-        '🔒 你的写入权限已变更，刚才的操作已作废',
+        `🔒 写入权限已变更，刚才的操作已作废\n${writeDenialMessage(denial, scene.name)}`,
       );
-      return { handled: true, resultData: { aborted: '写权限已撤销' } };
+      return {
+        handled: true,
+        resultData: { aborted: WRITE_DENIAL_LOG[denial] },
+      };
     }
 
     if (action.type === 'confirm_delete' && content.includes('确认删除')) {

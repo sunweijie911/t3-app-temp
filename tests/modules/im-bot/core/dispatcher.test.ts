@@ -1461,7 +1461,8 @@ describe('Dispatcher — 字段清单注入 prompt', () => {
 
 describe('Dispatcher — 场景作用域与写权限', () => {
   function sceneWith(access: {
-    allowedChatIds?: string[];
+    allowedChats?: Array<{ chatId: string; canWrite: boolean }>;
+    writeMode?: 'open' | 'whitelist' | 'readonly';
     writerIds?: string[];
   }) {
     return new DatabaseDrivenScene({ ...baseSceneConfig, ...access });
@@ -1470,7 +1471,9 @@ describe('Dispatcher — 场景作用域与写权限', () => {
   it('会话不在白名单时场景不可见：不匹配、不进 LLM、也不列进帮助文本', async () => {
     // 回归：以前没有作用域，机器人被拉进第二个群，那个群立刻能全量 CRUD
     const d = new Dispatcher({ getBinding: () => baseBinding });
-    d.registry.register(sceneWith({ allowedChatIds: ['chatB'] }));
+    d.registry.register(
+      sceneWith({ allowedChats: [{ chatId: 'chatB', canWrite: true }] }),
+    );
     const channel = makeChannel();
     const adapter = makeAdapter();
     mockGetAdapter.mockReturnValue(adapter);
@@ -1490,7 +1493,9 @@ describe('Dispatcher — 场景作用域与写权限', () => {
 
   it('会话在白名单时正常工作', async () => {
     const d = new Dispatcher({ getBinding: () => baseBinding });
-    d.registry.register(sceneWith({ allowedChatIds: ['chatA'] }));
+    d.registry.register(
+      sceneWith({ allowedChats: [{ chatId: 'chatA', canWrite: true }] }),
+    );
     const channel = makeChannel();
     const adapter = makeAdapter();
     mockGetAdapter.mockReturnValue(adapter);
@@ -1512,7 +1517,9 @@ describe('Dispatcher — 场景作用域与写权限', () => {
 
   it('不在可写名单的用户能查询', async () => {
     const d = new Dispatcher({ getBinding: () => baseBinding });
-    d.registry.register(sceneWith({ writerIds: ['boss'] }));
+    d.registry.register(
+      sceneWith({ writeMode: 'whitelist', writerIds: ['boss'] }),
+    );
     const channel = makeChannel();
     const adapter = makeAdapter();
     mockGetAdapter.mockReturnValue(adapter);
@@ -1528,7 +1535,9 @@ describe('Dispatcher — 场景作用域与写权限', () => {
 
   it('不在可写名单的用户不能删除，且拦在调用平台之前', async () => {
     const d = new Dispatcher({ getBinding: () => baseBinding });
-    d.registry.register(sceneWith({ writerIds: ['boss'] }));
+    d.registry.register(
+      sceneWith({ writeMode: 'whitelist', writerIds: ['boss'] }),
+    );
     const channel = makeChannel();
     const adapter = makeAdapter();
     mockGetAdapter.mockReturnValue(adapter);
@@ -1572,7 +1581,9 @@ describe('Dispatcher — 场景作用域与写权限', () => {
       getBinding: () => baseBinding,
       pendingStore,
     });
-    revoked.registry.register(sceneWith({ writerIds: ['boss'] }));
+    revoked.registry.register(
+      sceneWith({ writeMode: 'whitelist', writerIds: ['boss'] }),
+    );
     await revoked.process(makeMsg({ content: '确认删除' }), channel);
 
     expect(adapter.deleteRecord).not.toHaveBeenCalled();
@@ -2889,7 +2900,11 @@ describe('Dispatcher — AGGREGATE 聚合统计', () => {
     (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue(rows);
     const d = new Dispatcher({ getBinding: () => baseBinding });
     d.registry.register(
-      new DatabaseDrivenScene({ ...baseSceneConfig, writerIds: ['someone'] }),
+      new DatabaseDrivenScene({
+        ...baseSceneConfig,
+        writeMode: 'whitelist',
+        writerIds: ['someone'],
+      }),
     );
     mockChatCompletion.mockResolvedValue(
       '{"intent":"AGGREGATE","fields":{},"filters":{},"aggregate":{"op":"count"},"confidence":0.9,"summary":"数"}',
@@ -3142,5 +3157,74 @@ describe('Dispatcher — 审计留痕修补（实测暴露的观测缺口）', (
 
     expect(events.at(-1)?.result).toBe('error');
     expect(events.at(-1)?.errorMsg).toBe('置信度不足');
+  });
+});
+
+describe('Dispatcher — 三种拒绝原因给出不同文案', () => {
+  function run(
+    cfg: Partial<{
+      writeMode: 'open' | 'whitelist' | 'readonly';
+      writerIds: string[];
+      allowedChats: Array<{ chatId: string; canWrite: boolean }>;
+    }>,
+  ) {
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const events: BotEvent[] = [];
+    const d = new Dispatcher({
+      getBinding: () => baseBinding,
+      onEvent: (e) => {
+        events.push(e);
+      },
+    });
+    d.registry.register(
+      new DatabaseDrivenScene({ ...baseSceneConfig, ...cfg }),
+    );
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"DELETE","fields":{},"filters":{"项目名称":"A"},"confidence":0.9,"summary":"删"}',
+    );
+    return { d, channel, adapter, events };
+  }
+
+  it('只读场景 → 说「场景是只读的」，不说「你没权限」', async () => {
+    const { d, channel, adapter, events } = run({ writeMode: 'readonly' });
+    await d.process(makeMsg({ content: '删掉项目 A' }), channel);
+    expect(channel.lastReply).toContain('目前是只读的');
+    expect(channel.lastReply).not.toContain('你没有');
+    expect(adapter.queryRecords).not.toHaveBeenCalled();
+    expect(events.at(-1)?.errorMsg).toBe('场景为只读模式');
+  });
+
+  it('只读会话 → 说「本群只有查询权限」', async () => {
+    const { d, channel, events } = run({
+      allowedChats: [{ chatId: 'chatA', canWrite: false }],
+    });
+    await d.process(makeMsg({ content: '删掉项目 A' }), channel);
+    expect(channel.lastReply).toContain('本群');
+    expect(events.at(-1)?.errorMsg).toBe('该会话为只读');
+  });
+
+  it('不在白名单 → 说「你没有写入权限」', async () => {
+    const { d, channel, events } = run({
+      writeMode: 'whitelist',
+      writerIds: ['boss'],
+    });
+    await d.process(makeMsg({ content: '删掉项目 A' }), channel);
+    expect(channel.lastReply).toContain('你没有');
+    expect(events.at(-1)?.errorMsg).toBe('用户不在可写白名单');
+  });
+
+  it('只读会话里查询照常可用', async () => {
+    const { d, channel, adapter } = run({
+      allowedChats: [{ chatId: 'chatA', canWrite: false }],
+    });
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"QUERY","fields":{},"filters":{"项目名称":"A"},"confidence":0.9,"summary":"查"}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    await d.process(makeMsg({ content: '查项目 A' }), channel);
+    expect(adapter.queryRecords).toHaveBeenCalled();
+    expect(channel.lastReply).not.toContain('🔒');
   });
 });

@@ -1,3 +1,4 @@
+import type { BotWriteMode } from '../constants';
 import {
   clampReply,
   fieldMeta,
@@ -13,7 +14,9 @@ import type {
   ExecuteResult,
   FieldMappingValue,
   ParsedIntent,
+  SceneChatAccess,
   SceneContext,
+  WriteDenialReason,
 } from '../core/types';
 import { AGGREGATE_OPS, INTENT_VERBS } from '../core/types';
 import type { BotScene } from './types';
@@ -103,9 +106,11 @@ export interface DbSceneConfig {
   keywords: string[];
   systemPrompt: string;
   replyTemplate?: string;
-  /** 允许触发的会话白名单；空 = 不限制 */
-  allowedChatIds?: string[];
-  /** 允许写操作的用户白名单；空 = 所有人都能写 */
+  /** 允许触发的会话及其读写权限；空 = 不限制会话 */
+  allowedChats?: SceneChatAccess[];
+  /** 写入模式。缺省 'open' */
+  writeMode?: BotWriteMode;
+  /** writeMode='whitelist' 时生效的用户白名单 */
   writerIds?: string[];
 }
 
@@ -120,7 +125,8 @@ export class DatabaseDrivenScene implements BotScene {
   private keywords: string[];
   private systemPrompt: string;
   private replyTemplate?: string;
-  private allowedChatIds: string[];
+  private allowedChats: SceneChatAccess[];
+  private writeMode: BotWriteMode;
   private writerIds: string[];
 
   constructor(config: DbSceneConfig) {
@@ -130,25 +136,36 @@ export class DatabaseDrivenScene implements BotScene {
     this.keywords = config.keywords;
     this.systemPrompt = config.systemPrompt;
     this.replyTemplate = config.replyTemplate;
-    this.allowedChatIds = config.allowedChatIds ?? [];
+    this.allowedChats = config.allowedChats ?? [];
+    this.writeMode = config.writeMode ?? 'open';
     this.writerIds = config.writerIds ?? [];
   }
 
-  /**
-   * 空名单 = 不限制。默认放开是刻意的：历史场景没有这两列，
-   * 默认收紧会让所有现有配置在升级瞬间失效，
-   * 也容易让管理员把自己锁在外面。
-   */
+  /** 空名单 = 不限制会话。非空时只有名单内的会话能看到这个场景 */
   allowsChat(chatId: string): boolean {
-    return this.allowedChatIds.length === 0
+    return this.allowedChats.length === 0
       ? true
-      : this.allowedChatIds.includes(chatId);
+      : this.allowedChats.some((c) => c.chatId === chatId);
   }
 
-  allowsWrite(senderId: string): boolean {
-    return this.writerIds.length === 0
-      ? true
-      : this.writerIds.includes(senderId);
+  /**
+   * 写权限判定。会话维度与用户维度是**与**关系。
+   *
+   * 顺序刻意先判场景、再判会话、最后判用户 —— 拒绝原因的"作用范围"
+   * 由大到小，用户看到的是最能解释现状的那一条：一个只读场景里，
+   * 告诉用户"你不在白名单里"是误导（加了白名单也照样不能写）。
+   */
+  writeDenial(senderId: string, chatId: string): WriteDenialReason | null {
+    if (this.writeMode === 'readonly') return 'scene_readonly';
+
+    // 会话没被限制（空名单）时不存在会话级只读
+    const chat = this.allowedChats.find((c) => c.chatId === chatId);
+    if (chat && !chat.canWrite) return 'chat_readonly';
+
+    if (this.writeMode === 'whitelist' && !this.writerIds.includes(senderId)) {
+      return 'user_not_writer';
+    }
+    return null;
   }
 
   /**

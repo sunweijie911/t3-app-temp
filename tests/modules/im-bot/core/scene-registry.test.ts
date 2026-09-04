@@ -24,7 +24,7 @@ function makeScene(
     match: () => score,
     allowsChat: (chatId) =>
       allowedChatIds.length === 0 || allowedChatIds.includes(chatId),
-    allowsWrite: () => true,
+    writeDenial: () => null,
     getSystemPrompt: () => '',
     parseResult: () => null,
     formatReply: () => '',

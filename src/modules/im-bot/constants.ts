@@ -36,6 +36,35 @@ export const RESOURCE_KIND_LABELS: Record<
   file: '文件（未实现）',
 };
 
+/**
+ * 场景的写入模式。
+ *
+ * 取代原来「writerIds 空数组 = 所有人可写」的隐式约定：那套约定表达不了
+ * 「谁都不能写」——只能往名单里塞一个不存在的用户 ID 去 hack。
+ * 三态显式声明后，「只读场景」成了一等配置。
+ */
+export const BOT_WRITE_MODE_VALUES = ['open', 'whitelist', 'readonly'] as const;
+export const BOT_WRITE_MODE_ENUM = z.enum(BOT_WRITE_MODE_VALUES);
+export type BotWriteMode = (typeof BOT_WRITE_MODE_VALUES)[number];
+export const WRITE_MODE_LABELS: Record<BotWriteMode, string> = {
+  open: '所有人可写',
+  whitelist: '仅名单内可写',
+  readonly: '只读（谁都不能写）',
+};
+
+/**
+ * 会话级访问项。
+ *
+ * 从 `string[]` 升级成带 `canWrite` 的对象：原来会话白名单只能控制
+ * 「这个群能不能用这个场景」（读写一起），表达不了「A 群只读、B 群可读写」
+ * —— 只能建两个场景绑同一张表，配置重复且容易改漏一个。
+ */
+export const SCENE_CHAT_ACCESS_SCHEMA = z.object({
+  chatId: z.string().min(1),
+  /** 该会话能否执行写操作。false = 这个群只能查 */
+  canWrite: z.boolean().default(true),
+});
+
 /** fieldMapping 的校验 schema（admin 写入 / 前端类型推导共用） */
 export const FIELD_MAPPING_SCHEMA = z.record(
   z.string(),

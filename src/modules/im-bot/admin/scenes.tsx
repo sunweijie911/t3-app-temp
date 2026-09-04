@@ -17,10 +17,12 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import {
   Button,
+  Checkbox,
   Form,
   Input,
   Modal,
   Popconfirm,
+  Radio,
   Select,
   Space,
   Switch,
@@ -32,6 +34,11 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
+import {
+  BOT_WRITE_MODE_VALUES,
+  type BotWriteMode,
+  WRITE_MODE_LABELS,
+} from '@/modules/im-bot/constants';
 import { api } from '@/trpc/react';
 
 // ── 拖拽行组件 ──────────────────────────────────────────
@@ -85,7 +92,8 @@ type SceneRow = {
   systemPrompt?: string | null;
   fieldSchema?: unknown;
   replyTemplate?: string | null;
-  allowedChatIds?: string[] | null;
+  allowedChats?: Array<{ chatId: string; canWrite: boolean }> | null;
+  writeMode?: BotWriteMode | null;
   writerIds?: string[] | null;
 };
 
@@ -97,7 +105,8 @@ type EditingScene = {
   keywordTags: string[];
   systemPrompt: string;
   replyTemplate: string;
-  allowedChatIds: string[];
+  allowedChats: Array<{ chatId: string; canWrite: boolean }>;
+  writeMode: BotWriteMode;
   writerIds: string[];
   isActive: boolean;
 };
@@ -109,7 +118,8 @@ const emptyScene: EditingScene = {
   keywordTags: [],
   systemPrompt: '',
   replyTemplate: '',
-  allowedChatIds: [],
+  allowedChats: [],
+  writeMode: 'open',
   writerIds: [],
   isActive: true,
 };
@@ -262,7 +272,8 @@ export default function ImBotScenesPage() {
                 keywordTags: parseKeywordTags(record.keywords),
                 systemPrompt: record.systemPrompt ?? '',
                 replyTemplate: record.replyTemplate ?? '',
-                allowedChatIds: record.allowedChatIds ?? [],
+                allowedChats: record.allowedChats ?? [],
+                writeMode: record.writeMode ?? 'open',
                 writerIds: record.writerIds ?? [],
                 isActive: record.isActive,
               })
@@ -336,7 +347,8 @@ export default function ImBotScenesPage() {
               keywords: JSON.stringify(editing.keywordTags),
               systemPrompt: editing.systemPrompt,
               replyTemplate: editing.replyTemplate,
-              allowedChatIds: editing.allowedChatIds,
+              allowedChats: editing.allowedChats,
+              writeMode: editing.writeMode,
               writerIds: editing.writerIds,
               isActive: editing.isActive,
             });
@@ -443,37 +455,100 @@ export default function ImBotScenesPage() {
                 </Typography.Text>
               </Form.Item>
               <Form.Item
-                label="会话白名单（留空 = 不限制）"
-                tooltip="只有名单里的会话能触发该场景；不在名单里的群连帮助文本都看不到它。填会话 ID（飞书 chat_id / 企微 chatid / 钉钉 conversationId），可在事件日志页复制"
+                label="会话白名单（留空 = 任何群都可用）"
+                tooltip="只有名单里的会话能触发该场景；不在名单里的群连帮助文本都看不到它。「可写」关掉则该群只能查询。会话 ID 可在事件日志页复制（飞书 chat_id / 企微 chatid / 钉钉 conversationId）"
               >
-                <Select
-                  mode="tags"
-                  onChange={(tags: string[]) =>
-                    setEditing({ ...editing, allowedChatIds: tags })
+                {editing.allowedChats.map((c, i) => (
+                  <Space key={`${c.chatId}-${i}`} style={{ marginBottom: 8 }}>
+                    <Input
+                      onChange={(e) => {
+                        const next = [...editing.allowedChats];
+                        next[i] = { ...c, chatId: e.target.value };
+                        setEditing({ ...editing, allowedChats: next });
+                      }}
+                      placeholder="会话 ID"
+                      style={{ width: 340 }}
+                      value={c.chatId}
+                    />
+                    <Checkbox
+                      checked={c.canWrite}
+                      onChange={(e) => {
+                        const next = [...editing.allowedChats];
+                        next[i] = { ...c, canWrite: e.target.checked };
+                        setEditing({ ...editing, allowedChats: next });
+                      }}
+                    >
+                      可写
+                    </Checkbox>
+                    <Button
+                      danger
+                      onClick={() =>
+                        setEditing({
+                          ...editing,
+                          allowedChats: editing.allowedChats.filter(
+                            (_, j) => j !== i,
+                          ),
+                        })
+                      }
+                      size="small"
+                      type="text"
+                    >
+                      删除
+                    </Button>
+                  </Space>
+                ))}
+                <Button
+                  onClick={() =>
+                    setEditing({
+                      ...editing,
+                      allowedChats: [
+                        ...editing.allowedChats,
+                        { chatId: '', canWrite: true },
+                      ],
+                    })
                   }
-                  open={false}
-                  placeholder="留空则任何群都可用；粘贴会话 ID 后回车"
-                  style={{ width: '100%' }}
-                  tokenSeparators={[',', '，', ' ']}
-                  value={editing.allowedChatIds}
-                />
+                  size="small"
+                >
+                  + 添加会话
+                </Button>
               </Form.Item>
               <Form.Item
-                label="可写用户白名单（留空 = 所有人可写）"
-                tooltip="只有名单里的用户能新增/修改/删除，其他人仍可查询。填用户 ID（飞书 open_id / 企微 userid / 钉钉 staffId），可在事件日志页复制"
+                label="写入模式"
+                tooltip="readonly 让整个场景只读（以前只能往白名单里塞一个不存在的用户 ID 来模拟）。会话级「可写」与这里是「与」关系：被配成只读的群，白名单里的用户也不能写"
               >
-                <Select
-                  mode="tags"
-                  onChange={(tags: string[]) =>
-                    setEditing({ ...editing, writerIds: tags })
+                <Radio.Group
+                  onChange={(e) =>
+                    setEditing({
+                      ...editing,
+                      writeMode: e.target.value as BotWriteMode,
+                    })
                   }
-                  open={false}
-                  placeholder="留空则所有人都能写；粘贴用户 ID 后回车"
-                  style={{ width: '100%' }}
-                  tokenSeparators={[',', '，', ' ']}
-                  value={editing.writerIds}
+                  options={BOT_WRITE_MODE_VALUES.map((m) => ({
+                    label: WRITE_MODE_LABELS[m],
+                    value: m,
+                  }))}
+                  optionType="button"
+                  value={editing.writeMode}
                 />
               </Form.Item>
+              {editing.writeMode === 'whitelist' && (
+                <Form.Item
+                  label="可写用户白名单"
+                  tooltip="只有名单里的用户能新增/修改/删除，其他人仍可查询。用户 ID 可在事件日志页复制（飞书 open_id / 企微 userid / 钉钉 staffId）"
+                >
+                  <Select
+                    mode="tags"
+                    onChange={(tags: string[]) =>
+                      setEditing({ ...editing, writerIds: tags })
+                    }
+                    open={false}
+                    placeholder="粘贴用户 ID 后回车。名单为空时谁都不能写"
+                    style={{ width: '100%' }}
+                    tokenSeparators={[',', '，', ' ']}
+                    value={editing.writerIds}
+                  />
+                </Form.Item>
+              )}
             </Form>
           )}
         </Modal>
