@@ -144,7 +144,16 @@ export const imBotAdminRouter = createTRPCRouter({
         name: z.string().min(1).max(128),
         description: z.string().optional(),
         keywords: z.string().optional(),
-        systemPrompt: z.string().optional(),
+        /**
+         * 必填。前端 Form.Item 上的 `required` 只是个星号 —— 那些表单是
+         * 受控 state + 直接 mutate，没有 form.validateFields()，什么都不校验。
+         * 服务端放行的话，场景能存下来并显示「启用」，而 bot-engine 的
+         * `if (!s.systemPrompt) continue` 会静默跳过它：机器人永远看不见
+         * 这个场景，管理员也拿不到任何提示。
+         */
+        systemPrompt: z
+          .string()
+          .min(1, 'System Prompt 不能为空，否则该场景不会被机器人加载'),
         /** @deprecated 见 schema 里的说明；字段清单已改为从资源绑定自动派生 */
         fieldSchema: z.any().optional(),
         replyTemplate: z.string().optional(),

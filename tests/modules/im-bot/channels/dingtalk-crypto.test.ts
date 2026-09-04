@@ -6,6 +6,7 @@ import {
   SIGN_TOLERANCE_MS,
   verifyRobotSignature,
 } from '@/modules/im-bot/channels/dingtalk-crypto';
+import { DEDUP_TTL_MS } from '@/modules/im-bot/constants';
 
 const SECRET = 'SEC0123456789abcdef';
 
@@ -77,9 +78,16 @@ describe('isTimestampFresh', () => {
     expect(isTimestampFresh(String(now), now)).toBe(true);
   });
 
-  it('容忍窗口内通过（钉钉官方是 1 小时）', () => {
-    expect(isTimestampFresh(String(now - 30 * 60 * 1000), now)).toBe(true);
-    expect(isTimestampFresh(String(now + 30 * 60 * 1000), now)).toBe(true);
+  it('容忍窗口内通过', () => {
+    expect(isTimestampFresh(String(now - 60 * 1000), now)).toBe(true);
+    expect(isTimestampFresh(String(now + 60 * 1000), now)).toBe(true);
+  });
+
+  it('窗口与幂等 TTL 对齐 —— 否则会开出"验签通过但幂等已过期"的重放区间', () => {
+    // 回归：钉钉官方允许 1 小时，而幂等键只留 DEDUP_TTL_MS。
+    // 取官方值时，抓到的合法回调在 5~60 分钟之间重放会被再次完整处理。
+    expect(SIGN_TOLERANCE_MS).toBe(DEDUP_TTL_MS);
+    expect(isTimestampFresh(String(now - 30 * 60 * 1000), now)).toBe(false);
   });
 
   it('恰好在边界上通过', () => {

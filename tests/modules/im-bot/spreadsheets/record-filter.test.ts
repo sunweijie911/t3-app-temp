@@ -190,3 +190,68 @@ describe('filterRecords — 日期按 CST 自然日比较', () => {
     ).toEqual(['n2']);
   });
 });
+
+describe('filterRecords — 数组筛选值 = 命中任一（回归）', () => {
+  const records: SpreadsheetRecord[] = [
+    { recordId: 'r1', fields: { 域: '门户', 名称: 'A' } },
+    { recordId: 'r2', fields: { 域: '督导', 名称: 'B' } },
+    { recordId: 'r3', fields: { 域: '其它', 名称: 'C' } },
+    { recordId: 'r4', fields: { 域: '', 名称: 'D' } },
+  ];
+
+  it('回归 —— 以前 typeof [] === "object" 让数组退化成「该字段为空」', () => {
+    // 修复前实测只命中 r4（域为空的那条），是个静默给错答案的结果
+    expect(
+      filterRecords(records, { 域: ['门户', '督导'] }).map((r) => r.recordId),
+    ).toEqual(['r1', 'r2']);
+  });
+
+  it('单元素数组等价于标量', () => {
+    expect(
+      filterRecords(records, { 域: ['门户'] }).map((r) => r.recordId),
+    ).toEqual(['r1']);
+  });
+
+  it('数组与其它条件仍按外层 conjunction 组合', () => {
+    expect(
+      filterRecords(records, { 域: ['门户', '督导'], 名称: 'B' }).map(
+        (r) => r.recordId,
+      ),
+    ).toEqual(['r2']);
+  });
+
+  it('多值单元格：标量与数组筛选都按成员命中（对齐飞书 multiSelect 的 contains）', () => {
+    const multi: SpreadsheetRecord[] = [
+      { recordId: 'm1', fields: { 标签: ['门户', '督导'] } },
+      { recordId: 'm2', fields: { 标签: ['其它'] } },
+    ];
+    expect(
+      filterRecords(multi, { 标签: '门户' }).map((r) => r.recordId),
+    ).toEqual(['m1']);
+    expect(
+      filterRecords(multi, { 标签: ['门户', '其它'] }).map((r) => r.recordId),
+    ).toEqual(['m1', 'm2']);
+  });
+
+  it('日期数组按自然日逐个比较', () => {
+    const dated: SpreadsheetRecord[] = [
+      {
+        recordId: 'd1',
+        fields: { 日期: new Date('2026-05-11T00:00:00+08:00').getTime() },
+      },
+      {
+        recordId: 'd2',
+        fields: { 日期: new Date('2026-05-12T00:00:00+08:00').getTime() },
+      },
+      {
+        recordId: 'd3',
+        fields: { 日期: new Date('2026-05-13T00:00:00+08:00').getTime() },
+      },
+    ];
+    expect(
+      filterRecords(dated, { 日期: ['2026-05-11', '2026-05-13'] }).map(
+        (r) => r.recordId,
+      ),
+    ).toEqual(['d1', 'd3']);
+  });
+});

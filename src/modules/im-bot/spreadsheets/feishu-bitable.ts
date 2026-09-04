@@ -427,6 +427,25 @@ export function buildFilterConditions(
     return [{ field_name: fieldName, operator: op, value: [String(rawV)] }];
   }
 
+  // 数组 = 「命中任一」，逐元素展开成多条 is（由调用方以 or 连接）。
+  //
+  // 不能落到下面的 `String(raw)`：JS 会把 ['门户','督导'] 拼成
+  // "门户,督导" 当作一个字面量下发，条件恒不命中 —— 用户看到"未找到匹配
+  // 记录"而记录明明存在。同一份 LLM 输出在钉钉/企微侧则被当成"字段为空"，
+  // 两边各错各的，所以这里和 record-filter.ts 必须同时修。
+  if (Array.isArray(raw)) {
+    return raw
+      .filter((v) => v != null && v !== '')
+      .map((v) => ({
+        field_name: fieldName,
+        operator: 'is',
+        value:
+          asDate && typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)
+            ? ['ExactDate', String(dayStartMs(v))]
+            : [String(v)],
+      }));
+  }
+
   // 简单值：YYYY-MM-DD → 用单条 `is` 匹配当天。
   //
   // 实测确认 ExactDate 是日粒度比较，所以 `is 当天零点` 就等价于"当天"，
@@ -470,6 +489,35 @@ export function requiresAndConjunction(
     conditions.length > 1 &&
     conditions.every((c) => RANGE_OPERATORS.has(c.operator))
   );
+}
+
+/**
+ * 判断某个 filter key 展开出的条件组是否**必须**以 OR 连接。
+ *
+ * 与 requiresAndConjunction 对称。同一字段被展开成多个非区间条件，只可能
+ * 来自「多值命中任一」（数组筛选值、multiSelect 数组），语义天然是「或」。
+ * 若外层 conjunction 是 'and'，就变成「业务域 is 门户 且 业务域 is 督导」
+ * —— 单值字段上恒为空集，多选字段上也收窄成了「同时包含两者」。
+ *
+ * 以前没有这个判定：数组展开出的多个条件被默默塞进 and，
+ * 于是「门户或督导」查出 0 条，而用户完全看不出是筛选被曲解了。
+ */
+export function requiresOrConjunction(
+  conditions: Array<{ operator: string }>,
+): boolean {
+  return (
+    conditions.length > 1 &&
+    conditions.every((c) => !RANGE_OPERATORS.has(c.operator))
+  );
+}
+
+/** 某个 key 展开出的条件组对连接词的硬性要求；undefined = 不挑 */
+function requiredConjunctionOf(
+  conditions: Array<{ operator: string }>,
+): 'and' | 'or' | undefined {
+  if (requiresAndConjunction(conditions)) return 'and';
+  if (requiresOrConjunction(conditions)) return 'or';
+  return undefined;
 }
 
 /**
@@ -596,11 +644,16 @@ export class FeishuBitableAdapter implements SpreadsheetAdapter {
     filters: Record<string, unknown>,
   ): Promise<SpreadsheetQueryResult> {
     // _conjunction 协议：默认 and；'or' 时多条件以 OR 连接
-    const conjunction = filters._conjunction === 'or' ? 'or' : 'and';
-    const conditions: Array<{
-      field_name: string;
-      operator: string;
-      value: string[];
+    const requested = filters._conjunction === 'or' ? 'or' : 'and';
+    /** 每个 filter key 展开出的条件组，连同它对连接词的硬性要求 */
+    const groups: Array<{
+      key: string;
+      needs: 'and' | 'or' | undefined;
+      conditions: Array<{
+        field_name: string;
+        operator: string;
+        value: string[];
+      }>;
     }> = [];
     for (const [key, value] of Object.entries(filters)) {
       // 跳过保留键（以 _ 开头）
@@ -626,17 +679,42 @@ export class FeishuBitableAdapter implements SpreadsheetAdapter {
           displayTypeOf(mapping),
         );
       }
-
-      // 飞书 bitable filter 是单层扁平结构，表达不出 A AND (B OR C)。
-      // 区间条件必须 AND，与外层 'or' 不兼容 —— 静默返回全表比报错危险得多。
-      if (conjunction === 'or' && requiresAndConjunction(built)) {
-        throw new Error(
-          `筛选条件「${key}」是一个区间（需要「且」），无法与「或」条件混用。请拆成两次查询，或改用单一条件`,
-        );
+      if (built.length > 0) {
+        groups.push({
+          key,
+          needs: requiredConjunctionOf(built),
+          conditions: built,
+        });
       }
-      conditions.push(...built);
     }
 
+    // 飞书 bitable filter 是单层扁平结构，表达不出 A AND (B OR C)：
+    // 整个 filter 只有一个 conjunction。所以先看各组的硬性要求能不能满足。
+    //
+    // - 区间（between、>=/<= 降级）展开的 isGreater + isLess 必须 AND
+    // - 多值（数组、multiSelect 数组）展开的多个 is/contains 必须 OR
+    //
+    // 只有一个 key 贡献条件时，直接采用它需要的连接词 —— 「业务域是门户或
+    // 督导」这类单字段多值查询本该成立，不该因为默认 and 就查出 0 条。
+    // 多个 key 各有冲突要求时无解，报一句能照着改的错：静默给一个被曲解的
+    // 结果集（区间会变成全表、多值会变成空集）比报错危险得多。
+    let conjunction = requested;
+    const conflicting = groups.find((g) => g.needs && g.needs !== requested);
+    if (conflicting?.needs) {
+      if (groups.length === 1) {
+        conjunction = conflicting.needs;
+      } else {
+        const detail =
+          conflicting.needs === 'and'
+            ? '是一个区间（需要「且」），无法与「或」条件混用'
+            : '给了多个候选值（需要「或」），无法与其它「且」条件混用';
+        throw new Error(
+          `筛选条件「${conflicting.key}」${detail}。请拆成两次查询，或改用单一条件`,
+        );
+      }
+    }
+
+    const conditions = groups.flatMap((g) => g.conditions);
     const baseBody: Record<string, unknown> = {};
     if (conditions.length > 0) {
       baseBody.filter = { conjunction, conditions };

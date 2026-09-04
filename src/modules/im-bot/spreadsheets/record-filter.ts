@@ -42,8 +42,9 @@ function actualMs(actual: unknown): number | null {
  * 日期比较。
  *
  * 与飞书 adapter 的 ExactDate 边界一一对应：筛选值是「整天」，
- * 记录侧是真实时刻（写入时统一落在当天 12:00），所以
- * `> 当天` 必须从次日零点算起，`<= 当天` 要取到次日零点前。
+ * 记录侧是真实时刻（机器人写入统一落在当天 00:00，见 field-types.ts；
+ * 平台自己写的也是零点），所以 `> 当天` 必须从次日零点算起，
+ * `<= 当天` 要取到次日零点前。这套边界对零点记录精确成立。
  *
  * 这层以前没有：filterRecords 直接 `String(1778...000) === '2026-05-11'`，
  * 于是钉钉/企微上**任何按日期的查询都恒返回 0 条** —— 静默给错答案。
@@ -95,6 +96,23 @@ function matchBetween(actual: unknown, value: unknown): boolean {
   return ms >= lower && ms < upper;
 }
 
+/**
+ * 单值等值判定：先按日期语义比，再退回字符串比。
+ *
+ * 记录侧是多值单元格（多选 / 关联）时按**成员命中**判定，而不是把整格
+ * 拼成 `'门户 督导'` 去做等值比较 —— 后者让多选格永远匹配不上任何单值，
+ * 而飞书侧对多选字段走的是 contains。两边必须给出同样的答案。
+ */
+function matchesValue(actual: unknown, expected: unknown): boolean {
+  const byDate = compareAsDate(actual, expected, '=');
+  if (byDate !== null) return byDate;
+  const exp = String(expected ?? '');
+  if (Array.isArray(actual)) {
+    return actual.some((member) => String(member ?? '') === exp);
+  }
+  return String(actual ?? '') === exp;
+}
+
 export function filterRecords(
   records: SpreadsheetRecord[],
   filters: Record<string, unknown>,
@@ -109,6 +127,14 @@ export function filterRecords(
     const actualStr = Array.isArray(actual)
       ? actual.map(String).join(' ')
       : String(actual ?? '');
+    // 数组筛选值 = 「命中任一」，且必须判在 object 分支**之前**：
+    // `typeof [] === 'object'` 为真，走进 { op, value } 分支后两者都解构成
+    // undefined，于是 default 分支拿 v='' 做等值比较 —— 任何数组筛选都
+    // 静默退化成「该字段为空」。实测 {业务域:['门户','督导']} 只命中
+    // 业务域为空的那条记录，而飞书侧对同一份 LLM 输出给的是另一个错答案。
+    if (Array.isArray(expected)) {
+      return expected.some((one) => matchesValue(actual, one));
+    }
     if (expected !== null && typeof expected === 'object') {
       const { op, value } = expected as { op?: string; value?: unknown };
       const opKey = (op ?? '').toLowerCase();
@@ -135,13 +161,10 @@ export function filterRecords(
             compareNumeric(actual, value, opKey)
           );
         default:
-          return compareAsDate(actual, value, '=') ?? actualStr === v;
+          return matchesValue(actual, value);
       }
     }
-    return (
-      compareAsDate(actual, expected, '=') ??
-      actualStr === String(expected ?? '')
-    );
+    return matchesValue(actual, expected);
   };
 
   return records.filter((r) =>

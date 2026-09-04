@@ -9,6 +9,7 @@ import {
   coerceFieldValue,
   mapFieldsForWrite,
   requiresAndConjunction,
+  requiresOrConjunction,
   reverseMapFields,
 } from '@/modules/im-bot/spreadsheets/feishu-bitable';
 
@@ -392,5 +393,55 @@ describe('displayType 决定值是否按日期解释（P1：文本列的 2026-05
   it('日期列的 ExactDate 语义不受影响', () => {
     const conds = buildFilterConditions('上线日期', '2026-05-11', 'date');
     expect(conds[0]?.value[0]).toBe('ExactDate');
+  });
+});
+
+describe('buildFilterConditions — 数组筛选值 = 命中任一（回归）', () => {
+  it('回归 —— 以前 String(数组) 拼成 "门户,督导" 一个字面量，恒不命中', () => {
+    expect(buildFilterConditions('域', ['门户', '督导'])).toEqual([
+      { field_name: '域', operator: 'is', value: ['门户'] },
+      { field_name: '域', operator: 'is', value: ['督导'] },
+    ]);
+  });
+
+  it('过滤空元素', () => {
+    expect(buildFilterConditions('域', ['门户', '', null])).toEqual([
+      { field_name: '域', operator: 'is', value: ['门户'] },
+    ]);
+  });
+
+  it('日期列的数组元素各自转成 ExactDate', () => {
+    const conds = buildFilterConditions('日期', ['2026-05-11', '2026-05-13']);
+    expect(conds).toHaveLength(2);
+    expect(conds[0]?.value[0]).toBe('ExactDate');
+    expect(conds[1]?.value[0]).toBe('ExactDate');
+  });
+
+  it('声明为 text 的列不把数组元素当日期', () => {
+    const conds = buildFilterConditions('备注', ['2026-05-11'], 'text');
+    expect(conds).toEqual([
+      { field_name: '备注', operator: 'is', value: ['2026-05-11'] },
+    ]);
+  });
+
+  it('多值展开必须以 OR 连接，不是 AND', () => {
+    const conds = buildFilterConditions('域', ['门户', '督导']);
+    expect(requiresOrConjunction(conds)).toBe(true);
+    expect(requiresAndConjunction(conds)).toBe(false);
+  });
+
+  it('区间展开仍然要 AND，两个判定互斥', () => {
+    const conds = buildFilterConditions('日期', {
+      op: 'between',
+      value: ['2026-05-01', '2026-05-31'],
+    });
+    expect(requiresAndConjunction(conds)).toBe(true);
+    expect(requiresOrConjunction(conds)).toBe(false);
+  });
+
+  it('单条件两个判定都不成立', () => {
+    const conds = buildFilterConditions('名称', '督导');
+    expect(requiresAndConjunction(conds)).toBe(false);
+    expect(requiresOrConjunction(conds)).toBe(false);
   });
 });

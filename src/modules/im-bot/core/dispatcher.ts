@@ -69,6 +69,10 @@ function isEffectiveFilter(key: string, value: unknown): boolean {
   // `_` 开头是协议保留键（如 _conjunction），下游 queryRecords 会跳过，
   // 不能算作用户指定的筛选条件
   if (key.startsWith('_')) return false;
+  // 空数组同理无效：展开成 0 个条件后在飞书侧等于「没有这个筛选项」，
+  // 在内存过滤侧等于「命中任一（无候选）」= 空集。留着它会让
+  // UPDATE/DELETE 的判空守卫误以为有条件，却拿不到任何真实约束。
+  if (Array.isArray(value)) return value.length > 0;
   // 值为空/通配也算无效：LLM 经常拿空串占位，下发后会生成 `is ['']` 条件
   return value != null && value !== '' && value !== '*';
 }
@@ -528,11 +532,30 @@ export class Dispatcher {
 
       // 8. 回复（fieldMapping 用于渲染时取 label / displayType；缺失时退化为 logicalKey）
       const binding = this.config.getBinding(scene.id, parsed.resource);
+      // 投影字段同样要过 fieldMapping 白名单。写入侧丢弃并点名、筛选侧直接
+      // 拒绝，唯独 projectFields 以前直接拿去渲染 —— 幻觉字段会渲染成
+      // 「A → （该字段为空）」，用户会以为表里有这列且没值。
+      // 这里按写入侧处理：丢掉 + 点名（投影错了只是看不到数据，不像筛选
+      // 错了会放大影响面，不必整条拒绝）。全部无效时退回整行渲染。
+      const badProjection = this.pruneProjectFields(
+        parsed,
+        binding?.fieldMapping,
+      );
       const reply = scene.formatReply(parsed, result, binding?.fieldMapping);
       // 被丢弃的字段必须点名：否则用户以为自己说的内容都记下来了
-      const dropped = result.droppedFields?.length
-        ? `\n\n⚠️ 已忽略未配置的字段：${result.droppedFields.join('、')}`
-        : '';
+      const notices = [
+        result.droppedFields?.length
+          ? `⚠️ 已忽略未配置的字段：${result.droppedFields.join('、')}`
+          : '',
+        // 措辞要跟实际渲染一致：还有有效投影字段时是"忽略无效的那几个"，
+        // 全都无效时才退回整行展示
+        badProjection.length > 0
+          ? `⚠️ 「${badProjection.join('、')}」不是该资源里的字段，${
+              parsed.projectFields ? '已忽略' : '已按全部字段展示'
+            }`
+          : '',
+      ].filter(Boolean);
+      const dropped = notices.length > 0 ? `\n\n${notices.join('\n')}` : '';
       await channelAdapter.reply(msg, reply + dropped);
       await logEvent({
         sceneId: scene.id,
@@ -584,6 +607,30 @@ export class Dispatcher {
     }
     const records = await adapter.queryRecords(config, filters);
     return { records, truncated: records.length >= adapter.queryHardLimit };
+  }
+
+  /**
+   * 按 fieldMapping 白名单裁剪 QUERY 的投影字段，返回被丢掉的那些。
+   *
+   * 直接改 `parsed.projectFields` —— 它是本次请求的解析结果，dispatcher
+   * 自己拥有，紧接着就交给 formatReply 渲染；另存一份反而要在
+   * ExecuteResult 与 formatReply 的签名上都开一个只为它服务的口子。
+   *
+   * 一个都不剩时置为 undefined，退回整行渲染：投影全错时给用户看全部字段，
+   * 比回一句"（该字段为空）"有用。
+   */
+  private pruneProjectFields(
+    parsed: ParsedIntent,
+    fieldMapping?: Record<string, FieldMappingValue>,
+  ): string[] {
+    const requested = parsed.projectFields;
+    // 没配 fieldMapping 的绑定整体透传（与 splitByMapping 一致），不做裁剪
+    if (!requested?.length || !fieldMapping) return [];
+    if (Object.keys(fieldMapping).length === 0) return [];
+    const known = requested.filter((f) => f in fieldMapping);
+    const unknown = requested.filter((f) => !(f in fieldMapping));
+    parsed.projectFields = known.length > 0 ? known : undefined;
+    return unknown;
   }
 
   /** 场景绑定的资源描述，喂给 prompt。listBindings 缺省时退化为默认资源 */
@@ -889,6 +936,55 @@ export class Dispatcher {
     }
   }
 
+  /**
+   * 执行「用户已确认」的单条写操作，并把结果回到群里。
+   *
+   * 必须由这里收住 adapter 异常。三条确认路径（confirm_update /
+   * confirm_upsert / select_record）以前都是裸 await：
+   * - pending 在写之前就删了，抛错后用户的确认已被消耗
+   * - 异常逃出 handlePendingAction，被 process 的兜底 catch 压成一句
+   *   "服务暂时繁忙，请稍后再试" —— 用户以为是临时抖动，其实更新根本没生效
+   * - 审计日志因此走的是外层 catch 那条，**丢掉了 sceneId / intent /
+   *   pendingType**，偏偏破坏性写操作才是最需要留痕的地方
+   *
+   * confirm_delete 走 runWithConcurrency 时早就把失败汇总成了精确文案，
+   * 这里补齐另外三条，让四条路径的失败表现一致。
+   */
+  private async runConfirmedWrite(
+    msg: UnifiedMessage,
+    channelAdapter: ChannelAdapter,
+    intent: 'CREATE' | 'UPDATE',
+    resultData: Record<string, unknown>,
+    write: () => Promise<SpreadsheetRecord>,
+    render: (record: SpreadsheetRecord) => string,
+  ): Promise<PendingOutcome> {
+    let record: SpreadsheetRecord;
+    try {
+      record = await write();
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      console.error('[Dispatcher] 确认后的写操作失败:', err);
+      await channelAdapter.reply(
+        msg,
+        `⚠️ ${intent === 'CREATE' ? '新建' : '更新'}失败：${reason.slice(0, 200)}\n刚才的确认已失效，请重新发送指令`,
+      );
+      return {
+        handled: true,
+        intent,
+        errorMsg: reason.slice(0, 200),
+        resultData: { ...resultData, failed: true },
+      };
+    }
+    await channelAdapter.reply(msg, render(record));
+    // 写成功后补上落库的 recordId；调用方显式给了就以它为准
+    // （UPDATE 侧记的是命中的目标记录，与返回值同一条）
+    return {
+      handled: true,
+      intent,
+      resultData: { recordId: record.recordId, ...resultData },
+    };
+  }
+
   private async handlePendingAction(
     msg: UnifiedMessage,
     action: PendingAction,
@@ -993,30 +1089,32 @@ export class Dispatcher {
         await this.pending.delete(pendingKeyOf(msg));
         const target = action.candidates[0];
         if (!target) return { handled: false };
-        const updated = await adapter.updateRecord(
-          tableConfig,
-          target.recordId,
-          action.updateFields ?? {},
-        );
-        const reply = scene.formatReply(
+        return this.runConfirmedWrite(
+          msg,
+          channelAdapter,
+          'UPDATE',
           {
-            intent: 'UPDATE',
-            fields: action.updateFields ?? {},
-            confidence: 1,
-            summary: '更新记录',
-          },
-          { success: true, record: updated },
-          tableConfig.fieldMapping,
-        );
-        await channelAdapter.reply(msg, reply);
-        return {
-          handled: true,
-          intent: 'UPDATE',
-          resultData: {
             recordId: target.recordId,
             fieldKeys: Object.keys(action.updateFields ?? {}),
           },
-        };
+          () =>
+            adapter.updateRecord(
+              tableConfig,
+              target.recordId,
+              action.updateFields ?? {},
+            ),
+          (updated) =>
+            scene.formatReply(
+              {
+                intent: 'UPDATE',
+                fields: action.updateFields ?? {},
+                confidence: 1,
+                summary: '更新记录',
+              },
+              { success: true, record: updated },
+              tableConfig.fieldMapping,
+            ),
+        );
       }
       return { handled: false };
     }
@@ -1032,58 +1130,57 @@ export class Dispatcher {
         await this.pending.delete(pendingKeyOf(msg));
         const target = action.candidates[0];
         if (!target) return { handled: false };
-        const updated = await adapter.updateRecord(
-          tableConfig,
-          target.recordId,
-          action.updateFields ?? {},
-        );
-        const reply = scene.formatReply(
+        return this.runConfirmedWrite(
+          msg,
+          channelAdapter,
+          'UPDATE',
           {
-            intent: 'UPDATE',
-            fields: action.updateFields ?? {},
-            confidence: 1,
-            summary: '已合并到现有记录',
-          },
-          { success: true, record: updated },
-          tableConfig.fieldMapping,
-        );
-        await channelAdapter.reply(msg, reply);
-        return {
-          handled: true,
-          intent: 'UPDATE',
-          resultData: {
             merged: true,
             recordId: target.recordId,
             fieldKeys: Object.keys(action.updateFields ?? {}),
           },
-        };
+          () =>
+            adapter.updateRecord(
+              tableConfig,
+              target.recordId,
+              action.updateFields ?? {},
+            ),
+          (updated) =>
+            scene.formatReply(
+              {
+                intent: 'UPDATE',
+                fields: action.updateFields ?? {},
+                confidence: 1,
+                summary: '已合并到现有记录',
+              },
+              { success: true, record: updated },
+              tableConfig.fieldMapping,
+            ),
+        );
       }
       if (content.includes('强制新建') || content.includes('新建一条')) {
         await this.pending.delete(pendingKeyOf(msg));
-        const record = await adapter.createRecord(
-          tableConfig,
-          action.updateFields ?? {},
-        );
-        const reply = scene.formatReply(
+        return this.runConfirmedWrite(
+          msg,
+          channelAdapter,
+          'CREATE',
           {
-            intent: 'CREATE',
-            fields: action.updateFields ?? {},
-            confidence: 1,
-            summary: '强制新建',
-          },
-          { success: true, record },
-          tableConfig.fieldMapping,
-        );
-        await channelAdapter.reply(msg, reply);
-        return {
-          handled: true,
-          intent: 'CREATE',
-          resultData: {
             forced: true,
-            recordId: record.recordId,
             fieldKeys: Object.keys(action.updateFields ?? {}),
           },
-        };
+          () => adapter.createRecord(tableConfig, action.updateFields ?? {}),
+          (record) =>
+            scene.formatReply(
+              {
+                intent: 'CREATE',
+                fields: action.updateFields ?? {},
+                confidence: 1,
+                summary: '强制新建',
+              },
+              { success: true, record },
+              tableConfig.fieldMapping,
+            ),
+        );
       }
       return { handled: false };
     }
@@ -1100,32 +1197,34 @@ export class Dispatcher {
       await this.pending.delete(pendingKeyOf(msg));
       // biome-ignore lint/style/noNonNullAssertion: num 已校验在 [1, candidates.length] 范围内
       const target = action.candidates[num - 1]!;
-      const updated = await adapter.updateRecord(
-        tableConfig,
-        target.recordId,
-        action.updateFields ?? {},
-      );
-      const reply = scene.formatReply(
+      return this.runConfirmedWrite(
+        msg,
+        channelAdapter,
+        'UPDATE',
         {
-          intent: 'UPDATE',
-          fields: action.updateFields ?? {},
-          confidence: 1,
-          summary: '更新记录',
-        },
-        { success: true, record: updated },
-        tableConfig.fieldMapping,
-      );
-      await channelAdapter.reply(msg, reply);
-      return {
-        handled: true,
-        intent: 'UPDATE',
-        resultData: {
           picked: num,
           candidateCount: action.candidates.length,
           recordId: target.recordId,
           fieldKeys: Object.keys(action.updateFields ?? {}),
         },
-      };
+        () =>
+          adapter.updateRecord(
+            tableConfig,
+            target.recordId,
+            action.updateFields ?? {},
+          ),
+        (updated) =>
+          scene.formatReply(
+            {
+              intent: 'UPDATE',
+              fields: action.updateFields ?? {},
+              confidence: 1,
+              summary: '更新记录',
+            },
+            { success: true, record: updated },
+            tableConfig.fieldMapping,
+          ),
+      );
     }
 
     return { handled: false };

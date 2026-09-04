@@ -679,3 +679,44 @@ describe('查询投影的主标识不依赖 jsonb 键序（P0）', () => {
     expect(out).toContain('韩束精华 → 支出金额：108');
   });
 });
+
+describe('parseResult — fields / filters 必须是对象（回归）', () => {
+  const scene = new DatabaseDrivenScene({
+    sceneId: 's',
+    name: '台账',
+    description: '',
+    keywords: [],
+    systemPrompt: 'p',
+  });
+
+  it('fields 是字符串时丢弃，不再拆成逐字符的下标键', () => {
+    // 回归：以前 Object.entries("督导2.0") 产出 {0:'督',1:'导',…}，
+    // 绑定未配 fieldMapping 时这些下标键会当成列名写进平台
+    const p = scene.parseResult(
+      '{"intent":"CREATE","fields":"督导2.0","confidence":0.9,"summary":"s"}',
+    );
+    expect(p?.fields).toEqual({});
+  });
+
+  it('fields 是数组时同样丢弃', () => {
+    const p = scene.parseResult(
+      '{"intent":"CREATE","fields":["a","b"],"confidence":0.9,"summary":"s"}',
+    );
+    expect(p?.fields).toEqual({});
+  });
+
+  it('filters 是字符串时丢弃，让 DELETE 的判空守卫重新生效', () => {
+    const p = scene.parseResult(
+      '{"intent":"DELETE","filters":"全部","confidence":0.9,"summary":"s"}',
+    );
+    expect(p?.filters).toBeUndefined();
+  });
+
+  it('正常对象不受影响', () => {
+    const p = scene.parseResult(
+      '{"intent":"UPDATE","fields":{"状态":"已完成"},"filters":{"名称":"A"},"confidence":0.9,"summary":"s"}',
+    );
+    expect(p?.fields).toEqual({ 状态: '已完成' });
+    expect(p?.filters).toEqual({ 名称: 'A' });
+  });
+});

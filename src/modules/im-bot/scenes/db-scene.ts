@@ -47,6 +47,27 @@ function applyFieldVars(
     .join('\n');
 }
 
+/**
+ * 只接受普通对象，其余（字符串 / 数组 / 数字）一律丢弃。
+ *
+ * fields 与 filters 下游全靠 `Object.entries()` 遍历，而 LLM 偶尔会把它们
+ * 写成标量或数组。字符串会被拆成**逐字符的下标键**：
+ * `fields: "督导2.0"` → `{0:'督',1:'导',2:'2',3:'.',4:'0'}`。
+ * 后果实测过两种，都不是报错而是更坏的形式：
+ * - 绑定没配 fieldMapping（代码显式支持的"整体透传"）时，这些下标键会被
+ *   当成真实列名写进平台，用户收到的却是一句"✅ 已录入"
+ * - filters 侧的下标键能骗过 UPDATE / DELETE 的判空守卫
+ *   （`hasEffectiveFilters` 看到键 '0'、值 '全' 就认为用户指定了条件）
+ *
+ * 丢掉之后 fields 为空 → "没有解析出要写入的字段"，filters 为空 →
+ * "删除操作需要指定筛选条件"，两条都是能照着改的提示。
+ */
+function asFieldRecord(v: unknown): Record<string, unknown> | undefined {
+  if (v === null || v === undefined) return undefined;
+  if (typeof v !== 'object' || Array.isArray(v)) return undefined;
+  return v as Record<string, unknown>;
+}
+
 export interface DbSceneConfig {
   sceneId: string;
   name: string;
@@ -139,11 +160,25 @@ export class DatabaseDrivenScene implements BotScene {
         : undefined;
       const resource =
         typeof obj.resource === 'string' ? obj.resource : undefined;
+      const fields = asFieldRecord(obj.fields);
+      const filters = asFieldRecord(obj.filters);
+      if (obj.fields !== undefined && !fields) {
+        console.warn(
+          '[DbScene] fields 不是对象，已丢弃:',
+          JSON.stringify(obj.fields).slice(0, 200),
+        );
+      }
+      if (obj.filters !== undefined && !filters) {
+        console.warn(
+          '[DbScene] filters 不是对象，已丢弃:',
+          JSON.stringify(obj.filters).slice(0, 200),
+        );
+      }
       return {
         intent: intent as ParsedIntent['intent'],
         resource: resource || undefined,
-        fields: (obj.fields as Record<string, unknown>) ?? {},
-        filters: (obj.filters as Record<string, unknown>) ?? undefined,
+        fields: fields ?? {},
+        filters,
         projectFields:
           projectFields && projectFields.length > 0 ? projectFields : undefined,
         confidence: Number(obj.confidence) || 0,
@@ -258,9 +293,12 @@ export class DatabaseDrivenScene implements BotScene {
           return labelStr ? `${labelStr} → ${cols || '（该字段为空）'}` : cols;
         });
 
-        // 单条单字段：最干净的一句话回复
+        // 单条单字段：最干净的一句话回复。
+        // limitHint 必须带上 —— 这条路径以前直接 return，把截断警告丢了，
+        // 而"单值答案"恰恰是最容易被当成权威结论的形态（"本月总额是多少"）：
+        // 拉取被截断时给出的是一个静默不完整的数字。
         if (result.records.length === 1 && project.length === 1) {
-          return clampReply(`📊 ${lines[0]}`);
+          return clampReply(`📊 ${lines[0]}${limitHint}`);
         }
         // 多条：列表
         const truncated =

@@ -26,6 +26,7 @@ import {
   Switch,
   Table,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -220,15 +221,30 @@ export default function ImBotScenesPage() {
     {
       title: '状态',
       dataIndex: 'isActive',
-      width: 80,
+      width: 120,
       render: (val: boolean, record: SceneRow) => (
-        <Switch
-          checked={val}
-          onChange={(checked) =>
-            toggleMutation.mutate({ id: record.id, isActive: checked })
-          }
-          size="small"
-        />
+        <Space size={4}>
+          <Switch
+            checked={val}
+            onChange={(checked) =>
+              toggleMutation.mutate({ id: record.id, isActive: checked })
+            }
+            size="small"
+          />
+          {/*
+            没有 systemPrompt 的场景会被 bot-engine 静默跳过（加载时
+            `if (!s.systemPrompt) continue`）。新数据已由服务端校验挡住，
+            但历史行仍可能是这个状态 —— 开关显示"启用"而机器人根本看不见它，
+            必须在列表里点出来，否则管理员只会以为是机器人坏了。
+          */}
+          {val && !record.systemPrompt && (
+            <Tooltip title="该场景没有 System Prompt，机器人不会加载它。请编辑并补上后才会生效。">
+              <Tag color="warning" style={{ marginInlineEnd: 0 }}>
+                未生效
+              </Tag>
+            </Tooltip>
+          )}
+        </Space>
       ),
     },
     {
@@ -305,6 +321,13 @@ export default function ImBotScenesPage() {
           onCancel={() => setEditing(null)}
           onOk={() => {
             if (!editing) return;
+            // 这些表单没有接 form.validateFields()，Form.Item 上的 required
+            // 只是个星号。服务端已经拦住空 prompt，这里先给一句人话，
+            // 免得管理员看到的是一串 zod issue JSON。
+            if (!editing.systemPrompt.trim()) {
+              toast.error('请填写 System Prompt —— 缺失时机器人不会加载该场景');
+              return;
+            }
             upsertMutation.mutate({
               id: editing.id,
               sceneId: editing.sceneId,

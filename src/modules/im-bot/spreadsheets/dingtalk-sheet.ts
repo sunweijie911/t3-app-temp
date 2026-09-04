@@ -64,7 +64,7 @@ function platformKeyOf(mapping: FieldMappingValue): string {
 /**
  * 逻辑值 → 钉钉单元格值。
  * 钉钉多维表接受裸值，只有日期需要转毫秒时间戳
- * （CST 当天 12:00，与飞书/企微侧对齐避免跨日）。
+ * （CST 当天 00:00，与飞书/企微侧共用 field-types.ts 的换算）。
  * 声明为 number/text 的列不做转换 —— 见 field-types.ts。
  */
 export function toDingtalkValue(

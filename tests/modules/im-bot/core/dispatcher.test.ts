@@ -2169,3 +2169,249 @@ describe('Dispatcher — 二次确认执行后要留痕（观测）', () => {
     });
   });
 });
+
+describe('Dispatcher — 确认后写操作失败时的表现（回归）', () => {
+  /** 建一个带审计与共享 pending 的 dispatcher */
+  function makeAuditedDispatcher(events: BotEvent[]) {
+    const d = new Dispatcher({
+      getBinding: () => baseBinding,
+      pendingStore: new MemoryPendingActionStore(),
+      onEvent: (e) => {
+        events.push(e);
+      },
+    });
+    d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    return d;
+  }
+
+  it('confirm_update：adapter 抛错时给出具体原因，而不是"服务暂时繁忙"', async () => {
+    const events: BotEvent[] = [];
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const d = makeAuditedDispatcher(events);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"UPDATE","fields":{"Node版本":"20"},"filters":{"项目名称":"A"},"confidence":0.95,"summary":"改"}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { recordId: 'r1', fields: { 项目名称: 'A' } },
+    ]);
+    await d.process(makeMsg({ content: '把 A 的 Node 版本改成 20' }), channel);
+    (adapter.updateRecord as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('飞书 Bitable API 错误: FieldNameNotFound'),
+    );
+
+    await d.process(makeMsg({ content: '确认更新' }), channel);
+
+    // 回归：以前异常逃出 handlePendingAction，被兜底 catch 压成一句
+    // "服务暂时繁忙，请稍后再试"，用户以为是临时抖动
+    expect(channel.lastReply).toContain('更新失败');
+    expect(channel.lastReply).toContain('FieldNameNotFound');
+    expect(channel.lastReply).not.toContain('服务暂时繁忙');
+
+    const last = events.at(-1);
+    // 回归：以前走外层 catch，sceneId / intent / pendingType 全丢
+    expect(last?.result).toBe('error');
+    expect(last?.sceneId).toBe(baseSceneConfig.sceneId);
+    expect(last?.intent).toBe('UPDATE');
+    expect(last?.resultData).toMatchObject({
+      pendingType: 'confirm_update',
+      recordId: 'r1',
+      failed: true,
+    });
+  });
+
+  it('select_record：选中的那条写失败同样留痕', async () => {
+    const events: BotEvent[] = [];
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const d = makeAuditedDispatcher(events);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"UPDATE","fields":{"Node版本":"20"},"filters":{"项目名称":"A"},"confidence":0.95,"summary":"改"}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { recordId: 'r1', fields: { 项目名称: 'A' } },
+      { recordId: 'r2', fields: { 项目名称: 'A' } },
+    ]);
+    await d.process(makeMsg({ content: '把 A 改一下' }), channel);
+    (adapter.updateRecord as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('权限不足'),
+    );
+
+    await d.process(makeMsg({ content: '2' }), channel);
+
+    expect(channel.lastReply).toContain('更新失败');
+    expect(channel.lastReply).toContain('权限不足');
+    const last = events.at(-1);
+    expect(last?.result).toBe('error');
+    expect(last?.intent).toBe('UPDATE');
+    expect(last?.resultData).toMatchObject({
+      pendingType: 'select_record',
+      picked: 2,
+      recordId: 'r2',
+      failed: true,
+    });
+  });
+
+  it('confirm_upsert 强制新建：创建失败留痕，且成功时仍记新 recordId', async () => {
+    const events: BotEvent[] = [];
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const binding: ResourceBinding = { ...baseBinding, uniqueKey: '项目名称' };
+    const d = new Dispatcher({
+      getBinding: () => binding,
+      pendingStore: new MemoryPendingActionStore(),
+      onEvent: (e) => {
+        events.push(e);
+      },
+    });
+    d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"CREATE","fields":{"项目名称":"A"},"confidence":0.95,"summary":"新增"}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { recordId: 'r1', fields: { 项目名称: 'A' } },
+    ]);
+    await d.process(makeMsg({ content: '新增项目 A' }), channel);
+    (adapter.createRecord as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('配额不足'),
+    );
+
+    await d.process(makeMsg({ content: '强制新建' }), channel);
+
+    expect(channel.lastReply).toContain('新建失败');
+    expect(channel.lastReply).toContain('配额不足');
+    const last = events.at(-1);
+    expect(last?.result).toBe('error');
+    expect(last?.intent).toBe('CREATE');
+    expect(last?.resultData).toMatchObject({
+      pendingType: 'confirm_upsert',
+      forced: true,
+      failed: true,
+    });
+  });
+
+  it('确认成功时行为不变：CREATE 记新建的 recordId', async () => {
+    const events: BotEvent[] = [];
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const binding: ResourceBinding = { ...baseBinding, uniqueKey: '项目名称' };
+    const d = new Dispatcher({
+      getBinding: () => binding,
+      pendingStore: new MemoryPendingActionStore(),
+      onEvent: (e) => {
+        events.push(e);
+      },
+    });
+    d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"CREATE","fields":{"项目名称":"A"},"confidence":0.95,"summary":"新增"}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { recordId: 'r1', fields: { 项目名称: 'A' } },
+    ]);
+    await d.process(makeMsg({ content: '新增项目 A' }), channel);
+    (adapter.createRecord as ReturnType<typeof vi.fn>).mockResolvedValue({
+      recordId: 'rNew',
+      fields: { 项目名称: 'A' },
+    });
+
+    await d.process(makeMsg({ content: '强制新建' }), channel);
+
+    const last = events.at(-1);
+    expect(last?.result).toBe('success');
+    expect(last?.resultData).toMatchObject({
+      forced: true,
+      recordId: 'rNew',
+    });
+  });
+});
+
+describe('Dispatcher — 投影字段按 fieldMapping 裁剪（回归）', () => {
+  it('幻觉的投影字段被点名，并退回整行渲染', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"QUERY","fields":{},"filters":{"项目名称":"A"},"projectFields":["毛利率"],"confidence":0.95,"summary":"查"}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { recordId: 'r1', fields: { 项目名称: 'A', Node版本: '18' } },
+    ]);
+
+    await d.process(makeMsg({ content: '查项目 A 的毛利率' }), channel);
+
+    // 回归：以前直接拿去渲染，输出「A → （该字段为空）」，
+    // 用户会以为表里有"毛利率"这一列且没值
+    expect(channel.lastReply).toContain('毛利率');
+    expect(channel.lastReply).toContain('不是该资源里的字段');
+    expect(channel.lastReply).not.toContain('（该字段为空）');
+    // 全部无效 → 退回整行渲染，措辞要说清这一点
+    expect(channel.lastReply).toContain('已按全部字段展示');
+    expect(channel.lastReply).toContain('Node版本');
+  });
+
+  it('部分有效时只保留有效的那些，仍然点名无效的', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"QUERY","fields":{},"filters":{"项目名称":"A"},"projectFields":["Node版本","毛利率"],"confidence":0.95,"summary":"查"}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { recordId: 'r1', fields: { 项目名称: 'A', Node版本: '18' } },
+    ]);
+
+    await d.process(makeMsg({ content: '查项目 A' }), channel);
+
+    expect(channel.lastReply).toContain('Node版本：18');
+    expect(channel.lastReply).toContain('不是该资源里的字段');
+    // 部分有效 → 只忽略无效的那几个，不能说成"已按全部字段展示"
+    expect(channel.lastReply).toContain('已忽略');
+    expect(channel.lastReply).not.toContain('已按全部字段展示');
+  });
+
+  it('全部有效时不产生任何提示', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"QUERY","fields":{},"filters":{"项目名称":"A"},"projectFields":["Node版本"],"confidence":0.95,"summary":"查"}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { recordId: 'r1', fields: { 项目名称: 'A', Node版本: '18' } },
+    ]);
+
+    await d.process(makeMsg({ content: '查项目 A 的 Node 版本' }), channel);
+
+    expect(channel.lastReply).not.toContain('不是该资源里的字段');
+  });
+
+  it('单条单投影字段撞上拉取上限时必须带截断警告', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    // queryRecordsWithMeta 上报 truncated
+    (
+      adapter as unknown as { queryRecordsWithMeta: ReturnType<typeof vi.fn> }
+    ).queryRecordsWithMeta = vi.fn(async () => ({
+      records: [{ recordId: 'r1', fields: { 项目名称: 'A', Node版本: '18' } }],
+      truncated: true,
+    }));
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"QUERY","fields":{},"filters":{"项目名称":"A"},"projectFields":["Node版本"],"confidence":0.95,"summary":"查"}',
+    );
+
+    await d.process(makeMsg({ content: '查项目 A 的 Node 版本' }), channel);
+
+    // 回归：这条路径以前直接 return，把"结果可能不完整"的警告丢了
+    expect(channel.lastReply).toContain('上限');
+  });
+});

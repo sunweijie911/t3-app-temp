@@ -74,8 +74,9 @@ export type WecomCell =
  * 把逻辑值转成企微的类型化单元格数组。
  * - number → number 单元格
  * - boolean → checkbox
- * - YYYY-MM-DD 字符串 → date（CST 当天 12:00，与飞书侧的处理对齐避免跨日）；
- *   声明为 number/text 的列走 text，不再误判成日期单元格
+ * - YYYY-MM-DD 字符串 → date（CST 当天 00:00，与飞书/钉钉侧共用
+ *   field-types.ts 的换算）；声明为 number/text 的列走 text，
+ *   不再误判成日期单元格
  * - 数组 → 逐元素转（多选/多值字段）
  * - 其它 → text
  */

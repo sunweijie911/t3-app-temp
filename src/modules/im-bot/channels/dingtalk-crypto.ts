@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { DEDUP_TTL_MS } from '../constants';
 
 /**
  * 钉钉机器人 HTTP 回调的验签。
@@ -9,8 +10,20 @@ import crypto from 'node:crypto';
  * 3. 结果编码是 **base64**，不是 hex
  */
 
-/** 签名有效期。钉钉官方要求 timestamp 与当前时间差不超过 1 小时 */
-export const SIGN_TOLERANCE_MS = 60 * 60 * 1000;
+/**
+ * 签名有效期。
+ *
+ * 钉钉官方允许 1 小时，这里刻意收紧到与幂等 TTL 一致。
+ * 钉钉回调没有独立 eventId，msgId 兼作幂等键，而幂等记录只保留
+ * DEDUP_TTL_MS（5 分钟）。两个窗口不一致就会开出一段
+ * 「验签仍通过、幂等已过期」的区间：抓到的合法回调在 5~60 分钟之间重放
+ * 会被再次完整处理，一条 CREATE 就多写一条记录。
+ * 重放防护的两道闸门必须同时有效才有意义，所以取两者中更短的那个。
+ *
+ * 代价是对时钟漂移的容忍度下降到 5 分钟 —— 服务器与钉钉侧都用 NTP，
+ * 这个量级是安全的；真的漂移超过 5 分钟，验签失败比静默重复写更好排查。
+ */
+export const SIGN_TOLERANCE_MS = DEDUP_TTL_MS;
 
 /**
  * 计算回调签名。
