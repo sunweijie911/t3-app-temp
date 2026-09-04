@@ -3228,3 +3228,75 @@ describe('Dispatcher — 三种拒绝原因给出不同文案', () => {
     expect(channel.lastReply).not.toContain('🔒');
   });
 });
+
+describe('Dispatcher — selectableCount 丢失时必须更严而不是更松', () => {
+  it('★ pending 里没有 selectableCount 时，序号上界退回展示上限', async () => {
+    // 回归：DbPendingActionStore 曾漏掉 selectableCount 的持久化，
+    // 而缺省值又写成 `?? candidates.length` —— 内存存储测试全绿，
+    // 走 DB 的生产环境读回 undefined 后上界变成候选总数（20），
+    // 用户回一个 15 就能更新一条自己从没见过的记录。
+    const pendingStore = new MemoryPendingActionStore();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const d = new Dispatcher({ getBinding: () => baseBinding, pendingStore });
+    d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+
+    // 手动写一个「没有 selectableCount」的 pending，模拟旧数据/丢字段
+    const msg = makeMsg({ content: '15' });
+    await pendingStore.set(
+      { platform: msg.platform, chatId: msg.chatId, senderId: msg.senderId },
+      {
+        sceneId: baseSceneConfig.sceneId,
+        bindingAlias: baseBinding.alias,
+        type: 'select_record',
+        candidates: Array.from({ length: 15 }, (_, i) => ({
+          recordId: `r${i}`,
+          fields: { 项目名称: `p${i}` },
+        })),
+        message: msg,
+        updateFields: { Node版本: '20' },
+      },
+    );
+
+    await d.process(msg, channel);
+
+    // 15 > MAX_CANDIDATE_DISPLAY(10) → 必须被拒
+    expect(adapter.updateRecord).not.toHaveBeenCalled();
+    expect(channel.lastReply).toContain('请回复序号');
+    expect(channel.lastReply).toContain(`1~${MAX_CANDIDATE_DISPLAY}`);
+  });
+
+  it('同样条件下，展示范围内的序号仍然生效', async () => {
+    const pendingStore = new MemoryPendingActionStore();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    (adapter.updateRecord as ReturnType<typeof vi.fn>).mockResolvedValue({
+      recordId: 'r9',
+      fields: {},
+    });
+    const d = new Dispatcher({ getBinding: () => baseBinding, pendingStore });
+    d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    const msg = makeMsg({ content: '10' });
+    await pendingStore.set(
+      { platform: msg.platform, chatId: msg.chatId, senderId: msg.senderId },
+      {
+        sceneId: baseSceneConfig.sceneId,
+        bindingAlias: baseBinding.alias,
+        type: 'select_record',
+        candidates: Array.from({ length: 15 }, (_, i) => ({
+          recordId: `r${i}`,
+          fields: { 项目名称: `p${i}` },
+        })),
+        message: msg,
+        updateFields: { Node版本: '20' },
+      },
+    );
+
+    await d.process(msg, channel);
+    expect(adapter.updateRecord).toHaveBeenCalledWith(expect.anything(), 'r9', {
+      Node版本: '20',
+    });
+  });
+});

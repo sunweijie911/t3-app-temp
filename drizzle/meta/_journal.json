@@ -204,6 +204,13 @@
       "when": 1788505294056,
       "tag": "0028_bot_scene_write_access",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1788506204853,
+      "tag": "0029_bot_pending_selectable_count",
+      "breakpoints": true
     }
   ]
 }

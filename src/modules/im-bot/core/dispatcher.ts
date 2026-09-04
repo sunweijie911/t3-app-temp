@@ -677,7 +677,10 @@ export class Dispatcher {
           confirm_update: '请回复"确认更新"执行，或回复"取消"放弃',
           confirm_upsert:
             '请回复"确认更新"合并到现有记录，"强制新建"创建新记录，或"取消"放弃',
-          select_record: `请回复序号(1~${pendingAction.selectableCount ?? pendingAction.candidates.length})选择一条，或回复"全部"更新全部 ${pendingAction.candidates.length} 条，或回复"取消"放弃`,
+          select_record: `请回复序号(1~${Math.min(
+            pendingAction.selectableCount ?? MAX_CANDIDATE_DISPLAY,
+            pendingAction.candidates.length,
+          )})选择一条，或回复"全部"更新全部 ${pendingAction.candidates.length} 条，或回复"取消"放弃`,
         };
         await channelAdapter.reply(msg, promptByType[pendingAction.type]);
         await logEvent({ sceneId: pendingAction.sceneId, result: 'ignored' });
@@ -1711,9 +1714,14 @@ export class Dispatcher {
       const picked = /^第?(\d+)\s*条?$/.exec(content);
       if (!picked?.[1]) return { handled: false };
       const num = Number.parseInt(picked[1], 10);
-      // 上界是**展示出来的**条数，不是候选总数
+      // 上界是**展示出来的**条数，不是候选总数。
+      //
+      // 缺省值刻意取保守的那一侧：曾经写成 `?? candidates.length`，
+      // 而 selectableCount 又漏了持久化 —— 内存存储一切正常、测试全绿，
+      // 走 DB 的生产环境读回 undefined 后上界变成候选总数，用户回一个 15
+      // 就能更新一条自己从没见过的记录。字段丢失时应该更严，不是更松。
       const maxPick = Math.min(
-        action.selectableCount ?? action.candidates.length,
+        action.selectableCount ?? MAX_CANDIDATE_DISPLAY,
         action.candidates.length,
       );
       if (num < 1 || num > maxPick) return { handled: false };

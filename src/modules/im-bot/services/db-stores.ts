@@ -177,6 +177,7 @@ interface StoredPendingRow {
   bindingAlias: string;
   type: string;
   candidates: unknown;
+  selectableCount: number | null;
   message: unknown;
   updateFields: unknown;
   expiresAt: Date;
@@ -199,6 +200,7 @@ function rowToPendingAction(row: StoredPendingRow): PendingAction | null {
     bindingAlias: row.bindingAlias,
     type: row.type as PendingAction['type'],
     candidates: (row.candidates as SpreadsheetRecord[]) ?? [],
+    selectableCount: row.selectableCount ?? undefined,
     message: row.message as UnifiedMessage,
     updateFields:
       (row.updateFields as Record<string, unknown> | null) ?? undefined,
@@ -223,6 +225,7 @@ export class DbPendingActionStore implements PendingActionStore {
           bindingAlias: botPendingActions.bindingAlias,
           type: botPendingActions.type,
           candidates: botPendingActions.candidates,
+          selectableCount: botPendingActions.selectableCount,
           message: botPendingActions.message,
           updateFields: botPendingActions.updateFields,
           expiresAt: botPendingActions.expiresAt,
@@ -252,14 +255,27 @@ export class DbPendingActionStore implements PendingActionStore {
   ): Promise<void> {
     const k = serializePendingKey(key);
     const expiresAt = new Date(Date.now() + ttlMs);
+    /**
+     * 显式声明成「PendingAction 的每个字段都必须出现」。
+     *
+     * 这里曾经漏掉 selectableCount：类型上它是可选的，漏了不报错，
+     * 于是内存存储（按引用存对象）一切正常、测试全绿，只有走 DB 的
+     * 生产环境会静默丢掉它。加上这个类型标注后，往 PendingAction 里
+     * 加字段而忘了在这里持久化，会直接编译不过。
+     */
     const values = {
       sceneId: action.sceneId,
       bindingAlias: action.bindingAlias,
       type: action.type,
       candidates: action.candidates,
+      selectableCount: action.selectableCount ?? null,
       message: action.message as unknown as Record<string, unknown>,
       updateFields: action.updateFields ?? null,
       expiresAt,
+      // satisfies 而不是类型标注：只校验「键齐全」，不把值类型擦成 unknown
+      // （擦掉的话 drizzle 的 insert 会拒绝整个对象）
+    } satisfies Record<keyof Omit<PendingAction, 'expiresAt'>, unknown> & {
+      expiresAt: Date;
     };
     await db
       .insert(botPendingActions)

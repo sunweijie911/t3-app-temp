@@ -1,0 +1,1 @@
+ALTER TABLE "pg-drizzle_bot_pending_action" ADD COLUMN "selectableCount" integer;

@@ -260,6 +260,15 @@ export const botPendingActions = createTable(
     bindingAlias: d.varchar({ length: 64 }).notNull(),
     type: d.varchar({ length: 32 }).notNull(),
     candidates: jsonb().notNull().default([]),
+    /**
+     * select_record 时允许用序号选到第几条。
+     *
+     * 必须落库：candidates 存的是**全部**命中记录（「全部更新」要用），
+     * 而序号只能选到展示出来的那些。这一列丢了就会退化成
+     * 「序号上界 = 候选总数」—— 用户回一个 15 就能更新一条自己从没
+     * 见过的记录，正是候选列表截断本来要防的那件事。
+     */
+    selectableCount: d.integer(),
     message: jsonb().notNull(),
     updateFields: jsonb(),
     expiresAt: d.timestamp({ withTimezone: true }).notNull(),
