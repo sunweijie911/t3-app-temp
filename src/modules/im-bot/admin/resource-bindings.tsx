@@ -14,6 +14,7 @@ import {
   Switch,
   Table,
   Tag,
+  Tooltip,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useState } from 'react';
@@ -45,7 +46,7 @@ type FetchedField = {
   uiType: string;
   suggestedType: 'plain' | 'link' | 'multiSelect';
   suggestedDisplayType: DisplayTypeOption;
-  /** 平台侧 property.options 拉回来的合法取值（单选/多选列才有） */
+  /** 平台侧拉回来的合法取值（单选/多选列才有） */
   options?: string[] | null;
 };
 
@@ -68,10 +69,85 @@ type FieldPickerSelection = Record<
      * 键序会被 Postgres 重排。
      */
     primary: boolean;
+    /**
+     * 群消息里展示用的友好名。平台侧没有这个概念，纯粹是人工配的 ——
+     * 所以重新拉取字段时只能从已有配置里带过来，推断不出来。
+     */
+    label?: string;
+    /** 已配过的逻辑键；生成 JSON 时沿用它做 key，见 ExistingEntry.logicalKey */
+    logicalKey?: string;
     linkTableId?: string;
     displayField?: string;
   }
 >;
+
+/** 从已有 fieldMapping JSON 里读出「平台列名 → 已配置项」 */
+export type ExistingEntry = {
+  /**
+   * 原来的逻辑键。
+   *
+   * 逻辑键才是**其它配置引用这一列的名字**：绑定的 uniqueKey、回复模板里的
+   * `${fields.月份}`、场景 prompt 里的字段名，引用的都是它，而不是平台列名。
+   * 生成 JSON 时如果按平台列名重新起键（`{"统计月份": …}`），uniqueKey 会指向
+   * 一个不存在的键 —— dispatcher 取 `createFields[uniqueKey]` 得到 undefined，
+   * **CREATE 查重整段被跳过**，重复记录一条条静默写进去，而保存时不会有任何报错。
+   */
+  logicalKey: string;
+  type: 'plain' | 'link' | 'multiSelect';
+  displayType?: DisplayTypeOption;
+  sensitive?: boolean;
+  primary?: boolean;
+  label?: string;
+  linkTableId?: string;
+  displayField?: string;
+};
+
+/**
+ * 按**平台列名**索引（不是逻辑键）：字段选择器认的是平台列名，
+ * 而逻辑键可以和平台列名不同（`{ "月份": { name: "统计月份" } }`）。
+ * 解析失败时返回空表 —— 退化成"覆盖式生成"的旧行为，而不是报错卡住。
+ */
+export function readExistingMapping(json?: string): Map<string, ExistingEntry> {
+  const out = new Map<string, ExistingEntry>();
+  if (!json?.trim()) return out;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return out;
+  }
+  if (!parsed || typeof parsed !== 'object') return out;
+  for (const [logicalKey, value] of Object.entries(
+    parsed as Record<string, unknown>,
+  )) {
+    if (typeof value === 'string') {
+      // 裸字符串映射：除了逻辑键，没有别的可保留的配置
+      out.set(value, { logicalKey, type: 'plain' });
+      continue;
+    }
+    if (!value || typeof value !== 'object') continue;
+    const v = value as Record<string, unknown>;
+    if (typeof v.name !== 'string') continue;
+    out.set(v.name, {
+      logicalKey,
+      type: v.type === 'link' || v.type === 'multiSelect' ? v.type : 'plain',
+      displayType:
+        v.displayType === 'date' ||
+        v.displayType === 'number' ||
+        v.displayType === 'text'
+          ? v.displayType
+          : undefined,
+      sensitive: v.sensitive === true,
+      primary: v.primary === true,
+      label: typeof v.label === 'string' ? v.label : undefined,
+      linkTableId:
+        typeof v.linkTableId === 'string' ? v.linkTableId : undefined,
+      displayField:
+        typeof v.displayField === 'string' ? v.displayField : undefined,
+    });
+  }
+  return out;
+}
 
 /** 字段名启发式：含密码/密钥/secret/token 等关键字时默认勾选 sensitive */
 const SENSITIVE_KEY_PATTERN =
@@ -103,6 +179,12 @@ type EditingBinding = {
   fieldMappingStr: string;
   uniqueKey: string;
   isDefault: boolean;
+  /**
+   * 启用开关。以前 UI 根本不传这个字段，而后端 zod 的默认值是 true 且
+   * 会写进 update set —— 于是在库里手动停用的绑定，管理员一点「编辑保存」
+   * 就被重新启用了，而且界面上完全看不出来。
+   */
+  isActive: boolean;
 };
 
 export default function ImBotResourceBindingsPage() {
@@ -134,6 +216,8 @@ export default function ImBotResourceBindingsPage() {
           sensitive: cur?.sensitive ?? false,
           displayType: cur?.displayType ?? f.suggestedDisplayType,
           primary: cur?.primary ?? false,
+          label: cur?.label,
+          logicalKey: cur?.logicalKey,
           linkTableId: cur?.linkTableId,
           displayField: cur?.displayField,
           ...patch,
@@ -152,26 +236,60 @@ export default function ImBotResourceBindingsPage() {
       return next;
     });
   };
-  const fetchFields = api.imBot.admin.fetchBitableFields.useMutation({
+  const fetchFields = api.imBot.admin.fetchTableFields.useMutation({
     onSuccess: (fields) => {
       setPickerFields(fields);
-      // 预填：所有字段默认勾选；按 suggestedType 设置；敏感关键字自动 sensitive
+      // 已有配置按平台列名索引。**重新拉取必须是合并而不是覆盖** ——
+      // 最常见的重拉动机恰恰是"补上平台新增的选项/列"，而自动推断在几类列
+      // 上必然不如管理员手工确认的准：
+      // - 公式列（飞书 ui_type=Formula）算出来的是数字，推断只能给 text
+      // - 关联列的 linkTableId / displayField 根本推断不出来
+      // - label（群里展示用的友好名）平台侧压根没有这个概念
+      // 覆盖式生成会把这些一次性冲掉，而且冲掉了不会有任何提示。
+      const existing = readExistingMapping(editing?.fieldMappingStr);
+      const hasExisting = existing.size > 0;
+
       const init: FieldPickerSelection = {};
-      // 默认把第一个文本列当主标识（飞书按真实列序返回，名称类通常在最前）
-      const defaultPrimary = fields.find(
-        (f) => f.suggestedType === 'plain' && f.suggestedDisplayType === 'text',
+      // 已配过主标识就沿用；没有才退回"第一个文本列"的启发式
+      const keptPrimary = fields.find(
+        (f) => existing.get(f.fieldName)?.primary === true,
       )?.fieldName;
+      const defaultPrimary =
+        keptPrimary ??
+        fields.find(
+          (f) =>
+            f.suggestedType === 'plain' && f.suggestedDisplayType === 'text',
+        )?.fieldName;
+
       for (const f of fields) {
+        const prev = existing.get(f.fieldName);
         init[f.fieldName] = {
-          selected: true,
-          type: f.suggestedType,
-          sensitive: SENSITIVE_KEY_PATTERN.test(f.fieldName),
-          displayType: f.suggestedDisplayType,
+          // 已有配置时，"选中"沿用原来纳管了哪些列 —— 管理员可能刻意
+          // 排除了某些列（比如敏感列），重拉不该把它们悄悄加回来
+          selected: hasExisting ? !!prev : true,
+          type: prev?.type ?? f.suggestedType,
+          sensitive: prev?.sensitive ?? SENSITIVE_KEY_PATTERN.test(f.fieldName),
+          displayType: prev?.displayType ?? f.suggestedDisplayType,
           primary: f.fieldName === defaultPrimary,
+          label: prev?.label,
+          // 沿用原来的逻辑键：uniqueKey / 回复模板 / prompt 都按它引用这一列
+          logicalKey: prev?.logicalKey,
+          linkTableId: prev?.linkTableId,
+          displayField: prev?.displayField,
         };
       }
       setPickerSelection(init);
       setPickerOpen(true);
+      const added = fields.filter(
+        (f) => hasExisting && !existing.has(f.fieldName),
+      );
+      if (added.length > 0) {
+        toast.info(
+          `平台上有 ${added.length} 个新列未纳管：${added
+            .map((f) => f.fieldName)
+            .join('、')}（需要的话请勾选）`,
+        );
+      }
     },
     onError: (err) => toast.error(`拉取字段失败：${err.message}`),
   });
@@ -220,6 +338,11 @@ export default function ImBotResourceBindingsPage() {
     onError: (err) => toast.error(err.message),
   });
 
+  /** 当前编辑中的 fieldMapping 已经纳管了哪些平台列 —— 用来标出"新列" */
+  const managedNames = new Set(
+    readExistingMapping(editing?.fieldMappingStr).keys(),
+  );
+
   const columns: ColumnsType<BindingRow> = [
     { title: '场景', dataIndex: 'sceneId', width: 120 },
     {
@@ -230,6 +353,7 @@ export default function ImBotResourceBindingsPage() {
         <Space size={4}>
           <span>{val}</span>
           {record.isDefault && <Tag color="green">默认</Tag>}
+          {!record.isActive && <Tag color="red">已停用</Tag>}
         </Space>
       ),
     },
@@ -290,6 +414,7 @@ export default function ImBotResourceBindingsPage() {
                 ),
                 uniqueKey: record.uniqueKey ?? '',
                 isDefault: record.isDefault,
+                isActive: record.isActive,
               })
             }
             size="small"
@@ -333,6 +458,7 @@ export default function ImBotResourceBindingsPage() {
                 fieldMappingStr: '{}',
                 uniqueKey: '',
                 isDefault: true,
+                isActive: true,
               })
             }
             type="primary"
@@ -389,8 +515,8 @@ export default function ImBotResourceBindingsPage() {
                         </div>
                       )}
                       <div style={{ marginTop: 4, color: '#888' }}>
-                        修复方式：编辑该绑定 → 重新「从飞书拉取字段」→ 生成 JSON
-                        → 保存
+                        修复方式：编辑该绑定 → 重新「拉取字段」→ 生成 JSON →
+                        保存
                       </div>
                     </div>
                   }
@@ -442,6 +568,7 @@ export default function ImBotResourceBindingsPage() {
               fieldMapping,
               uniqueKey: editing.uniqueKey || undefined,
               isDefault: editing.isDefault,
+              isActive: editing.isActive,
             });
           }}
           open={!!editing}
@@ -526,6 +653,15 @@ export default function ImBotResourceBindingsPage() {
                 />
               </Form.Item>
               <Form.Item
+                label="启用"
+                tooltip="停用后机器人加载不到这条绑定，场景会退回「未配置数据资源绑定」"
+              >
+                <Switch
+                  checked={editing.isActive}
+                  onChange={(val) => setEditing({ ...editing, isActive: val })}
+                />
+              </Form.Item>
+              <Form.Item
                 label={
                   editing.kind === 'doc'
                     ? 'Workspace ID (飞书 folder_token，可留空)'
@@ -580,18 +716,19 @@ export default function ImBotResourceBindingsPage() {
                     disabled={
                       !editing.workspaceId ||
                       !editing.resourceId ||
-                      editing.provider !== 'feishu'
+                      editing.kind !== 'table'
                     }
                     loading={fetchFields.isPending}
                     onClick={() =>
                       fetchFields.mutate({
+                        provider: editing.provider,
                         workspaceId: editing.workspaceId,
                         tableId: editing.resourceId,
                       })
                     }
                     size="small"
                   >
-                    从飞书拉取字段…
+                    从{PLATFORM_LABELS[editing.provider]}拉取字段…
                   </Button>
                 </div>
                 <Input.TextArea
@@ -645,15 +782,20 @@ export default function ImBotResourceBindingsPage() {
             for (const f of pickerFields) {
               const sel = pickerSelection[f.fieldName];
               if (!sel?.selected) continue;
+              // key 用**逻辑键**：已配过的沿用原名，新列才拿平台列名当逻辑键。
+              // 按平台列名重新起键会让 uniqueKey / ${fields.xxx} 指向不存在的
+              // 字段，而且保存时不报错 —— 见 ExistingEntry.logicalKey
+              const key = sel.logicalKey ?? f.fieldName;
               if (sel.type === 'plain') {
                 // plain 一律写成对象并带上 displayType。
                 // 以前无敏感标记时输出裸字符串，displayType 无处可放 ——
                 // 于是日期/数字/文本三种语义在运行时只能靠值猜，
                 // 文本列里的 "2026-05-11" 会被当日期写成时间戳。
-                result[f.fieldName] = {
+                result[key] = {
                   name: f.fieldName,
                   type: 'plain',
                   displayType: sel.displayType,
+                  ...(sel.label ? { label: sel.label } : {}),
                   ...(sel.sensitive ? { sensitive: true } : {}),
                   ...(sel.primary ? { primary: true } : {}),
                   // 单选列的合法取值一并落库，注入 prompt 后 LLM 不会再自造
@@ -668,19 +810,21 @@ export default function ImBotResourceBindingsPage() {
                   );
                   return;
                 }
-                result[f.fieldName] = {
+                result[key] = {
                   name: f.fieldName,
                   type: 'link',
                   linkTableId: sel.linkTableId,
                   displayField: sel.displayField,
+                  ...(sel.label ? { label: sel.label } : {}),
                   ...(sel.sensitive ? { sensitive: true } : {}),
                   ...(sel.primary ? { primary: true } : {}),
                 };
                 continue;
               }
-              result[f.fieldName] = {
+              result[key] = {
                 name: f.fieldName,
                 type: sel.type,
+                ...(sel.label ? { label: sel.label } : {}),
                 ...(sel.sensitive ? { sensitive: true } : {}),
                 ...(sel.primary ? { primary: true } : {}),
                 // multiSelect 同理
@@ -716,12 +860,38 @@ export default function ImBotResourceBindingsPage() {
                   />
                 ),
               },
-              { title: '字段名', dataIndex: 'fieldName', width: 180 },
+              {
+                title: '字段名',
+                dataIndex: 'fieldName',
+                width: 180,
+                render: (v: string) => (
+                  <Space size={4}>
+                    <span>{v}</span>
+                    {!managedNames.has(v) && managedNames.size > 0 && (
+                      <Tag color="blue">新列</Tag>
+                    )}
+                  </Space>
+                ),
+              },
               {
                 title: 'UI 类型',
                 dataIndex: 'uiType',
                 width: 110,
                 render: (v: string) => <Tag>{v || '—'}</Tag>,
+              },
+              {
+                // 单选/多选列的合法取值会一并落库并注入 prompt，LLM 因此
+                // 不会再自造一个不存在的选项值。有没有拉到，这里要看得见。
+                title: '平台可选值',
+                width: 150,
+                render: (_, f: FetchedField) =>
+                  f.options?.length ? (
+                    <Tooltip title={f.options.join(' / ')}>
+                      <Tag color="green">{f.options.length} 个</Tag>
+                    </Tooltip>
+                  ) : (
+                    <span style={{ color: '#bbb' }}>—</span>
+                  ),
               },
               {
                 title: '映射类型',

@@ -4,7 +4,6 @@ import { and, count, desc, eq, gte, lt, lte, min, ne, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { adminProcedure, createTRPCRouter } from '@/server/api/trpc';
-import { feishuTokenManager } from '../auth/feishu-token';
 import {
   BOT_EVENT_RESULT_ENUM,
   BOT_PLATFORM_ENUM,
@@ -29,6 +28,7 @@ import {
   reloadPlatformCredentials,
 } from '../services/bot-engine';
 import { getRateLimitOutage } from '../services/db-stores';
+import { getTableFieldSource } from '../spreadsheets/fields';
 
 /**
  * 把 credentials 中的 secret 字段替换为 mask 占位符，避免明文回传浏览器。
@@ -77,60 +77,6 @@ function mergeMaskedCredentials(
   return out;
 }
 
-/**
- * 根据飞书 ui_type 推断 fieldMapping 建议类型。
- * - SingleLink/DuplexLink   → link（需要再选 displayField）
- * - MultiSelect             → multiSelect
- * - Text/Number/SingleSelect/Date 等 → plain
- * - 名字含敏感关键字时再叠加 sensitive=true（前端兜底）
- */
-function suggestMappingType(
-  uiType: string | undefined,
-  multiple: boolean | undefined,
-): 'plain' | 'link' | 'multiSelect' {
-  if (uiType === 'SingleLink' || uiType === 'DuplexLink') return 'link';
-  if (uiType === 'MultiSelect' || multiple === true) return 'multiSelect';
-  return 'plain';
-}
-
-/** 飞书里语义上是「时刻」的列 */
-const DATE_UI_TYPES = new Set(['DateTime', 'CreatedTime', 'ModifiedTime']);
-/** 飞书里语义上是「数量」的列 —— 不能被当成日期毫秒值 */
-const NUMBER_UI_TYPES = new Set([
-  'Number',
-  'Currency',
-  'Progress',
-  'Rating',
-  'AutoNumber',
-]);
-
-/**
- * 推断 plain 映射的 displayType。
- *
- * 这一步以前是缺的：ui_type 明明拉回来了却只用来选 plain/link/multiSelect，
- * displayType 全靠管理员手写 JSON，于是实际配置里几乎不存在 ——
- * 日期列的格式提示进不了 prompt、金额被按毫秒渲染成日期、
- * 文本列里的 "2026-05-11" 被写成时间戳。
- */
-function suggestDisplayType(
-  uiType: string | undefined,
-): 'date' | 'number' | 'text' {
-  if (uiType && DATE_UI_TYPES.has(uiType)) return 'date';
-  if (uiType && NUMBER_UI_TYPES.has(uiType)) return 'number';
-  return 'text';
-}
-
-/** 取选项名，过滤空值。只有 SingleSelect / MultiSelect 这类列有 options */
-function optionNamesOf(
-  options: Array<{ name?: string }> | undefined,
-): string[] | undefined {
-  if (!options?.length) return undefined;
-  const names = options
-    .map((o) => o.name?.trim())
-    .filter((n): n is string => !!n);
-  return names.length > 0 ? names : undefined;
-}
-
 /** 从 fieldMapping 的一个 value 里取平台侧列名 */
 function platformNameOf(mapping: unknown): string | null {
   if (typeof mapping === 'string') return mapping;
@@ -158,73 +104,6 @@ function primaryKeysOf(fieldMapping: Record<string, unknown>): string[] {
         (v as { primary?: unknown }).primary === true,
     )
     .map(([k]) => k);
-}
-
-/** 飞书 fields 接口返回的一列 */
-interface LiveBitableField {
-  field_id: string;
-  field_name: string;
-  type: number;
-  ui_type?: string;
-  property?: {
-    multiple?: boolean;
-    /** 单选 / 多选列的可选项，用来生成 prompt 里的合法取值清单 */
-    options?: Array<{ name?: string }>;
-  };
-}
-
-/** 单页字段数上限。翻页拉完，避免宽表（>100 列）静默丢字段 */
-const FIELDS_PAGE_SIZE = 100;
-const FIELDS_MAX_PAGES = 5;
-
-/**
- * 拉取一张多维表当前的全部列。字段选择器与漂移检测共用。
- *
- * 会翻页：以前固定 `page_size=100` 且不翻页，>100 列的表会**静默丢字段**
- * —— 丢掉的列既进不了 fieldMapping，也就永远不会出现在 prompt 里。
- */
-async function fetchLiveBitableFields(
-  workspaceId: string,
-  tableId: string,
-): Promise<LiveBitableField[]> {
-  const token = await feishuTokenManager.getToken();
-  const all: LiveBitableField[] = [];
-  let pageToken: string | undefined;
-
-  for (let page = 0; page < FIELDS_MAX_PAGES; page++) {
-    const query = `page_size=${FIELDS_PAGE_SIZE}${
-      pageToken ? `&page_token=${encodeURIComponent(pageToken)}` : ''
-    }`;
-    const res = await fetch(
-      `https://open.feishu.cn/open-apis/bitable/v1/apps/${workspaceId}/tables/${tableId}/fields?${query}`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        signal: AbortSignal.timeout(10_000),
-      },
-    );
-    if (!res.ok) {
-      throw new Error(`飞书 API HTTP 错误: ${res.status} ${res.statusText}`);
-    }
-    const data = (await res.json()) as {
-      code: number;
-      msg?: string;
-      data?: {
-        items?: LiveBitableField[];
-        has_more?: boolean;
-        page_token?: string;
-      };
-    };
-    if (data.code !== 0) {
-      throw new Error(`飞书 API 错误: ${data.msg ?? data.code}`);
-    }
-    all.push(...(data.data?.items ?? []));
-    if (!data.data?.has_more || !data.data.page_token) break;
-    pageToken = data.data.page_token;
-  }
-  return all;
 }
 
 /** 业务时区固定 CST(+08:00)，与飞书日期字段的处理保持一致 */
@@ -608,34 +487,25 @@ export const imBotAdminRouter = createTRPCRouter({
     }),
 
   /**
-   * 从飞书拉取指定多维表的字段列表，供 admin UI 勾选生成 fieldMapping。
-   * 仅 feishu 平台；workspaceId=app_token，tableId 必填。
+   * 拉取指定表当前的字段列表，供 admin UI 勾选生成 fieldMapping。
+   *
+   * 三个 provider 都支持（以前只有飞书）。类型推断与 options 提取都在
+   * spreadsheets/fields.ts 里按同一套规则做 —— 换个 provider 推断出不同的
+   * displayType 会直接改变值写进去的形状（见 field-types.ts）。
    */
-  fetchBitableFields: adminProcedure
+  fetchTableFields: adminProcedure
     .input(
       z.object({
+        provider: BOT_PLATFORM_ENUM.default('feishu'),
         workspaceId: z.string().min(1),
         tableId: z.string().min(1),
       }),
     )
     .mutation(async ({ input }) => {
-      const items = await fetchLiveBitableFields(
+      return getTableFieldSource(input.provider).listFields(
         input.workspaceId,
         input.tableId,
       );
-      // ui_type 参考 飞书 OpenAPI；这里只用到几个常见值映射建议类型
-      return items.map((it) => ({
-        fieldId: it.field_id,
-        fieldName: it.field_name,
-        uiType: it.ui_type ?? '',
-        // 给前端的建议映射类型；admin 仍可手动覆盖
-        suggestedType: suggestMappingType(it.ui_type, it.property?.multiple),
-        suggestedDisplayType: suggestDisplayType(it.ui_type),
-        // 合法取值。以前只取了 ui_type 和 multiple，options 白白丢掉，
-        // 于是管理员只能把「支出分类：美妆产品 / 进货 / …」手抄进
-        // 场景 prompt，飞书里一改选项就过期
-        options: optionNamesOf(it.property?.options),
-      }));
     }),
 
   /**
@@ -666,13 +536,15 @@ export const imBotAdminRouter = createTRPCRouter({
 
       const results = [];
       for (const row of rows) {
-        // 只有飞书表格能查字段；其余原样跳过并说明原因
-        if (row.kind !== 'table' || row.provider !== 'feishu') {
+        // 只有表格能比对字段。三个 provider 现在都支持了 ——
+        // 以前这里还要求 provider === 'feishu'，于是钉钉/企微的绑定
+        // 永远处于「配完就没人再核对过」的状态。
+        if (row.kind !== 'table') {
           results.push({
             id: row.id,
             sceneId: row.sceneId,
             alias: row.alias,
-            skipped: `${row.kind} / ${row.provider} 暂不支持字段比对`,
+            skipped: `${row.kind} 类型资源不做字段比对`,
             missingOnPlatform: [],
             newOnPlatform: [],
             staleOptions: [],
@@ -682,11 +554,30 @@ export const imBotAdminRouter = createTRPCRouter({
 
         const mapping = (row.fieldMapping ?? {}) as Record<string, unknown>;
         try {
-          const live = await fetchLiveBitableFields(
+          const live = await getTableFieldSource(row.provider).listFields(
             row.workspaceId,
             row.resourceId,
           );
-          const liveByName = new Map(live.map((f) => [f.field_name, f]));
+          // 拉到 0 列时**不能**继续比对：下面每个映射项都会落进
+          // missingOnPlatform，后台会渲染成「这些列在平台上已经没有了」并
+          // 建议「重新拉取 → 生成 JSON → 保存」——照做就是拿一张空表覆盖掉
+          // 一份好端端的映射。而钉钉/企微的 listFields 在响应结构对不上时
+          // 是**返回空数组而不是抛错**的（见 spreadsheets/fields.ts），
+          // 所以这条路真实存在。
+          if (live.length === 0) {
+            results.push({
+              id: row.id,
+              sceneId: row.sceneId,
+              alias: row.alias,
+              skipped:
+                '未拉到任何字段（表为空，或该 provider 的字段接口返回结构与预期不符），跳过比对',
+              missingOnPlatform: [],
+              newOnPlatform: [],
+              staleOptions: [],
+            });
+            continue;
+          }
+          const liveByName = new Map(live.map((f) => [f.fieldName, f]));
 
           /** 映射里有、平台上已经没有的列 —— 写入会报 InvalidFieldName */
           const missingOnPlatform: Array<{
@@ -708,8 +599,8 @@ export const imBotAdminRouter = createTRPCRouter({
               missingOnPlatform.push({ logicalKey, platformName });
               continue;
             }
-            const liveOptions = optionNamesOf(liveField.property?.options);
-            if (!liveOptions) continue;
+            const liveOptions = liveField.options;
+            if (!liveOptions?.length) continue;
             const stored = storedOptionsOf(value);
             const same =
               stored.length === liveOptions.length &&
@@ -726,8 +617,8 @@ export const imBotAdminRouter = createTRPCRouter({
           );
           /** 平台上有、映射里没有的列 —— LLM 完全不知道它存在 */
           const newOnPlatform = live
-            .map((f) => f.field_name)
-            .filter((n) => !mappedPlatformNames.has(n));
+            .map((f) => f.fieldName)
+            .filter((n) => n && !mappedPlatformNames.has(n));
 
           results.push({
             id: row.id,
