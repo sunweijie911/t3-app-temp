@@ -163,6 +163,15 @@ export interface SceneResourceField {
   hint?: string;
   /** true 时回复里会脱敏，写进 prompt 让 LLM 知道不必回显 */
   sensitive?: boolean;
+  /**
+   * 单选 / 多选字段的合法取值。
+   *
+   * 以前这份清单是管理员**手抄在场景 prompt 里**的（「支出分类：美妆产品 /
+   * 进货 / …」），飞书里加一个选项就过期 —— LLM 挑一个不存在的值，
+   * 写入要么失败要么写进脏数据。现在从字段映射派生，由字段选择器
+   * 从平台的 property.options 拉取后落库。
+   */
+  options?: string[];
 }
 
 /** 场景可操作的一个资源 —— 由 ResourceBinding 派生，喂给 prompt */
@@ -192,6 +201,15 @@ function fieldHintOf(mapping: FieldMappingValue): string | undefined {
   }
 }
 
+/** 取字段声明里的合法取值清单（只有 plain / multiSelect 有这个概念） */
+function fieldOptionsOf(mapping: FieldMappingValue): string[] | undefined {
+  if (typeof mapping === 'string') return undefined;
+  if (mapping.type !== 'plain' && mapping.type !== 'multiSelect') {
+    return undefined;
+  }
+  return mapping.options?.length ? mapping.options : undefined;
+}
+
 /** 把资源绑定派生成 prompt 侧的资源描述 */
 export function sceneResourceOf(binding: ResourceBinding): SceneResource {
   return {
@@ -203,6 +221,7 @@ export function sceneResourceOf(binding: ResourceBinding): SceneResource {
       key,
       hint: fieldHintOf(mapping),
       sensitive: typeof mapping === 'object' && mapping.sensitive === true,
+      options: fieldOptionsOf(mapping),
     })),
     uniqueKey: binding.uniqueKey,
   };
@@ -243,6 +262,8 @@ export interface MultiSelectFieldMapping {
   type: 'multiSelect';
   sensitive?: boolean;
   label?: string;
+  /** 合法取值清单，见 SceneResourceField.options */
+  options?: string[];
   /** 见 PlainFieldMapping.primary */
   primary?: boolean;
 }
@@ -275,6 +296,11 @@ export interface PlainFieldMapping {
    *   会误判大金额与文本日期，新配置由后台字段选择器显式写明
    */
   displayType?: 'number' | 'date' | 'text';
+  /**
+   * 单选字段的合法取值清单，见 SceneResourceField.options。
+   * 只对 SingleSelect 这类有枚举的列有意义，普通文本列留空。
+   */
+  options?: string[];
 }
 
 /** fieldMapping value 联合类型 */

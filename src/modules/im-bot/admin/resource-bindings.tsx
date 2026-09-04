@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  Alert,
   Button,
   Checkbox,
   Form,
@@ -27,12 +28,25 @@ import type { ResourceKind } from '../core/types';
 
 type DisplayTypeOption = 'date' | 'number' | 'text';
 
+/** checkResourceBindingDrift 返回的一行 */
+type DriftRow = {
+  id: string;
+  sceneId: string;
+  alias: string;
+  skipped: string | null;
+  missingOnPlatform: Array<{ logicalKey: string; platformName: string }>;
+  newOnPlatform: string[];
+  staleOptions: Array<{ logicalKey: string; stored: string[]; live: string[] }>;
+};
+
 type FetchedField = {
   fieldId: string;
   fieldName: string;
   uiType: string;
   suggestedType: 'plain' | 'link' | 'multiSelect';
   suggestedDisplayType: DisplayTypeOption;
+  /** 平台侧 property.options 拉回来的合法取值（单选/多选列才有） */
+  options?: string[] | null;
 };
 
 type FieldPickerSelection = Record<
@@ -171,6 +185,33 @@ export default function ImBotResourceBindingsPage() {
     onError: (err) => toast.error(err.message),
   });
 
+  /**
+   * 字段漂移检测。
+   *
+   * 为什么需要：prompt 里的字段清单是从 fieldMapping 自动派生的，但
+   * fieldMapping 本身只在点「从飞书拉取字段」时更新。飞书那边加列 / 改列名 /
+   * 加选项都不会同步过来，而三种都是**静默**的 —— 加列是"用户说了记不进去"，
+   * 改列名是写入报 InvalidFieldName，加选项是 LLM 挑一个不存在的值。
+   */
+  const [driftReport, setDriftReport] = useState<DriftRow[] | null>(null);
+  const checkDrift = api.imBot.admin.checkResourceBindingDrift.useMutation({
+    onSuccess: (rows) => {
+      setDriftReport(rows);
+      const dirty = rows.filter(
+        (r) =>
+          r.missingOnPlatform.length > 0 ||
+          r.newOnPlatform.length > 0 ||
+          r.staleOptions.length > 0,
+      );
+      if (dirty.length === 0) {
+        toast.success('所有绑定与飞书上的字段一致');
+      } else {
+        toast.warning(`${dirty.length} 个绑定与飞书字段不一致，见下方明细`);
+      }
+    },
+    onError: (err) => toast.error(`检测失败：${err.message}`),
+  });
+
   const deleteMutation = api.imBot.admin.deleteResourceBinding.useMutation({
     onSuccess: () => {
       toast.success('已删除');
@@ -298,7 +339,71 @@ export default function ImBotResourceBindingsPage() {
           >
             新增绑定
           </Button>
+          <Button
+            loading={checkDrift.isPending}
+            onClick={() => checkDrift.mutate({})}
+          >
+            检查字段漂移
+          </Button>
         </div>
+
+        {driftReport && (
+          <div style={{ marginBottom: 12 }}>
+            {driftReport.map((r) => {
+              const clean =
+                !r.skipped &&
+                r.missingOnPlatform.length === 0 &&
+                r.newOnPlatform.length === 0 &&
+                r.staleOptions.length === 0;
+              if (clean) return null;
+              return (
+                <Alert
+                  description={
+                    <div style={{ fontSize: 12 }}>
+                      {r.skipped && <div>{r.skipped}</div>}
+                      {r.missingOnPlatform.length > 0 && (
+                        <div>
+                          ❌ 映射里有、飞书上已没有（写入会报
+                          InvalidFieldName）：
+                          {r.missingOnPlatform
+                            .map((m) => `${m.logicalKey}→${m.platformName}`)
+                            .join('、')}
+                        </div>
+                      )}
+                      {r.newOnPlatform.length > 0 && (
+                        <div>
+                          ➕ 飞书上有、映射里没有（机器人完全不知道这些列）：
+                          {r.newOnPlatform.join('、')}
+                        </div>
+                      )}
+                      {r.staleOptions.length > 0 && (
+                        <div>
+                          🔄 单选取值已变（prompt 里的合法值过期，LLM
+                          会挑到不存在的值）：
+                          {r.staleOptions
+                            .map(
+                              (o) =>
+                                `${o.logicalKey}（存的 ${o.stored.join('/') || '空'} → 现在 ${o.live.join('/')}）`,
+                            )
+                            .join('；')}
+                        </div>
+                      )}
+                      <div style={{ marginTop: 4, color: '#888' }}>
+                        修复方式：编辑该绑定 → 重新「从飞书拉取字段」→ 生成 JSON
+                        → 保存
+                      </div>
+                    </div>
+                  }
+                  key={r.id}
+                  message={`${r.sceneId} / ${r.alias}`}
+                  showIcon
+                  style={{ marginBottom: 8 }}
+                  type={r.skipped ? 'info' : 'warning'}
+                />
+              );
+            })}
+          </div>
+        )}
 
         <Table
           columns={columns}
@@ -519,6 +624,23 @@ export default function ImBotResourceBindingsPage() {
           onCancel={() => setPickerOpen(false)}
           onOk={() => {
             if (!editing) return;
+            // 主标识必须选且只能选一个：缺了就退回代码里反复警告的启发式
+            // （fieldMapping 存 jsonb，键序被 Postgres 重排，"第一列是名称类"
+            // 不成立），删除确认会渲染成「利润=-108 / 月份=1月」这种认不出
+            // 是哪条的摘要。服务端也会拦，这里先给一句人话。
+            const chosenPrimaries = pickerFields.filter(
+              (f) =>
+                pickerSelection[f.fieldName]?.selected &&
+                pickerSelection[f.fieldName]?.primary,
+            );
+            if (editing.kind === 'table' && chosenPrimaries.length !== 1) {
+              toast.error(
+                chosenPrimaries.length === 0
+                  ? '请勾选一个字段作为主标识（候选列表与删除确认靠它认记录）'
+                  : '主标识只能有一个',
+              );
+              return;
+            }
             const result: Record<string, unknown> = {};
             for (const f of pickerFields) {
               const sel = pickerSelection[f.fieldName];
@@ -534,6 +656,8 @@ export default function ImBotResourceBindingsPage() {
                   displayType: sel.displayType,
                   ...(sel.sensitive ? { sensitive: true } : {}),
                   ...(sel.primary ? { primary: true } : {}),
+                  // 单选列的合法取值一并落库，注入 prompt 后 LLM 不会再自造
+                  ...(f.options?.length ? { options: f.options } : {}),
                 };
                 continue;
               }
@@ -559,6 +683,8 @@ export default function ImBotResourceBindingsPage() {
                 type: sel.type,
                 ...(sel.sensitive ? { sensitive: true } : {}),
                 ...(sel.primary ? { primary: true } : {}),
+                // multiSelect 同理
+                ...(f.options?.length ? { options: f.options } : {}),
               };
             }
             setEditing({

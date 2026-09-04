@@ -112,3 +112,75 @@ describe('资源类型标签（P1：doc 曾在 prompt 里自称"未实现"）', 
     expect(out).toContain('READ / APPEND / QUERY');
   });
 });
+
+describe('renderResourceSchema — 单选合法取值（回归）', () => {
+  it('把 options 渲染成"只能取"清单，替掉手抄进 prompt 的做法', () => {
+    const out = renderResourceSchema([
+      {
+        alias: '交易明细',
+        kind: 'table',
+        isDefault: true,
+        actions: ['CREATE', 'UPDATE', 'QUERY', 'DELETE'],
+        fields: [
+          {
+            key: '支出分类',
+            options: ['美妆产品', '进货', '代购'],
+          },
+          { key: '备注' },
+        ],
+      },
+    ]);
+    expect(out).toContain('只能取：美妆产品 / 进货 / 代购');
+    expect(out).toContain('不得自造、不得改写');
+    // 没有 options 的字段不产生这一行。注意不能断言 '只能取' ——
+    // 字段清单的表头「key 只能取下列字段名」本来就含这三个字
+    const afterPlainField = out.slice(out.indexOf('备注'));
+    expect(afterPlainField).not.toContain('只能取：');
+  });
+
+  it('options 为空数组时不渲染', () => {
+    const out = renderResourceSchema([
+      {
+        alias: 'T',
+        kind: 'table',
+        isDefault: true,
+        actions: ['QUERY'],
+        fields: [{ key: 'A', options: [] }],
+      },
+    ]);
+    expect(out).not.toContain('只能取：');
+  });
+});
+
+describe('sceneResourceOf — options 从 fieldMapping 派生', () => {
+  it('plain 与 multiSelect 的 options 都带出来，link 没有这个概念', () => {
+    const r = sceneResourceOf({
+      alias: 'T',
+      kind: 'table',
+      provider: 'feishu',
+      workspaceId: 'w',
+      resourceId: 't',
+      isDefault: true,
+      fieldMapping: {
+        支出分类: {
+          name: '支出分类',
+          type: 'plain',
+          options: ['进货', '代购'],
+        },
+        标签: { name: '标签', type: 'multiSelect', options: ['A', 'B'] },
+        学校: {
+          name: '学校',
+          type: 'link',
+          linkTableId: 'tbl2',
+          displayField: '名称',
+        },
+        备注: '备注',
+      },
+    });
+    const byKey = Object.fromEntries(r.fields.map((f) => [f.key, f.options]));
+    expect(byKey.支出分类).toEqual(['进货', '代购']);
+    expect(byKey.标签).toEqual(['A', 'B']);
+    expect(byKey.学校).toBeUndefined();
+    expect(byKey.备注).toBeUndefined();
+  });
+});

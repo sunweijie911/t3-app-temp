@@ -56,6 +56,8 @@ export const FIELD_MAPPING_SCHEMA = z.record(
       sensitive: z.boolean().optional(),
       label: z.string().optional(),
       primary: z.boolean().optional(),
+      /** 平台侧 property.options 派生的合法取值 */
+      options: z.array(z.string()).optional(),
     }),
     z.object({
       name: z.string(),
@@ -64,6 +66,8 @@ export const FIELD_MAPPING_SCHEMA = z.record(
       label: z.string().optional(),
       displayType: z.enum(['number', 'date', 'text']).optional(),
       primary: z.boolean().optional(),
+      /** 平台侧 property.options 派生的合法取值（单选列） */
+      options: z.array(z.string()).optional(),
     }),
   ]),
 );

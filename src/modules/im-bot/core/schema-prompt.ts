@@ -35,6 +35,17 @@ export function renderResourceSchema(resources: SceneResource[]): string {
           .filter(Boolean)
           .join('；');
         lines.push(`  - ${f.key}${notes ? `（${notes}）` : ''}`);
+        // 单选/多选的合法取值紧跟在字段下面。
+        //
+        // 这份清单以前要管理员**手抄进场景 prompt**（「支出分类：美妆产品 /
+        // 进货 / …」），飞书里加一个选项就过期 —— LLM 挑一个不存在的值，
+        // 平台要么拒收要么写进脏数据，而且没人会发现。
+        // 现在从 fieldMapping 派生，与字段清单同源同步。
+        if (f.options?.length) {
+          lines.push(
+            `    只能取：${f.options.join(' / ')}（原样取用，不得自造、不得改写）`,
+          );
+        }
       }
     }
 

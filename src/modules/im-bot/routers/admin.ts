@@ -117,6 +117,113 @@ function suggestDisplayType(
   return 'text';
 }
 
+/** 取选项名，过滤空值。只有 SingleSelect / MultiSelect 这类列有 options */
+function optionNamesOf(
+  options: Array<{ name?: string }> | undefined,
+): string[] | undefined {
+  if (!options?.length) return undefined;
+  const names = options
+    .map((o) => o.name?.trim())
+    .filter((n): n is string => !!n);
+  return names.length > 0 ? names : undefined;
+}
+
+/** 从 fieldMapping 的一个 value 里取平台侧列名 */
+function platformNameOf(mapping: unknown): string | null {
+  if (typeof mapping === 'string') return mapping;
+  if (mapping && typeof mapping === 'object') {
+    const name = (mapping as { name?: unknown }).name;
+    if (typeof name === 'string') return name;
+  }
+  return null;
+}
+
+/** 从 fieldMapping 的一个 value 里取已存的合法取值 */
+function storedOptionsOf(mapping: unknown): string[] {
+  if (!mapping || typeof mapping !== 'object') return [];
+  const opts = (mapping as { options?: unknown }).options;
+  return Array.isArray(opts) ? opts.filter((o) => typeof o === 'string') : [];
+}
+
+/** fieldMapping 里被标为主标识的逻辑键 */
+function primaryKeysOf(fieldMapping: Record<string, unknown>): string[] {
+  return Object.entries(fieldMapping)
+    .filter(
+      ([, v]) =>
+        v &&
+        typeof v === 'object' &&
+        (v as { primary?: unknown }).primary === true,
+    )
+    .map(([k]) => k);
+}
+
+/** 飞书 fields 接口返回的一列 */
+interface LiveBitableField {
+  field_id: string;
+  field_name: string;
+  type: number;
+  ui_type?: string;
+  property?: {
+    multiple?: boolean;
+    /** 单选 / 多选列的可选项，用来生成 prompt 里的合法取值清单 */
+    options?: Array<{ name?: string }>;
+  };
+}
+
+/** 单页字段数上限。翻页拉完，避免宽表（>100 列）静默丢字段 */
+const FIELDS_PAGE_SIZE = 100;
+const FIELDS_MAX_PAGES = 5;
+
+/**
+ * 拉取一张多维表当前的全部列。字段选择器与漂移检测共用。
+ *
+ * 会翻页：以前固定 `page_size=100` 且不翻页，>100 列的表会**静默丢字段**
+ * —— 丢掉的列既进不了 fieldMapping，也就永远不会出现在 prompt 里。
+ */
+async function fetchLiveBitableFields(
+  workspaceId: string,
+  tableId: string,
+): Promise<LiveBitableField[]> {
+  const token = await feishuTokenManager.getToken();
+  const all: LiveBitableField[] = [];
+  let pageToken: string | undefined;
+
+  for (let page = 0; page < FIELDS_MAX_PAGES; page++) {
+    const query = `page_size=${FIELDS_PAGE_SIZE}${
+      pageToken ? `&page_token=${encodeURIComponent(pageToken)}` : ''
+    }`;
+    const res = await fetch(
+      `https://open.feishu.cn/open-apis/bitable/v1/apps/${workspaceId}/tables/${tableId}/fields?${query}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        signal: AbortSignal.timeout(10_000),
+      },
+    );
+    if (!res.ok) {
+      throw new Error(`飞书 API HTTP 错误: ${res.status} ${res.statusText}`);
+    }
+    const data = (await res.json()) as {
+      code: number;
+      msg?: string;
+      data?: {
+        items?: LiveBitableField[];
+        has_more?: boolean;
+        page_token?: string;
+      };
+    };
+    if (data.code !== 0) {
+      throw new Error(`飞书 API 错误: ${data.msg ?? data.code}`);
+    }
+    all.push(...(data.data?.items ?? []));
+    if (!data.data?.has_more || !data.data.page_token) break;
+    pageToken = data.data.page_token;
+  }
+  return all;
+}
+
 /** 业务时区固定 CST(+08:00)，与飞书日期字段的处理保持一致 */
 const BUSINESS_TZ_OFFSET_MS = 8 * 60 * 60 * 1000;
 
@@ -376,7 +483,27 @@ export const imBotAdminRouter = createTRPCRouter({
         .refine((v) => v.kind !== 'doc' || v.provider === 'feishu', {
           message: '文档资源目前只支持飞书（钉钉 / 企微文档适配器尚未实现）',
           path: ['provider'],
-        }),
+        })
+        // 主标识只能有一个：多个的话"优先展示主标识"就没有确定含义了
+        .refine((v) => primaryKeysOf(v.fieldMapping).length <= 1, {
+          message: '只能有一个字段标记为主标识（primary: true）',
+          path: ['fieldMapping'],
+        })
+        // 表格必须有主标识。缺了就退回代码里反复警告的启发式：
+        // fieldMapping 存在 jsonb 里，Postgres 按「键长度 + 字节序」重排键，
+        // "第一列是名称类"的假设不成立 —— 实测删除确认会渲染成
+        // 「利润=-108 / 备注=… / 月份=1月」，用户判断不出要删哪条
+        .refine(
+          (v) =>
+            v.kind !== 'table' ||
+            Object.keys(v.fieldMapping).length === 0 ||
+            primaryKeysOf(v.fieldMapping).length === 1,
+          {
+            message:
+              '表格资源必须指定一个主标识字段（候选列表、删除确认、查询投影都靠它定位记录）',
+            path: ['fieldMapping'],
+          },
+        ),
     )
     .mutation(async ({ ctx, input }) => {
       const id = input.id ?? nanoid();
@@ -481,37 +608,10 @@ export const imBotAdminRouter = createTRPCRouter({
       }),
     )
     .mutation(async ({ input }) => {
-      const token = await feishuTokenManager.getToken();
-      const res = await fetch(
-        `https://open.feishu.cn/open-apis/bitable/v1/apps/${input.workspaceId}/tables/${input.tableId}/fields?page_size=100`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          signal: AbortSignal.timeout(10_000),
-        },
+      const items = await fetchLiveBitableFields(
+        input.workspaceId,
+        input.tableId,
       );
-      if (!res.ok) {
-        throw new Error(`飞书 API HTTP 错误: ${res.status} ${res.statusText}`);
-      }
-      const data = (await res.json()) as {
-        code: number;
-        msg?: string;
-        data?: {
-          items?: Array<{
-            field_id: string;
-            field_name: string;
-            type: number;
-            ui_type?: string;
-            property?: { multiple?: boolean };
-          }>;
-        };
-      };
-      if (data.code !== 0) {
-        throw new Error(`飞书 API 错误: ${data.msg ?? data.code}`);
-      }
-      const items = data.data?.items ?? [];
       // ui_type 参考 飞书 OpenAPI；这里只用到几个常见值映射建议类型
       return items.map((it) => ({
         fieldId: it.field_id,
@@ -520,7 +620,126 @@ export const imBotAdminRouter = createTRPCRouter({
         // 给前端的建议映射类型；admin 仍可手动覆盖
         suggestedType: suggestMappingType(it.ui_type, it.property?.multiple),
         suggestedDisplayType: suggestDisplayType(it.ui_type),
+        // 合法取值。以前只取了 ui_type 和 multiple，options 白白丢掉，
+        // 于是管理员只能把「支出分类：美妆产品 / 进货 / …」手抄进
+        // 场景 prompt，飞书里一改选项就过期
+        options: optionNamesOf(it.property?.options),
       }));
+    }),
+
+  /**
+   * 字段漂移检测：把绑定里存的 fieldMapping 与飞书上**当前真实**的列对一遍。
+   *
+   * 为什么必须有：prompt 里的字段清单是从 fieldMapping 派生的（这一步是
+   * 自动的），但 fieldMapping 本身只在管理员点「拉取字段」时才更新。于是
+   * - 飞书**加一列** → LLM 不知道这列存在，用户说了也记不进去，且无任何提示
+   * - 飞书**改列名** → 映射里还是旧的平台名，写入直接 InvalidFieldName
+   * - 单选**加选项** → prompt 里的合法取值过期，LLM 挑一个不存在的值
+   * 三种都是静默的，只能靠主动比对暴露出来。
+   *
+   * 为什么不放在加载绑定时自动做：getDispatcher() 是在**回调 ack 之前**
+   * 被 await 的，每张表加一次 API 调用会直接恶化 3 秒 ack 预算。
+   * 所以做成管理员按需触发的诊断，不进热路径。
+   */
+  checkResourceBindingDrift: adminProcedure
+    .input(z.object({ id: z.string().optional() }).default({}))
+    .mutation(async ({ ctx, input }) => {
+      const rows = await ctx.db
+        .select()
+        .from(botResourceBindings)
+        .where(
+          input.id
+            ? eq(botResourceBindings.id, input.id)
+            : eq(botResourceBindings.isActive, true),
+        );
+
+      const results = [];
+      for (const row of rows) {
+        // 只有飞书表格能查字段；其余原样跳过并说明原因
+        if (row.kind !== 'table' || row.provider !== 'feishu') {
+          results.push({
+            id: row.id,
+            sceneId: row.sceneId,
+            alias: row.alias,
+            skipped: `${row.kind} / ${row.provider} 暂不支持字段比对`,
+            missingOnPlatform: [],
+            newOnPlatform: [],
+            staleOptions: [],
+          });
+          continue;
+        }
+
+        const mapping = (row.fieldMapping ?? {}) as Record<string, unknown>;
+        try {
+          const live = await fetchLiveBitableFields(
+            row.workspaceId,
+            row.resourceId,
+          );
+          const liveByName = new Map(live.map((f) => [f.field_name, f]));
+
+          /** 映射里有、平台上已经没有的列 —— 写入会报 InvalidFieldName */
+          const missingOnPlatform: Array<{
+            logicalKey: string;
+            platformName: string;
+          }> = [];
+          /** 单选取值对不上 —— prompt 里的合法值过期了 */
+          const staleOptions: Array<{
+            logicalKey: string;
+            stored: string[];
+            live: string[];
+          }> = [];
+
+          for (const [logicalKey, value] of Object.entries(mapping)) {
+            const platformName = platformNameOf(value);
+            if (!platformName) continue;
+            const liveField = liveByName.get(platformName);
+            if (!liveField) {
+              missingOnPlatform.push({ logicalKey, platformName });
+              continue;
+            }
+            const liveOptions = optionNamesOf(liveField.property?.options);
+            if (!liveOptions) continue;
+            const stored = storedOptionsOf(value);
+            const same =
+              stored.length === liveOptions.length &&
+              stored.every((o, i) => o === liveOptions[i]);
+            if (!same) {
+              staleOptions.push({ logicalKey, stored, live: liveOptions });
+            }
+          }
+
+          const mappedPlatformNames = new Set(
+            Object.values(mapping)
+              .map(platformNameOf)
+              .filter((n): n is string => !!n),
+          );
+          /** 平台上有、映射里没有的列 —— LLM 完全不知道它存在 */
+          const newOnPlatform = live
+            .map((f) => f.field_name)
+            .filter((n) => !mappedPlatformNames.has(n));
+
+          results.push({
+            id: row.id,
+            sceneId: row.sceneId,
+            alias: row.alias,
+            skipped: null,
+            missingOnPlatform,
+            newOnPlatform,
+            staleOptions,
+          });
+        } catch (err) {
+          results.push({
+            id: row.id,
+            sceneId: row.sceneId,
+            alias: row.alias,
+            skipped: `拉取字段失败：${err instanceof Error ? err.message : String(err)}`,
+            missingOnPlatform: [],
+            newOnPlatform: [],
+            staleOptions: [],
+          });
+        }
+      }
+      return results;
     }),
 
   listEventLogs: adminProcedure
