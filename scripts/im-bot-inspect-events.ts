@@ -7,8 +7,8 @@
  * 待确认**（正常应接近 0，长期堆积说明有用户被卡在等待态）。
  *
  * 用法：
- *   npx tsx --env-file=.env scripts/im-bot-inspect-events.mts        # 最近 30 条
- *   npx tsx --env-file=.env scripts/im-bot-inspect-events.mts 97     # id > 97 的增量
+ *   npx tsx --env-file=.env scripts/im-bot-inspect-events.ts        # 最近 30 条
+ *   npx tsx --env-file=.env scripts/im-bot-inspect-events.ts 97     # id > 97 的增量
  *
  * 增量看法：每次输出末尾会给出「最新 id」，下次拿它当参数就是增量。
  */
@@ -46,6 +46,40 @@ const rows = await db
   .orderBy(asc(botEventLogs.id));
 
 console.log(`=== 共 ${rows.length} 条事件 (id > ${from}) ===\n`);
+
+/**
+ * resultData 的形状 —— 由 dispatcher 的 summarizeRequest / summarizeResult 写入。
+ * 只声明这个脚本会读的字段，不求完整。
+ */
+interface EventResultData {
+  request?: {
+    confidence?: number;
+    filters?: Record<string, string>;
+    fieldKeys?: string[];
+    projectFields?: string[];
+    aggregate?: { op: string; field?: string; groupBy?: string };
+  };
+  attempts?: number;
+  retriedFrom?: string[];
+  aggregate?: {
+    value?: number;
+    groupCount?: number;
+    recordCount?: number;
+    skipped?: number;
+  };
+  recordCount?: number;
+  deleted?: number;
+  updated?: number;
+  updatedAll?: boolean;
+  failed?: number;
+  pendingType?: string;
+  picked?: number;
+  aborted?: string;
+  droppedFields?: string[];
+  /** summarizeResult 写入的执行错误（已截断到 200 字） */
+  error?: string;
+  success?: boolean;
+}
 
 const icon: Record<string, string> = {
   success: '✅',

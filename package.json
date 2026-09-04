@@ -18,7 +18,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
     "db:seed": "tsx --env-file=.env scripts/seed-test-data.ts",
-    "im-bot:events": "tsx --env-file=.env scripts/im-bot-inspect-events.mts",
+    "im-bot:events": "tsx --env-file=.env scripts/im-bot-inspect-events.ts",
     "db:encrypt-id-cards": "tsx --env-file=.env scripts/encrypt-id-cards.ts",
     "db:studio": "drizzle-kit studio",
     "dev": "next dev --turbo",

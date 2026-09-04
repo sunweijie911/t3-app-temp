@@ -13,7 +13,7 @@
  * 是干跑（dry run），随手执行一下就往财务表里写了条数据。
  *
  * 用法：
- *   npx tsx --env-file=.env scripts/im-bot-send-message.mts "本月支出合计"
+ *   npx tsx --env-file=.env scripts/im-bot-send-message.ts "本月支出合计"
  *
  * 可用 env 覆盖：
  *   SIM_CHAT_ID       目标群（默认 AI测试群）
@@ -45,12 +45,24 @@ const ENDPOINT =
  */
 const BOT_OPEN_ID = process.env.SIM_BOT_OPEN_ID ?? 'ou_bot';
 
-const encryptKey = process.env.IM_BOT_FEISHU_ENCRYPT_KEY;
-const verificationToken = process.env.IM_BOT_FEISHU_VERIFICATION_TOKEN;
-if (!encryptKey || !verificationToken) {
-  console.error('缺少 IM_BOT_FEISHU_ENCRYPT_KEY / VERIFICATION_TOKEN');
-  process.exit(1);
+/**
+ * 读一个必填 env。
+ *
+ * 写成函数是为了让返回类型就是 `string`：模块顶层用
+ * `if (!x) process.exit(1)` 收窄，TS 不会把这个收窄带进后面的函数体，
+ * 于是 encryptKey 在 main() 里仍是 `string | undefined`。
+ */
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    console.error(`缺少环境变量 ${name}`);
+    process.exit(1);
+  }
+  return value;
 }
+
+const encryptKey = requireEnv('IM_BOT_FEISHU_ENCRYPT_KEY');
+const verificationToken = requireEnv('IM_BOT_FEISHU_VERIFICATION_TOKEN');
 
 /** 飞书事件加密：AES-256-CBC，key=sha256(encryptKey)，iv 放在密文头部 16 字节 */
 function encryptFeishuEvent(plain: string, key: string): string {
@@ -65,7 +77,7 @@ const text = process.argv.slice(2).join(' ');
 if (!text) {
   console.error(
     '需要给一条消息内容。\n' +
-      '  npx tsx --env-file=.env scripts/im-bot-send-message.mts "本月支出合计"',
+      '  npx tsx --env-file=.env scripts/im-bot-send-message.ts "本月支出合计"',
   );
   process.exit(1);
 }
@@ -126,7 +138,7 @@ async function main() {
   console.log(`webhook 响应 ${res.status} (${Date.now() - started}ms):`, body);
   console.log(
     '\n处理是异步的（after()），回复会在几秒后出现在群里。',
-    '\n用 scripts/im-bot-inspect-events.mts 看这条事件的解析细节。',
+    '\n用 scripts/im-bot-inspect-events.ts 看这条事件的解析细节。',
     '\n若群里毫无反应，先看 SIM_BOT_OPEN_ID 的说明。',
   );
 }
