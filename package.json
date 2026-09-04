@@ -86,6 +86,7 @@
       "isnot",
       "isnotempty",
       "jsapi",
+      "LWCP",
       "mbti",
       "msgid",
       "msgtype",
@@ -107,7 +108,8 @@
       "varchar",
       "wbout",
       "wecom",
-      "wedoc"
+      "wedoc",
+      "weixin"
     ],
     "ignorePaths": [
       "drizzle/**"

@@ -1,6 +1,7 @@
 import { clampReplyBytes } from '../core/field-render';
 import type { ChatType, UnifiedMessage } from '../core/types';
 import { getWecomCredentials } from '../services/credentials';
+import { stripLeadingMention } from './mention';
 import type { ChannelAdapter, DecodeResult } from './types';
 import {
   callbackSignature,
@@ -28,11 +29,40 @@ export interface WecomReplyContext {
   chatType: ChatType;
 }
 
+/**
+ * webhook_url 允许的域。
+ *
+ * 企微这边的风险比钉钉小 —— 密文经 AES 加密、签名覆盖密文，伪造 body
+ * 需要 encodingAesKey。但纵深防御的成本是零，而一旦这个 URL 被换掉，
+ * 泄漏出去的是整张表的查询结果。与钉钉侧保持同一道关。
+ */
+const WECOM_WEBHOOK_HOSTS = ['qyapi.weixin.qq.com'];
+
+export function isWecomWebhookHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return WECOM_WEBHOOK_HOSTS.some(
+    (allowed) => host === allowed || host.endsWith(`.${allowed}`),
+  );
+}
+
 export function readWecomReplyContext(raw: unknown): WecomReplyContext | null {
   if (!raw || typeof raw !== 'object') return null;
   const o = raw as Record<string, unknown>;
   const url = o.webhook_url;
   if (typeof url !== 'string' || !url.startsWith('https://')) return null;
+  let host: string;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return null;
+  }
+  if (!isWecomWebhookHost(host)) {
+    console.error(
+      '[WecomChannel] 拒绝非企微域的 webhook_url，疑似伪造回调, host=',
+      host,
+    );
+    return null;
+  }
   return {
     webhookUrl: url,
     chatId: typeof o.chatid === 'string' ? o.chatid : '',
@@ -191,8 +221,6 @@ export class WecomChannelAdapter implements ChannelAdapter {
         reason: `非文本消息 (${String(body.msgtype)})`,
       };
     }
-    const content = body.text?.content?.trim();
-    if (!content) return { kind: 'ignored', reason: '正文为空' };
 
     const senderId = body.from?.userid;
     if (!senderId) return { kind: 'ignored', reason: '缺少发送者 userid' };
@@ -201,6 +229,14 @@ export class WecomChannelAdapter implements ChannelAdapter {
     if (!msgId) return { kind: 'ignored', reason: '缺少 msgid' };
 
     const chatType: ChatType = body.chattype === 'single' ? 'p2p' : 'group';
+
+    // 群聊剥掉开头的 "@机器人昵称"。飞书剥 `@_user_N` 占位符、钉钉剥
+    // `@昵称`，唯独企微以前是原样透传 —— 带 @ 的正文会进 LLM，也会原样
+    // 落进审计日志。正文不以 @ 开头时该函数原样返回，所以即便企微某些
+    // 场景下本来就不带前缀，这一步也是无害的。
+    let content = (body.text?.content ?? '').trim();
+    if (chatType === 'group') content = stripLeadingMention(content);
+    if (!content) return { kind: 'ignored', reason: '正文为空' };
 
     return {
       kind: 'ok',

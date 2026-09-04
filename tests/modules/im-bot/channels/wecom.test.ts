@@ -295,3 +295,103 @@ describe('WecomChannelAdapter.reply — 按平台字节上限截断', () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe('WecomChannelAdapter — 群聊剥 @机器人 前缀', () => {
+  // 飞书剥 `@_user_N` 占位符、钉钉剥 `@昵称`，企微以前原样透传 ——
+  // 带 @ 的正文会直接进 LLM，也会原样落进审计日志的 content 列
+  it('群聊剥掉开头的 @机器人', async () => {
+    const r = await adapter.decode(
+      makeCallback({
+        ...botPayload,
+        text: { content: '@小助手 新增项目 督导2.0' },
+      }),
+    );
+    expect(r.kind).toBe('ok');
+    if (r.kind === 'ok') expect(r.message.content).toBe('新增项目 督导2.0');
+  });
+
+  it('只剥一次，后面的 @张三 是业务内容要保留', async () => {
+    const r = await adapter.decode(
+      makeCallback({
+        ...botPayload,
+        text: { content: '@小助手 @张三的项目进度' },
+      }),
+    );
+    expect(r.kind).toBe('ok');
+    if (r.kind === 'ok') expect(r.message.content).toBe('@张三的项目进度');
+  });
+
+  it('只 @ 了机器人什么都没写 → 按正文为空丢弃', async () => {
+    const r = await adapter.decode(
+      makeCallback({ ...botPayload, text: { content: '@小助手' } }),
+    );
+    expect(r.kind).toBe('ignored');
+  });
+
+  it('单聊不剥 —— 私聊「@张三 的进度」不能被吃掉第一个 token', async () => {
+    const r = await adapter.decode(
+      makeCallback({
+        ...botPayload,
+        chattype: 'single',
+        chatid: '',
+        text: { content: '@张三 的进度' },
+      }),
+    );
+    expect(r.kind).toBe('ok');
+    if (r.kind === 'ok') expect(r.message.content).toBe('@张三 的进度');
+  });
+
+  it('正文本来就不带 @ 时原样保留（对不加前缀的场景无害）', async () => {
+    const r = await adapter.decode(makeCallback(botPayload));
+    expect(r.kind).toBe('ok');
+    if (r.kind === 'ok') expect(r.message.content).toBe('新增项目 督导2.0');
+  });
+});
+
+describe('WecomChannelAdapter — webhook_url 域名白名单', () => {
+  it('非企微域被拒绝，reply 不发请求', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    await adapter.reply(
+      {
+        platform: 'wecom',
+        eventId: 'e',
+        messageId: 'm',
+        chatId: 'c',
+        chatType: 'group',
+        senderId: 's',
+        senderName: 'n',
+        content: 'x',
+        timestamp: Date.now(),
+        raw: { webhook_url: 'https://attacker.example/collect' },
+      },
+      '机密数据',
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it('企微自己的域名照常通过', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(
+        new Response(JSON.stringify({ errcode: 0 }), { status: 200 }),
+      );
+    await adapter.reply(
+      {
+        platform: 'wecom',
+        eventId: 'e',
+        messageId: 'm',
+        chatId: 'c',
+        chatType: 'group',
+        senderId: 's',
+        senderName: 'n',
+        content: 'x',
+        timestamp: Date.now(),
+        raw: botPayload,
+      },
+      'hi',
+    );
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    fetchSpy.mockRestore();
+  });
+});

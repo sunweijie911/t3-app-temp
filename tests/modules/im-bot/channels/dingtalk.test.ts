@@ -420,3 +420,122 @@ describe('@ 前缀只在群聊剥离（P2）', () => {
     expect(r.kind).toBe('ignored');
   });
 });
+
+describe('DingtalkChannelAdapter — sessionWebhook 域名白名单', () => {
+  // 钉钉的签名是 HMAC(secret, timestamp + "\n" + secret)，**不覆盖请求体**。
+  // 抓到一次合法的 (timestamp, sign) 就能配任意 body 重放，所以 body 里的
+  // sessionWebhook 必须当成不可信输入 —— 否则伪造一条回调就能把查询结果
+  // POST 到站外。
+  const attackerWebhook = 'https://attacker.example/collect';
+
+  it('非钉钉域的 sessionWebhook 被 readDingtalkReplyContext 拒绝', () => {
+    expect(
+      readDingtalkReplyContext({ sessionWebhook: attackerWebhook }),
+    ).toBeNull();
+  });
+
+  it('伪造成子域的 oapi.dingtalk.com.evil.com 也被拒绝', () => {
+    expect(
+      readDingtalkReplyContext({
+        sessionWebhook: 'https://oapi.dingtalk.com.evil.com/robot/send',
+      }),
+    ).toBeNull();
+  });
+
+  it('钉钉自己的域名照常通过', () => {
+    expect(
+      readDingtalkReplyContext({
+        sessionWebhook: 'https://oapi.dingtalk.com/robot/sendBySession?s=1',
+      }),
+    ).not.toBeNull();
+    expect(
+      readDingtalkReplyContext({
+        sessionWebhook: 'https://api.dingtalk.com/v1.0/robot/send',
+      }),
+    ).not.toBeNull();
+  });
+
+  it('非法 URL 不抛异常，返回 null', () => {
+    expect(
+      readDingtalkReplyContext({ sessionWebhook: 'https://[not a url' }),
+    ).toBeNull();
+  });
+
+  it('decode 在执行业务之前就拦掉外部域，不返回 ok', async () => {
+    // 关键：必须拦在 decode，而不是等处理完卡在 reply —— 否则伪造的回调
+    // 会先把表查一遍/改一遍，只是回复发不出去
+    const res = await adapter.decode(
+      makeReq({ ...basePayload, sessionWebhook: attackerWebhook }),
+    );
+    expect(res.kind).toBe('ignored');
+    if (res.kind === 'ignored') {
+      expect(res.reason).toContain('sessionWebhook');
+    }
+  });
+
+  it('reply 遇到外部域时不发出任何请求', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    await adapter.reply(
+      {
+        platform: 'dingtalk',
+        eventId: 'e',
+        messageId: 'm',
+        chatId: 'c',
+        chatType: 'group',
+        senderId: 's',
+        senderName: 'n',
+        content: 'x',
+        timestamp: Date.now(),
+        raw: { sessionWebhook: attackerWebhook },
+      },
+      '机密数据',
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+});
+
+describe('DingtalkChannelAdapter — chatbotUserId 校验', () => {
+  it('未配置时跳过校验，保持旧行为', async () => {
+    const res = await adapter.decode(makeReq());
+    expect(res.kind).toBe('ok');
+  });
+
+  it('配置后不匹配则拒绝', async () => {
+    mockCreds.mockResolvedValue({
+      appKey: 'key',
+      appSecret: 'secret',
+      botSecret: SECRET,
+      chatbotUserId: '$:LWCP_v1:$mine',
+    });
+    const res = await adapter.decode(
+      makeReq({ ...basePayload, chatbotUserId: '$:LWCP_v1:$someone-else' }),
+    );
+    expect(res.kind).toBe('reject');
+    if (res.kind === 'reject') expect(res.status).toBe(403);
+  });
+
+  it('配置后匹配则放行', async () => {
+    mockCreds.mockResolvedValue({
+      appKey: 'key',
+      appSecret: 'secret',
+      botSecret: SECRET,
+      chatbotUserId: '$:LWCP_v1:$mine',
+    });
+    const res = await adapter.decode(
+      makeReq({ ...basePayload, chatbotUserId: '$:LWCP_v1:$mine' }),
+    );
+    expect(res.kind).toBe('ok');
+  });
+
+  it('配置后回调里没带 chatbotUserId 也拒绝', async () => {
+    mockCreds.mockResolvedValue({
+      appKey: 'key',
+      appSecret: 'secret',
+      botSecret: SECRET,
+      chatbotUserId: '$:LWCP_v1:$mine',
+    });
+    const res = await adapter.decode(makeReq(basePayload));
+    expect(res.kind).toBe('reject');
+  });
+});

