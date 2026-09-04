@@ -58,6 +58,34 @@ function maybeGc() {
  * `DO UPDATE SET count = count + 1 RETURNING count` 直接拿到累计值。
  * 没有读改写，也就没有并发窗口。
  */
+/**
+ * 限流不可用的原因。
+ *
+ * fail-open 对**临时 DB 抖动**是对的，但对**表根本不存在**这种永久性
+ * 配置缺失就错了：实测一轮 21 条刷屏消息全部放行、各花一次 LLM 调用，
+ * 而运维面上什么都看不到 —— 你以为限流在保护你，其实一次都没生效。
+ * 所以把状态记下来，由 getSharedStateStats 暴露到后台。
+ */
+let rateLimitOutage: {
+  reason: string;
+  permanent: boolean;
+  since: Date;
+} | null = null;
+/** 同一个原因最多每分钟打一条日志，避免刷屏时把日志刷爆 */
+let lastOutageLogAt = 0;
+const OUTAGE_LOG_INTERVAL_MS = 60 * 1000;
+
+/** 限流当前是否可用（null = 正常）。供后台观测 */
+export function getRateLimitOutage() {
+  return rateLimitOutage;
+}
+
+/** Postgres 42P01 = undefined_table，说明迁移没跑，不是临时故障 */
+function isMissingTable(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return code === '42P01';
+}
+
 export class DbRateLimitStore implements RateLimitStore {
   async hit(
     key: PendingKeyParts,
@@ -78,11 +106,28 @@ export class DbRateLimitStore implements RateLimitStore {
           set: { count: sql`${botRateLimits.count} + 1` },
         })
         .returning({ count: botRateLimits.count });
+      rateLimitOutage = null;
       return row?.count ?? 1;
     } catch (err) {
-      // 与幂等判定同理：DB 故障时**放行**。限流是成本闸门，
-      // 不是安全边界；因为计数表挂了就让所有人用不了机器人显然更糟。
-      console.error('[DbRateLimitStore] 计数失败，放行本次处理:', err);
+      // 仍然 fail-open：限流是成本闸门，不是安全边界；因为计数表挂了
+      // 就让所有人用不了机器人显然更糟。但要让"没生效"这件事可见。
+      const permanent = isMissingTable(err);
+      const reason = permanent
+        ? '限流表不存在，迁移未执行（pnpm db:migrate）'
+        : err instanceof Error
+          ? err.message
+          : String(err);
+      if (!rateLimitOutage || rateLimitOutage.permanent !== permanent) {
+        rateLimitOutage = { reason, permanent, since: new Date() };
+      }
+      if (now - lastOutageLogAt > OUTAGE_LOG_INTERVAL_MS) {
+        lastOutageLogAt = now;
+        console.error(
+          permanent
+            ? `[DbRateLimitStore] ⚠️ 限流未生效（${reason}）—— 所有消息都会被放行，每条都消耗 LLM 调用`
+            : `[DbRateLimitStore] 计数失败，放行本次处理: ${reason}`,
+        );
+      }
       return 1;
     }
   }

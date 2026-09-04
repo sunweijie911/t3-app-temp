@@ -26,6 +26,7 @@ import {
   reloadBotConfig,
   reloadPlatformCredentials,
 } from '../services/bot-engine';
+import { getRateLimitOutage } from '../services/db-stores';
 
 /**
  * 把 credentials 中的 secret 字段替换为 mask 占位符，避免明文回传浏览器。
@@ -854,6 +855,11 @@ export const imBotAdminRouter = createTRPCRouter({
       pendingTotal: pendingTotal[0]?.total ?? 0,
       /** 未过期的待确认数 —— 正常应该接近 0 */
       pendingLive: pendingLive[0]?.total ?? 0,
+      /**
+       * 限流是否处于"未生效"状态。限流故障时刻意 fail-open（放行），
+       * 所以从群里的表现完全看不出它没工作 —— 必须在这里暴露出来。
+       */
+      rateLimitOutage: getRateLimitOutage(),
     };
   }),
 

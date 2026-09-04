@@ -3037,3 +3037,110 @@ describe('Dispatcher — 新错误文案与重试分类的配合', () => {
     expect(channel.lastReply).toContain('需要指定统计哪个字段');
   });
 });
+
+describe('Dispatcher — 审计留痕修补（实测暴露的观测缺口）', () => {
+  function makeAuditedD(events: BotEvent[]) {
+    const d = new Dispatcher({
+      getBinding: () => baseBinding,
+      pendingStore: new MemoryPendingActionStore(),
+      onEvent: (e) => {
+        events.push(e);
+      },
+    });
+    d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    return d;
+  }
+
+  it('★ AGGREGATE 必须记下算了什么、算出多少', async () => {
+    // 回归：实测「这个月毛利合计」记成一条 success，而 resultData 里
+    // 既没有 op 也没有 field —— 无法判断它到底统计了哪一列。
+    // 这个能力的核心风险就是"错的数字和对的数字长得一模一样"。
+    const events: BotEvent[] = [];
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { recordId: 'r1', fields: { 项目名称: 'A', Node版本: '100' } },
+      { recordId: 'r2', fields: { 项目名称: 'B', Node版本: '200' } },
+    ]);
+    const d = makeAuditedD(events);
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"AGGREGATE","fields":{},"filters":{},"aggregate":{"op":"sum","field":"Node版本"},"confidence":0.9,"summary":"合计"}',
+    );
+
+    await d.process(makeMsg({ content: '台账 合计' }), channel);
+
+    const last = events.at(-1);
+    const rd = last?.resultData as Record<string, unknown> & {
+      request: { aggregate?: unknown };
+      aggregate?: unknown;
+    };
+    // 请求侧：算子与字段
+    expect(rd.request.aggregate).toEqual({ op: 'sum', field: 'Node版本' });
+    // 结果侧：算出来的值与参与条数
+    expect(rd.aggregate).toMatchObject({
+      op: 'sum',
+      field: 'Node版本',
+      recordCount: 2,
+      value: 300,
+    });
+  });
+
+  it('分组聚合只记组数，不记组名（按敏感字段分组时组名就是它的值）', async () => {
+    const events: BotEvent[] = [];
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { recordId: 'r1', fields: { 项目名称: 'A', Node版本: '100' } },
+      { recordId: 'r2', fields: { 项目名称: 'B', Node版本: '200' } },
+    ]);
+    const d = makeAuditedD(events);
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"AGGREGATE","fields":{},"filters":{},"aggregate":{"op":"sum","field":"Node版本","groupBy":"项目名称"},"confidence":0.9,"summary":"分组"}',
+    );
+
+    await d.process(makeMsg({ content: '台账 按项目统计' }), channel);
+
+    const rd = events.at(-1)?.resultData as { aggregate?: unknown };
+    expect(rd.aggregate).toMatchObject({ groupBy: '项目名称', groupCount: 2 });
+    expect(JSON.stringify(rd.aggregate)).not.toContain('"A"');
+  });
+
+  it('★ UNKNOWN + confidence 0 记 ignored，不再污染错误率', async () => {
+    // 回归：防注入守词明确要求模型无法识别时返回
+    // {"intent":"UNKNOWN","confidence":0} —— 这是系统设计的正路，
+    // 但置信度闸门排在前面，把它记成了 error。
+    // 实测 53 条事件里 25 个 error 有 21 个是这么来的。
+    const events: BotEvent[] = [];
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const d = makeAuditedD(events);
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"UNKNOWN","fields":{},"confidence":0,"summary":"无法识别"}',
+    );
+
+    await d.process(makeMsg({ content: '你好' }), channel);
+
+    const last = events.at(-1);
+    expect(last?.result).toBe('ignored');
+    expect(last?.errorMsg).toBe('UNKNOWN 意图');
+  });
+
+  it('真实意图但置信度低，仍然记 error（那是解析质量问题）', async () => {
+    const events: BotEvent[] = [];
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const d = makeAuditedD(events);
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"CREATE","fields":{"项目名称":"X"},"confidence":0.3,"summary":"模糊"}',
+    );
+
+    await d.process(makeMsg({ content: '那个啥' }), channel);
+
+    expect(events.at(-1)?.result).toBe('error');
+    expect(events.at(-1)?.errorMsg).toBe('置信度不足');
+  });
+});

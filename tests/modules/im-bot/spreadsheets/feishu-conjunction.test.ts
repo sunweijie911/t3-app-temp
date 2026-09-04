@@ -72,17 +72,79 @@ describe('FeishuBitableAdapter — 连接词按各组的硬性要求解析', () 
     );
   });
 
-  it('多值 + 另一个条件：无解，报一句能照着改的错而不是给空集', async () => {
-    stubSearch();
-    await expect(
-      adapter.queryRecordsWithMeta(config, {
-        域: ['门户', '督导'],
-        名称: 'A',
+  it('★ 多值 + 另一个条件：下推能下推的，剩下的在内存里补（A AND (B OR C)）', async () => {
+    // 回归：以前直接抛错，而错误文案会触发纠正重试 —— 模型为了让请求跑通
+    // 把「闲鱼和微信」砍成单个平台并报成功，用户以为拿到了完整答案。
+    const bodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: unknown, init: { body?: string }) => {
+        bodies.push(JSON.parse(init.body ?? '{}') as Record<string, unknown>);
+        return new Response(
+          JSON.stringify({
+            code: 0,
+            data: {
+              // 平台按下推的条件（收入金额 > 100）返回，域没被下推
+              items: [
+                { record_id: 'r1', fields: { 域: '门户', 收入金额: 200 } },
+                { record_id: 'r2', fields: { 域: '督导', 收入金额: 300 } },
+                { record_id: 'r3', fields: { 域: '其它', 收入金额: 400 } },
+              ],
+              has_more: false,
+            },
+          }),
+          { status: 200 },
+        );
       }),
-    ).rejects.toThrow(/给了多个候选值.*无法与其它「且」条件混用/);
+    );
+
+    const out = await adapter.queryRecordsWithMeta(config, {
+      域: ['门户', '督导'],
+      收入金额: { op: '>', value: 100 },
+    });
+
+    // 下推的 filter 里只有能按 AND 组合的那部分
+    const filter = bodies[0]?.filter as {
+      conjunction: string;
+      conditions: Array<{ field_name: string }>;
+    };
+    expect(filter.conjunction).toBe('and');
+    expect(filter.conditions.map((c) => c.field_name)).toEqual(['收入金额']);
+
+    // 「域」在内存里补上：其它 被过滤掉，门户/督导 都保留
+    expect(out.records.map((r) => r.recordId)).toEqual(['r1', 'r2']);
   });
 
-  it('区间 + 显式 or：保留原有的区间冲突报错', async () => {
+  it('残差是唯一条件时也成立（全部下推不了 → 全内存过滤）', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            code: 0,
+            data: {
+              items: [
+                { record_id: 'r1', fields: { 域: '门户', 名称: 'A' } },
+                { record_id: 'r2', fields: { 域: '其它', 名称: 'B' } },
+              ],
+              has_more: false,
+            },
+          }),
+          { status: 200 },
+        );
+      }),
+    );
+    // 两个 key 都给多值 → 都需要 OR → 都进残差
+    const out = await adapter.queryRecordsWithMeta(config, {
+      域: ['门户', '督导'],
+      名称: ['A', 'Z'],
+    });
+    expect(out.records.map((r) => r.recordId)).toEqual(['r1']);
+  });
+
+  it('★ 外层显式 or + 区间：无法分解，仍然报错', async () => {
+    // OR 不能像 AND 那样分解：只满足残差项的记录会被下推的那半边
+    // 直接过滤掉，答案会偏小 —— 这种情况必须报错而不是给个错数
     stubSearch();
     await expect(
       adapter.queryRecordsWithMeta(config, {

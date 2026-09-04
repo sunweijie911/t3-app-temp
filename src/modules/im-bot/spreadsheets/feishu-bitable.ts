@@ -13,6 +13,7 @@ import {
   displayTypeOf,
   treatsValueAsDate,
 } from './field-types';
+import { filterRecords } from './record-filter';
 import type { SpreadsheetAdapter, SpreadsheetQueryResult } from './types';
 
 async function feishuApi(path: string, method: string, body?: unknown) {
@@ -757,28 +758,43 @@ export class FeishuBitableAdapter implements SpreadsheetAdapter {
     //
     // - 区间（between、>=/<= 降级）展开的 isGreater + isLess 必须 AND
     // - 多值（数组、multiSelect 数组）展开的多个 is/contains 必须 OR
-    //
-    // 只有一个 key 贡献条件时，直接采用它需要的连接词 —— 「业务域是门户或
-    // 督导」这类单字段多值查询本该成立，不该因为默认 and 就查出 0 条。
-    // 多个 key 各有冲突要求时无解，报一句能照着改的错：静默给一个被曲解的
-    // 结果集（区间会变成全表、多值会变成空集）比报错危险得多。
     let conjunction = requested;
-    const conflicting = groups.find((g) => g.needs && g.needs !== requested);
-    if (conflicting?.needs) {
-      if (groups.length === 1) {
-        conjunction = conflicting.needs;
+    /** 无法下推、留到内存里过滤的原始 filter 项 */
+    const residual: Record<string, unknown> = {};
+    const conflicting = groups.filter((g) => g.needs && g.needs !== requested);
+
+    if (conflicting.length > 0) {
+      if (groups.length === 1 && conflicting[0]) {
+        // 只有一个 key 贡献条件时直接采用它需要的连接词 ——
+        // 「业务域是门户或督导」这类单字段多值查询本该成立
+        conjunction = conflicting[0].needs ?? requested;
+      } else if (requested === 'and') {
+        // A AND (B OR C)：把能下推的按 AND 下推，冲突的那几组留到内存里算。
+        //
+        // 这一步只在外层是 AND 时成立 —— AND 可以分解（先用子集缩小范围，
+        // 再在内存里补上剩下的条件，结果不变）。外层是 OR 就不行：
+        // 只满足残差项的记录会被下推的那半边直接过滤掉，答案会偏小。
+        //
+        // 以前这里是直接抛错。实测的后果比报错更糟：错误文案触发了纠正
+        // 重试，模型为了让请求跑通把「闲鱼和微信」砍成了单个平台，然后
+        // 报成功 —— 用户拿到 8 条并以为那就是两个平台的完整答案。
+        for (const g of conflicting) {
+          residual[g.key] = filters[g.key];
+        }
       } else {
-        const detail =
-          conflicting.needs === 'and'
-            ? '是一个区间（需要「且」），无法与「或」条件混用'
-            : '给了多个候选值（需要「或」），无法与其它「且」条件混用';
+        // 外层是 OR 且有区间条件：无法分解，报一句能照着改的错。
+        // 静默给一个被曲解的结果集（区间会变成全表）比报错危险得多。
+        const first = conflicting[0];
         throw new Error(
-          `筛选条件「${conflicting.key}」${detail}。请拆成两次查询，或改用单一条件`,
+          `筛选条件「${first?.key}」是一个区间（需要「且」），无法与「或」条件混用。请拆成两次查询，或改用单一条件`,
         );
       }
     }
 
-    const conditions = groups.flatMap((g) => g.conditions);
+    const residualKeys = new Set(Object.keys(residual));
+    const conditions = groups
+      .filter((g) => !residualKeys.has(g.key))
+      .flatMap((g) => g.conditions);
     const baseBody: Record<string, unknown> = {};
     if (conditions.length > 0) {
       baseBody.filter = { conjunction, conditions };
@@ -824,7 +840,12 @@ export class FeishuBitableAdapter implements SpreadsheetAdapter {
       }
       return { recordId: item.record_id, fields };
     });
-    return { records, truncated };
+    // 残差条件在内存里补上。必须放在 reverseMapFields 之后 ——
+    // filterRecords 按**逻辑**字段名匹配，与钉钉/企微侧共用同一套语义
+    // （含「命中任一」与日粒度日期比较），两边给出的答案因此一致。
+    const finalRecords =
+      residualKeys.size > 0 ? filterRecords(records, residual) : records;
+    return { records: finalRecords, truncated };
   }
 
   async deleteRecord(

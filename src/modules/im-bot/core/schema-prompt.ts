@@ -62,9 +62,11 @@ export function renderResourceSchema(resources: SceneResource[]): string {
     // 聚合的请求结构必须写清楚，否则 LLM 只会把 AGGREGATE 当 QUERY 用
     if (r.actions.includes('AGGREGATE')) {
       lines.push(
-        '- AGGREGATE 用于「总共/合计/平均/最多/最少/几条」这类统计，把请求放在 aggregate：',
+        '- AGGREGATE 用于统计类问题：总共/合计/一共多少钱、平均、最大/最小/最高/最低/最多/最少、有几条/多少条、占比。把请求放在 aggregate：',
         '  {"op":"sum|count|avg|min|max","field":"要统计的数值字段","groupBy":"分组字段（可省略）"}',
-        '  count 不需要 field；filters 与 QUERY 写法一致。不要用 AGGREGATE 去取明细。',
+        '  count 不需要 field；filters 与 QUERY 写法一致。',
+        '  「最大/最小的是多少」问的是一个数值，用 AGGREGATE 的 max/min，不要用 QUERY 把明细全捞回来。',
+        '  只有在用户要看具体记录时才用 QUERY。',
       );
     }
 

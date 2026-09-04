@@ -212,6 +212,23 @@ function summarizeRequest(parsed: ParsedIntent): Record<string, unknown> {
     ...(parsed.projectFields?.length
       ? { projectFields: parsed.projectFields }
       : {}),
+    // 聚合请求必须留痕。实测踩过：「这个月毛利合计」记成了一条 success，
+    // 而「毛利」根本不是表里的字段 —— 从日志完全看不出它到底算了哪一列。
+    // 偏偏这个能力的核心风险就是「错的数字和对的数字长得一模一样」，
+    // 缺了 op / field / groupBy，事后没有任何办法核查一个金额。
+    ...(parsed.aggregate
+      ? {
+          aggregate: {
+            op: parsed.aggregate.op,
+            ...(parsed.aggregate.field
+              ? { field: parsed.aggregate.field }
+              : {}),
+            ...(parsed.aggregate.groupBy
+              ? { groupBy: parsed.aggregate.groupBy }
+              : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -245,6 +262,32 @@ function summarizeResult(result: ExecuteResult): Record<string, unknown> {
       : {}),
     ...(result.droppedFields?.length
       ? { droppedFields: result.droppedFields }
+      : {}),
+    // 算出来的值本身要记 —— 不记就无法回答"上周那个 12345 是怎么来的"。
+    // 但**不记分组的键名**：按敏感字段分组时，键名就是该字段的值，
+    // 而脱敏只作用于 IM 回复层，日志表里没有那道关。只留组数。
+    ...(result.aggregate
+      ? {
+          aggregate: {
+            op: result.aggregate.op,
+            ...(result.aggregate.field
+              ? { field: result.aggregate.field }
+              : {}),
+            ...(result.aggregate.groupBy
+              ? { groupBy: result.aggregate.groupBy }
+              : {}),
+            recordCount: result.aggregate.recordCount,
+            ...(result.aggregate.value !== undefined
+              ? { value: result.aggregate.value }
+              : {}),
+            ...(result.aggregate.groups
+              ? { groupCount: result.aggregate.groups.length }
+              : {}),
+            ...(result.aggregate.skipped
+              ? { skipped: result.aggregate.skipped }
+              : {}),
+          },
+        }
       : {}),
     // 确认提示里带的是已脱敏的候选摘要，仍然只留个头部够定位就行
     ...(result.error ? { error: result.error.slice(0, 200) } : {}),
@@ -844,16 +887,12 @@ export class Dispatcher {
 
     // 置信度不足与 UNKNOWN 都**不重试**：那是真实的歧义，不是格式错误。
     // 再问一遍模型只会让它为了"给个答案"而抬高置信度，该做的是问用户。
-    if (parsed.confidence < CONFIDENCE_THRESHOLD) {
-      return {
-        kind: 'stop',
-        parsed,
-        reply: `🤔 不太确定您的意图，解析结果：${parsed.summary}\n\n请用更明确的描述再试一次`,
-        errorMsg: '置信度不足',
-        logResult: 'error',
-      };
-    }
-
+    //
+    // UNKNOWN 必须判在置信度闸门**之前**。防注入守词明确要求模型在无法
+    // 识别时返回 {"intent":"UNKNOWN","confidence":0} —— 这是系统自己设计的
+    // 正路，而 0 < 阈值 会先命中置信度分支把它记成 error。实测一轮 53 条
+    // 事件里 25 个 error 有 21 个是这么来的，错误率统计直接失去意义
+    // （真实错误率 4/53）。与当初把 pending 从 error 里拆出来是同一件事。
     if (parsed.intent === 'UNKNOWN') {
       return {
         kind: 'stop',
@@ -861,6 +900,16 @@ export class Dispatcher {
         reply: `🤔 暂时不知道您想做什么：${parsed.summary || '没拿到具体操作'}\n\n可以试试：\n• 查询：「${scene.name} ...的 xxx」\n• 新增：「新增/记录 ...」\n• 更新：「把 ... 改成 ...」\n• 删除：「删除 ...」`,
         errorMsg: 'UNKNOWN 意图',
         logResult: 'ignored',
+      };
+    }
+
+    if (parsed.confidence < CONFIDENCE_THRESHOLD) {
+      return {
+        kind: 'stop',
+        parsed,
+        reply: `🤔 不太确定您的意图，解析结果：${parsed.summary}\n\n请用更明确的描述再试一次`,
+        errorMsg: '置信度不足',
+        logResult: 'error',
       };
     }
 
