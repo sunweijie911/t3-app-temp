@@ -9,7 +9,7 @@ import { type BotPlatform, PLATFORM_LABELS } from '../constants';
 
 const PLATFORM_FIELDS: Record<
   BotPlatform,
-  { key: string; label: string; secret?: boolean }[]
+  { key: string; label: string; secret?: boolean; hint?: string }[]
 > = {
   feishu: [
     { key: 'appId', label: 'App ID' },
@@ -26,6 +26,11 @@ const PLATFORM_FIELDS: Record<
     { key: 'appSecret', label: 'App Secret', secret: true },
     { key: 'robotCode', label: 'Robot Code' },
     { key: 'botSecret', label: 'Bot Secret', secret: true },
+    {
+      key: 'chatbotUserId',
+      label: 'Chatbot User ID (可选，强烈建议填)',
+      hint: '开发者后台机器人详情里的 chatbotUserId，形如 $:LWCP_v1:$xxx。钉钉的回调签名不覆盖请求体，填了它才能挡住「抓到一次合法签名后配任意 body 重放」',
+    },
   ],
   wecom: [
     { key: 'corpId', label: 'Corp ID' },
@@ -76,14 +81,16 @@ function PlatformCard({
   return (
     <Card
       extra={
-        <Switch checked={active} disabled={disabled} onChange={setActive} />
+        <Tooltip title="停用后该平台的回调会被直接丢弃，URL 有效性验证也会失败。首次在平台后台配置回调地址前，请先在这里启用并保存">
+          <Switch checked={active} disabled={disabled} onChange={setActive} />
+        </Tooltip>
       }
       style={{ marginBottom: 16 }}
       title={`${PLATFORM_LABELS[platform]}${disabled ? ' (TODO: Phase 3)' : ''}`}
     >
       <Form layout="vertical" name={`platform-${platform}`}>
         {fields.map((f) => (
-          <Form.Item key={f.key} label={f.label}>
+          <Form.Item key={f.key} label={f.label} tooltip={f.hint}>
             {f.secret ? (
               <Input.Password
                 autoComplete="new-password"

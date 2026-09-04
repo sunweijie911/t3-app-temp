@@ -6,6 +6,7 @@ import { dingtalkTokenManager } from '../auth/dingtalk-token';
 import { resetFeishuBotOpenIdCache } from '../auth/feishu-bot';
 import { resetFeishuChatNameCache } from '../auth/feishu-chat';
 import { feishuTokenManager } from '../auth/feishu-token';
+import { resetFeishuUserNameCache } from '../auth/feishu-user';
 import { wecomTokenManager } from '../auth/wecom-token';
 import { DingtalkChannelAdapter } from '../channels/dingtalk';
 import { FeishuChannelAdapter } from '../channels/feishu';
@@ -20,7 +21,7 @@ import type {
 } from '../core/types';
 import { DatabaseDrivenScene, parseKeywords } from '../scenes/db-scene';
 import { botEventLogs, botResourceBindings, botScenes } from '../schema';
-import { resetCredentialsCache } from './credentials';
+import { isPlatformEnabled, resetCredentialsCache } from './credentials';
 import {
   DbDedupStore,
   DbPendingActionStore,
@@ -206,6 +207,7 @@ export function reloadPlatformCredentials(platform?: BotPlatform) {
     // （换了 app 就是换了机器人，旧 open_id 会让群聊 @ 判定全部落空）
     resetFeishuChatNameCache();
     resetFeishuBotOpenIdCache();
+    resetFeishuUserNameCache();
   }
   if (!platform || platform === 'wecom') wecomTokenManager.reset();
   if (!platform || platform === 'dingtalk') dingtalkTokenManager.reset();
@@ -219,6 +221,10 @@ export async function handleBotUrlVerification(
   platform: BotPlatform,
   req: Request,
 ): Promise<Response> {
+  if (!(await isPlatformEnabled(platform))) {
+    console.warn('[BotEngine] 平台已在后台停用，拒绝 URL 验证:', platform);
+    return new Response('platform disabled', { status: 403 });
+  }
   const adapter = channelAdapters[platform];
   if (!adapter.verifyUrl) {
     return new Response('Method Not Allowed', { status: 405 });
@@ -231,6 +237,23 @@ export async function handleBotWebhook(
   platform: BotPlatform,
   req: Request,
 ): Promise<Response> {
+  // 后台停用的平台在这里就断掉，不解码、不验签、不落任何日志。
+  //
+  // 回 200 而不是 4xx：平台把非 2xx 当成投递失败会不断重试，飞书连续失败
+  // 还会自动摘掉事件订阅 —— 「临时停用一下机器人」不该演变成「回来时订阅
+  // 已经没了」。对平台而言这是一条被正常接收但无需处理的事件。
+  if (!(await isPlatformEnabled(platform))) {
+    // 必须留日志。这条路径既不落审计日志（还没解码，拿不到 eventId /
+    // 发送者），平台侧看到的又是 200 —— 不打日志的话现象就是
+    // 「机器人不吭声了，哪儿都查不出原因」。而 isActive 的默认值是 false，
+    // 走到这里的概率并不低。
+    console.warn(
+      '[BotEngine] 平台已在后台停用，丢弃回调（不解码、不落审计日志）:',
+      platform,
+    );
+    return Response.json({ ok: true, disabled: true });
+  }
+
   const adapter = channelAdapters[platform];
 
   // 解码/验签/解密全部交给 adapter：企微是 XML+AES，这里不能预设 JSON
@@ -251,17 +274,24 @@ export async function handleBotWebhook(
   if (decoded.kind === 'ignored') return Response.json({ ok: true });
 
   const msg = decoded.message;
-  const disp = await getDispatcher();
 
   // 平台 3s 内不回 200 就重试，所以必须先返回再处理。
   // 用 after() 而不是裸 fire-and-forget：后者在 serverless 上响应返回即冻结，
   // 用户永远收不到回复、审计日志也不会落库。
-  // 富化（查用户名/群名、判断群里 @ 的是不是自己）挪到 ack **之后**：
-  // 那几个查询都要网络往返，冷启动还要先换 token（10s 超时），叠起来
-  // 远超飞书的 3 秒重试阈值。decode 现在只做验签与解析，零网络调用。
+  //
+  // ack 之前**一次网络/DB 往返都不留**：
+  // - 富化（查用户名/群名、判断群里 @ 的是不是自己）要网络往返，冷启动还要
+  //   先换 token（10s 超时）
+  // - getDispatcher() 要跑 loadResourceBindings + botScenes 两条 select，
+  //   冷启动还要先建连接；它抛错时整个 route 会 500，把平台推去重试，
+  //   而重试同样会撞上 30s 的 init 熔断窗口，再 500 一次
+  // 两者叠起来远超飞书的 3 秒阈值，所以都在 run 里。decode 只做验签与解析。
   const run = () =>
     (async () => {
-      const enriched = adapter.enrich ? await adapter.enrich(msg) : msg;
+      const [disp, enriched] = await Promise.all([
+        getDispatcher(),
+        adapter.enrich ? adapter.enrich(msg) : Promise.resolve(msg),
+      ]);
       // null = 富化后判定不该处理（如群里 @ 的不是本机器人）
       if (!enriched) return;
       await disp.process(enriched, adapter);

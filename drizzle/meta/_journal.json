@@ -211,6 +211,13 @@
       "when": 1788506204853,
       "tag": "0029_bot_pending_selectable_count",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1788509694541,
+      "tag": "0030_bot_platform_activate_existing",
+      "breakpoints": true
     }
   ]
 }
