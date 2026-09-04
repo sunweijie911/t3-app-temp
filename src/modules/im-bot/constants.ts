@@ -71,6 +71,18 @@ export const FIELD_MAPPING_SCHEMA = z.record(
 /** LLM 意图解析置信度阈值 */
 export const CONFIDENCE_THRESHOLD = 0.7;
 
+/**
+ * 单条消息最多发起几次 LLM 解析（含首次）。
+ *
+ * 2 = 允许纠正一次。开环单次调用是机器人不稳定的主因：本地用 CLI 时
+ * 报错会被读到并改参数重试，机器人这边直接把错误抛给用户 ——
+ * 同一个模型缺陷，一边自愈、一边把人堵死。
+ *
+ * 为什么只给一次：单次解析实测 4~7 秒，重试一次就是 8~14 秒。群聊里
+ * 再往上加轮次收益递减（能一次改对的基本一次就对了），而延迟是线性涨的。
+ */
+export const MAX_LLM_ATTEMPTS = 2;
+
 /** 事件去重 TTL (ms) */
 export const DEDUP_TTL_MS = 5 * 60 * 1000;
 

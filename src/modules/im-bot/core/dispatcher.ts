@@ -4,6 +4,7 @@ import {
   DESTRUCTIVE_CONCURRENCY,
   MAX_CANDIDATE_DISPLAY,
   MAX_DESTRUCTIVE_BATCH,
+  MAX_LLM_ATTEMPTS,
 } from '../constants';
 import { documentConfigOf, getDocumentAdapter } from '../documents/factory';
 import type { BotScene } from '../scenes/types';
@@ -11,7 +12,7 @@ import { getSpreadsheetAdapter } from '../spreadsheets/factory';
 import type { SpreadsheetAdapter } from '../spreadsheets/types';
 import { MemoryDedupStore } from './dedup';
 import { renderRecordSummary } from './field-render';
-import { chatCompletion, extractJson } from './llm';
+import { chatCompletion, extractJson, type RetryContext } from './llm';
 import { MemoryPendingActionStore } from './pending-action';
 import { SceneRegistry } from './scene-registry';
 import type { DedupStore, PendingActionStore } from './stores';
@@ -283,6 +284,97 @@ interface PendingOutcome {
 }
 
 /**
+ * 重试的判据只有一条：**失败是因为「模型把名字/形状写错了」，还是因为
+ * 「用户根本没说」？**
+ *
+ * 前者可以重试 —— 正确答案就在 prompt 的字段清单里，把错误摆给它看就能改对。
+ * 后者绝不能重试 —— 缺的信息不在模型手上，再问一遍只会让它**编**一个出来。
+ * 而这些 filters / fields 紧接着要喂给 UPDATE / DELETE：编出来的筛选条件
+ * 意味着去改一条用户从没指定过的记录。
+ *
+ * 这条界线是被测试逼出来的：一开始把「需要指定筛选条件」也算成可重试，
+ * 于是「改一下项目的 node 版本」（没说哪个项目）会驱使模型自己挑一个项目名。
+ */
+const RETRYABLE_ERROR_PATTERNS: readonly RegExp[] = [
+  // 平台协议层拒绝了这个形状（今天线上那三条就是 InvalidFilter）
+  /InvalidFilter|InvalidFieldName|FieldNameNotFound|InvalidRequestParam/i,
+  // 字段名不在 fieldMapping 白名单里 —— 错误文案自带「可用字段：…」，
+  // 模型照着改就行。CREATE/UPDATE 的"没有可写入/可更新的内容"也走这条
+  /不是「.*」里的字段/,
+  /没法按它查/,
+  // 区间/多值与外层连接词冲突（"无法与「或」条件混用" / "无法与其它「且」条件混用"）
+  /无法与/,
+  // 动词与资源类型不匹配（可用动词已在文案里列出）
+  /不支持「.*」操作/,
+  // resource 别名指错了，而场景下确实有别的资源可选
+  /下找不到名为/,
+];
+
+/**
+ * **绝不重试**，优先级高于上面的可重试判定。
+ *
+ * 前两组是"用户没说"，重试等于让模型替用户做决定：
+ * - 「需要指定筛选条件」：没说要改/删哪条 → 重试会让它凭空挑一条
+ * - 「没有解析出要…」：没说要写什么值 → 重试会让它编一个值
+ *
+ * 后面几组是"重试也没用"：
+ * - 「未找到匹配记录」是合法的空结果，不是错误。重试只会诱导模型放宽
+ *   筛选条件，而放宽 = 放大 UPDATE / DELETE 的影响面
+ * - 「超过单次可操作上限」同理：模型为了让请求跑通会自己编一个更窄的
+ *   条件，那是用户根本没说过的约束
+ * - 配置类问题（没绑资源、适配器未实现）改 JSON 改不出来
+ * - 网络 / 超时 / 鉴权不是模型的错，重试只是把延迟翻倍
+ */
+const NEVER_RETRY_ERROR_PATTERNS: readonly RegExp[] = [
+  /需要指定筛选条件/,
+  /没有解析出要/,
+  /未找到匹配记录/,
+  /超过单次(可操作|删除)上限/,
+  /未配置数据资源绑定/,
+  /暂不支持任何操作/,
+  /尚未实现/,
+  /timeout|aborted|ETIMEDOUT|ECONNRESET|fetch failed/i,
+  /HTTP 错误|凭证缺失|未配置/,
+];
+
+/** 这条执行失败值不值得让 LLM 改一版重来 */
+function isRetryableFailure(error: string | undefined): boolean {
+  if (!error) return false;
+  if (NEVER_RETRY_ERROR_PATTERNS.some((re) => re.test(error))) return false;
+  return RETRYABLE_ERROR_PATTERNS.some((re) => re.test(error));
+}
+
+/**
+ * 一次「解析 → 校验 → 执行」的去向。
+ *
+ * `stop` 与 `retry` 都带齐了用户可见文案与审计字段 —— 重试次数用光时
+ * 直接拿 retry 上的这几个字段当 stop 用，不用再算一遍。
+ */
+type AttemptOutcome =
+  /** 拿到可渲染的结果（含挂起二次确认） */
+  | { kind: 'done'; parsed: ParsedIntent; result: ExecuteResult }
+  /** 确定不该重试 */
+  | {
+      kind: 'stop';
+      parsed?: ParsedIntent;
+      reply: string;
+      errorMsg?: string;
+      logResult: BotEvent['result'];
+    }
+  /** LLM 改一版有机会修好 */
+  | {
+      kind: 'retry';
+      parsed?: ParsedIntent;
+      /** 上一次的原始输出，作为 assistant 轮次放回对话 */
+      rawOutput: string;
+      /** 失败原因，喂给纠正指令 */
+      reason: string;
+      reply: string;
+      errorMsg?: string;
+      logResult: BotEvent['result'];
+    };
+
+/**
  * 拉取撞上翻页上限时，附在 UPDATE / DELETE 提示后面的说明。
  * 命中集本身可能不全，破坏性操作必须让用户知道。
  */
@@ -444,91 +536,53 @@ export class Dispatcher {
           systemPrompt.slice(0, 200),
         );
       }
-      const llmOutput = await chatCompletion(systemPrompt, msg.content);
-      if (process.env.NODE_ENV !== 'production') {
-        console.log('[Dispatcher] LLM 原始输出:', llmOutput.slice(0, 500));
-      }
-
-      // 5. JSON 提取 + 校验
-      const jsonStr = extractJson(llmOutput);
-      if (!jsonStr) {
-        await channelAdapter.reply(
-          msg,
-          '🤔 无法理解您的消息，请用更明确的描述再试一次',
+      // 5~7. 解析 → 校验 → 执行，失败且可纠正时让 LLM 改一版重来。
+      //
+      // 开环单次调用是机器人不稳定的主因：本地用 CLI 时报错会被读到、
+      // 改个参数重试就过了；机器人这边直接把错误抛给用户。今天线上那三条
+      // InvalidFilter 就是这么堵死的 —— 同一个模型缺陷，一边自愈一边卡住。
+      // 注意 attemptOnce 内部对「不该重试」的失败会返回 stop（见
+      // NEVER_RETRY_ERROR_PATTERNS：放宽筛选条件会放大 UPDATE/DELETE 影响面）。
+      let outcome = await this.attemptOnce(scene, msg, systemPrompt);
+      let attempts = 1;
+      const retryReasons: string[] = [];
+      while (outcome.kind === 'retry' && attempts < MAX_LLM_ATTEMPTS) {
+        retryReasons.push(outcome.reason);
+        console.warn(
+          `[Dispatcher] 第 ${attempts} 次解析失败，让 LLM 纠正后重试:`,
+          outcome.reason.slice(0, 200),
         );
+        outcome = await this.attemptOnce(scene, msg, systemPrompt, {
+          previousOutput: outcome.rawOutput,
+          error: outcome.reason,
+        });
+        attempts++;
+      }
+      /** 重试留痕：几次、为什么重的。不记就看不出"这条是重试后才成的" */
+      const retryTrace =
+        retryReasons.length > 0
+          ? { attempts, retriedFrom: retryReasons.map((r) => r.slice(0, 200)) }
+          : {};
+
+      if (outcome.kind !== 'done') {
+        // retry 用光了次数也走这里：把最后一次的用户可见文案发出去
+        await channelAdapter.reply(msg, outcome.reply);
         await logEvent({
           sceneId: scene.id,
-          result: 'error',
-          errorMsg: 'JSON 提取失败',
+          intent: outcome.parsed?.intent,
+          result: outcome.logResult,
+          errorMsg: outcome.errorMsg,
+          resultData: {
+            ...(outcome.parsed
+              ? { request: summarizeRequest(outcome.parsed) }
+              : {}),
+            ...retryTrace,
+          },
         });
         return;
       }
 
-      const parsed = scene.parseResult(jsonStr);
-      if (!parsed) {
-        await channelAdapter.reply(
-          msg,
-          '🤔 无法理解您的消息，请用更明确的描述再试一次',
-        );
-        await logEvent({
-          sceneId: scene.id,
-          result: 'error',
-          errorMsg: 'parseResult 失败',
-        });
-        return;
-      }
-
-      // 6. 置信度
-      if (parsed.confidence < CONFIDENCE_THRESHOLD) {
-        await channelAdapter.reply(
-          msg,
-          `🤔 不太确定您的意图，解析结果：${parsed.summary}\n\n请用更明确的描述再试一次`,
-        );
-        await logEvent({
-          sceneId: scene.id,
-          intent: parsed.intent,
-          result: 'error',
-          errorMsg: '置信度不足',
-          resultData: { request: summarizeRequest(parsed) },
-        });
-        return;
-      }
-
-      // 6.5 UNKNOWN 意图：高置信但 LLM 也没拿准 → 给引导而非走到 executeCrud 落 default 错误
-      if (parsed.intent === 'UNKNOWN') {
-        await channelAdapter.reply(
-          msg,
-          `🤔 暂时不知道您想做什么：${parsed.summary || '没拿到具体操作'}\n\n可以试试：\n• 查询：「${scene.name} ...的 xxx」\n• 新增：「新增/记录 ...」\n• 更新：「把 ... 改成 ...」\n• 删除：「删除 ...」`,
-        );
-        await logEvent({
-          sceneId: scene.id,
-          intent: parsed.intent,
-          result: 'ignored',
-          errorMsg: 'UNKNOWN 意图',
-          resultData: { request: summarizeRequest(parsed) },
-        });
-        return;
-      }
-
-      // 6.6 写权限：只拦改动数据的意图，查询不受限。
-      //     放在 execute 之前 —— 拦在真正落库前，且不消耗额外的平台调用
-      if (isWriteIntent(parsed.intent) && !scene.allowsWrite(msg.senderId)) {
-        await channelAdapter.reply(
-          msg,
-          `🔒 你没有「${scene.name}」的写入权限，可以查询但不能新增/修改/删除。\n如需权限请联系管理员`,
-        );
-        await logEvent({
-          sceneId: scene.id,
-          intent: parsed.intent,
-          result: 'ignored',
-          errorMsg: '无写入权限',
-          resultData: { request: summarizeRequest(parsed) },
-        });
-        return;
-      }
-
-      // 7. 执行 CRUD
-      const result = await this.execute(scene, parsed, msg);
+      const { parsed, result } = outcome;
 
       // 8. 回复（fieldMapping 用于渲染时取 label / displayType；缺失时退化为 logicalKey）
       const binding = this.config.getBinding(scene.id, parsed.resource);
@@ -570,6 +624,7 @@ export class Dispatcher {
         resultData: {
           ...summarizeResult(result),
           request: summarizeRequest(parsed),
+          ...retryTrace,
         },
       });
     } catch (err) {
@@ -607,6 +662,112 @@ export class Dispatcher {
     }
     const records = await adapter.queryRecords(config, filters);
     return { records, truncated: records.length >= adapter.queryHardLimit };
+  }
+
+  /**
+   * 跑一次「解析 → 校验 → 执行」。
+   *
+   * 抽出来是为了让重试循环只有三种去向，不用在 process 里铺开一堆早退：
+   * - done  ：拿到可渲染的结果（含挂起二次确认，那是设计正路）
+   * - stop  ：确定不该重试，直接把 reply 发给用户
+   * - retry ：LLM 改一版有机会修好，带上原始输出与原因给下一轮
+   */
+  private async attemptOnce(
+    scene: BotScene,
+    msg: UnifiedMessage,
+    systemPrompt: string,
+    retry?: RetryContext,
+  ): Promise<AttemptOutcome> {
+    const llmOutput = await chatCompletion(systemPrompt, msg.content, retry);
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('[Dispatcher] LLM 原始输出:', llmOutput.slice(0, 500));
+    }
+
+    const malformed = (what: string): AttemptOutcome => ({
+      kind: 'retry',
+      rawOutput: llmOutput,
+      reason: `${what}。你必须只输出一个 JSON 对象。`,
+      reply: '🤔 无法理解您的消息，请用更明确的描述再试一次',
+      errorMsg: what,
+      logResult: 'error',
+    });
+
+    const jsonStr = extractJson(llmOutput);
+    if (!jsonStr) return malformed('JSON 提取失败');
+
+    const parsed = scene.parseResult(jsonStr);
+    if (!parsed) return malformed('parseResult 失败');
+
+    // 置信度不足与 UNKNOWN 都**不重试**：那是真实的歧义，不是格式错误。
+    // 再问一遍模型只会让它为了"给个答案"而抬高置信度，该做的是问用户。
+    if (parsed.confidence < CONFIDENCE_THRESHOLD) {
+      return {
+        kind: 'stop',
+        parsed,
+        reply: `🤔 不太确定您的意图，解析结果：${parsed.summary}\n\n请用更明确的描述再试一次`,
+        errorMsg: '置信度不足',
+        logResult: 'error',
+      };
+    }
+
+    if (parsed.intent === 'UNKNOWN') {
+      return {
+        kind: 'stop',
+        parsed,
+        reply: `🤔 暂时不知道您想做什么：${parsed.summary || '没拿到具体操作'}\n\n可以试试：\n• 查询：「${scene.name} ...的 xxx」\n• 新增：「新增/记录 ...」\n• 更新：「把 ... 改成 ...」\n• 删除：「删除 ...」`,
+        errorMsg: 'UNKNOWN 意图',
+        logResult: 'ignored',
+      };
+    }
+
+    // 写权限：拦在真正落库前，且不消耗额外的平台调用。不重试 —— 换个
+    // JSON 写法也不会让没权限的人有权限
+    if (isWriteIntent(parsed.intent) && !scene.allowsWrite(msg.senderId)) {
+      return {
+        kind: 'stop',
+        parsed,
+        reply: `🔒 你没有「${scene.name}」的写入权限，可以查询但不能新增/修改/删除。\n如需权限请联系管理员`,
+        errorMsg: '无写入权限',
+        logResult: 'ignored',
+      };
+    }
+
+    const result = await this.execute(scene, parsed, msg);
+
+    // 成功、以及挂起二次确认（设计正路）都算 done。
+    // awaitingConfirmation 尤其不能重试：pending 已经写进存储了，
+    // 再来一轮会挂出第二条待确认，把用户的"确认删除"指向错的候选集。
+    if (result.success || result.awaitingConfirmation) {
+      return { kind: 'done', parsed, result };
+    }
+
+    if (isRetryableFailure(result.error)) {
+      return {
+        kind: 'retry',
+        parsed,
+        rawOutput: llmOutput,
+        reason: result.error ?? '执行失败',
+        reply: scene.formatReply(
+          parsed,
+          result,
+          this.config.getBinding(scene.id, parsed.resource)?.fieldMapping,
+        ),
+        errorMsg: result.error,
+        logResult: 'error',
+      };
+    }
+
+    return {
+      kind: 'stop',
+      parsed,
+      reply: scene.formatReply(
+        parsed,
+        result,
+        this.config.getBinding(scene.id, parsed.resource)?.fieldMapping,
+      ),
+      errorMsg: result.error,
+      logResult: 'error',
+    };
   }
 
   /**

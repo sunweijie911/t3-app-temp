@@ -39,6 +39,7 @@ import type { ChannelAdapter } from '@/modules/im-bot/channels/types';
 import {
   DESTRUCTIVE_CONCURRENCY,
   MAX_CANDIDATE_DISPLAY,
+  MAX_LLM_ATTEMPTS,
 } from '@/modules/im-bot/constants';
 import { MemoryDedupStore } from '@/modules/im-bot/core/dedup';
 import { Dispatcher } from '@/modules/im-bot/core/dispatcher';
@@ -597,7 +598,9 @@ describe('Dispatcher — 数据平台与消息来源解耦', () => {
     const channel = makeChannel();
     const adapter = makeAdapter();
     mockGetAdapter.mockReturnValue(adapter);
-    mockChatCompletion.mockResolvedValueOnce(
+    mockChatCompletion.mockResolvedValue(
+      // 用 mockResolvedValue（非 Once）：这类失败会触发一次纠正重试，
+      // 让模型重复同一个错误，断言的是重试用光后用户看到什么
       '{"intent":"CREATE","fields":{"项目名称":"x"},"confidence":0.95,"summary":""}',
     );
 
@@ -615,7 +618,10 @@ describe('Dispatcher — 数据平台与消息来源解耦', () => {
     const channel = makeChannel();
     const adapter = makeAdapter();
     mockGetAdapter.mockReturnValue(adapter);
-    mockChatCompletion.mockResolvedValueOnce(
+    mockChatCompletion.mockResolvedValue(
+      // 非 Once：这类失败会触发一次纠正重试，让模型重复同一个错误，
+      // 断言的是「重试用光之后用户看到什么」
+
       '{"intent":"APPEND","fields":{"content":"x"},"confidence":0.95,"summary":""}',
     );
 
@@ -1126,7 +1132,10 @@ describe('Dispatcher — 未知字段守卫', () => {
     const channel = makeChannel();
     const adapter = makeAdapter();
     mockGetAdapter.mockReturnValue(adapter);
-    mockChatCompletion.mockResolvedValueOnce(
+    mockChatCompletion.mockResolvedValue(
+      // 非 Once：这类失败会触发一次纠正重试，让模型重复同一个错误，
+      // 断言的是「重试用光之后用户看到什么」
+
       '{"intent":"CREATE","fields":{"星座":"处女座"},"confidence":0.95,"summary":"新增"}',
     );
 
@@ -1142,7 +1151,10 @@ describe('Dispatcher — 未知字段守卫', () => {
     const channel = makeChannel();
     const adapter = makeAdapter();
     mockGetAdapter.mockReturnValue(adapter);
-    mockChatCompletion.mockResolvedValueOnce(
+    mockChatCompletion.mockResolvedValue(
+      // 非 Once：这类失败会触发一次纠正重试，让模型重复同一个错误，
+      // 断言的是「重试用光之后用户看到什么」
+
       '{"intent":"QUERY","filters":{"星座":"处女座"},"confidence":0.95,"summary":"查"}',
     );
 
@@ -1643,7 +1655,10 @@ describe('Dispatcher — UPDATE 必须带变更字段（P0：空 fields 会发�
     const channel = makeChannel();
     const adapter = makeAdapter();
     mockGetAdapter.mockReturnValue(adapter);
-    mockChatCompletion.mockResolvedValueOnce(
+    mockChatCompletion.mockResolvedValue(
+      // 非 Once：这类失败会触发一次纠正重试，让模型重复同一个错误，
+      // 断言的是「重试用光之后用户看到什么」
+
       '{"intent":"UPDATE","fields":{"负责人":"张三"},"filters":{"项目名称":"A"},"confidence":0.95,"summary":"改"}',
     );
 
@@ -1904,7 +1919,10 @@ describe('Dispatcher — 能力层抛出的错要说给用户（P2）', () => {
         '筛选条件「上线日期」是一个区间（需要「且」），无法与「或」条件混用',
       ),
     );
-    mockChatCompletion.mockResolvedValueOnce(
+    mockChatCompletion.mockResolvedValue(
+      // 非 Once：这类失败会触发一次纠正重试，让模型重复同一个错误，
+      // 断言的是「重试用光之后用户看到什么」
+
       '{"intent":"QUERY","fields":{},"filters":{"项目名称":"A"},"confidence":0.95,"summary":"查"}',
     );
 
@@ -2413,5 +2431,206 @@ describe('Dispatcher — 投影字段按 fieldMapping 裁剪（回归）', () =>
 
     // 回归：这条路径以前直接 return，把"结果可能不完整"的警告丢了
     expect(channel.lastReply).toContain('上限');
+  });
+});
+
+describe('Dispatcher — 失败后让 LLM 纠正重试', () => {
+  function makeAuditedD(events: BotEvent[], binding = baseBinding) {
+    const d = new Dispatcher({
+      getBinding: () => binding,
+      pendingStore: new MemoryPendingActionStore(),
+      onEvent: (e) => {
+        events.push(e);
+      },
+    });
+    d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    return d;
+  }
+
+  it('字段名写错 → 第二次改对 → 用户只看到成功', async () => {
+    const events: BotEvent[] = [];
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const d = makeAuditedD(events);
+    // 第一次用了不存在的「星座」，第二次改成合法字段
+    mockChatCompletion
+      .mockResolvedValueOnce(
+        '{"intent":"CREATE","fields":{"星座":"处女座"},"confidence":0.95,"summary":"新增"}',
+      )
+      .mockResolvedValueOnce(
+        '{"intent":"CREATE","fields":{"项目名称":"督导2.0"},"confidence":0.95,"summary":"新增"}',
+      );
+    (adapter.createRecord as ReturnType<typeof vi.fn>).mockResolvedValue({
+      recordId: 'r1',
+      fields: { 项目名称: '督导2.0' },
+    });
+
+    await d.process(makeMsg({ content: '新增项目 督导2.0' }), channel);
+
+    expect(mockChatCompletion).toHaveBeenCalledTimes(2);
+    expect(channel.lastReply).toContain('已录入');
+    // 第二次调用必须带上纠正上下文（上次输出 + 失败原因）
+    expect(mockChatCompletion.mock.calls[1]?.[2]).toMatchObject({
+      previousOutput: expect.stringContaining('星座'),
+      error: expect.stringContaining('星座'),
+    });
+    const last = events.at(-1);
+    expect(last?.result).toBe('success');
+    // 留痕：看得出这条是重试之后才成的
+    expect(last?.resultData).toMatchObject({ attempts: 2 });
+  });
+
+  it('平台回 InvalidFilter 也会重试（今天线上那三条的形状）', async () => {
+    const events: BotEvent[] = [];
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const d = makeAuditedD(events);
+    mockChatCompletion
+      .mockResolvedValueOnce(
+        '{"intent":"QUERY","fields":{},"filters":{"项目名称":{"op":"乱写","value":["A","B"]}},"confidence":0.9,"summary":"查"}',
+      )
+      .mockResolvedValueOnce(
+        '{"intent":"QUERY","fields":{},"filters":{"项目名称":"A"},"confidence":0.9,"summary":"查"}',
+      );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(new Error('飞书 Bitable API 错误: InvalidFilter'))
+      .mockResolvedValueOnce([{ recordId: 'r1', fields: { 项目名称: 'A' } }]);
+
+    await d.process(makeMsg({ content: '查项目 A' }), channel);
+
+    expect(mockChatCompletion).toHaveBeenCalledTimes(2);
+    expect(channel.lastReply).toContain('查询结果');
+    expect(events.at(-1)?.result).toBe('success');
+  });
+
+  it('JSON 格式坏了也重试一次', async () => {
+    const events: BotEvent[] = [];
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const d = makeAuditedD(events);
+    mockChatCompletion
+      .mockResolvedValueOnce('我觉得你是想新增一个项目，对吗？')
+      .mockResolvedValueOnce(
+        '{"intent":"CREATE","fields":{"项目名称":"X"},"confidence":0.95,"summary":"新增"}',
+      );
+    (adapter.createRecord as ReturnType<typeof vi.fn>).mockResolvedValue({
+      recordId: 'r1',
+      fields: { 项目名称: 'X' },
+    });
+
+    await d.process(makeMsg({ content: '新增项目 X' }), channel);
+
+    expect(mockChatCompletion).toHaveBeenCalledTimes(2);
+    expect(channel.lastReply).toContain('已录入');
+  });
+
+  it('★ 安全底线：缺筛选条件绝不重试 —— 重试会让模型凭空挑一条记录去改', async () => {
+    const events: BotEvent[] = [];
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const d = makeAuditedD(events);
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"UPDATE","fields":{"Node版本":"20"},"filters":{},"confidence":0.9,"summary":"改"}',
+    );
+
+    await d.process(makeMsg({ content: '改一下项目的 node 版本' }), channel);
+
+    // 用户没说改哪个项目，这个信息不在模型手上 —— 只能问用户，不能让它编
+    expect(mockChatCompletion).toHaveBeenCalledTimes(1);
+    expect(channel.lastReply).toContain('需要指定筛选条件');
+    expect(adapter.updateRecord).not.toHaveBeenCalled();
+  });
+
+  it('★ 安全底线：缺变更字段绝不重试 —— 重试会让模型编一个值', async () => {
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const d = makeAuditedD([]);
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"UPDATE","fields":{},"filters":{"项目名称":"A"},"confidence":0.9,"summary":"改"}',
+    );
+
+    await d.process(makeMsg({ content: '更新一下项目 A' }), channel);
+
+    expect(mockChatCompletion).toHaveBeenCalledTimes(1);
+    expect(adapter.updateRecord).not.toHaveBeenCalled();
+  });
+
+  it('★ 安全底线：未找到匹配记录不重试 —— 重试会诱导模型放宽条件', async () => {
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const d = makeAuditedD([]);
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"DELETE","fields":{},"filters":{"项目名称":"不存在的"},"confidence":0.9,"summary":"删"}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+    await d.process(makeMsg({ content: '删掉项目 不存在的' }), channel);
+
+    expect(mockChatCompletion).toHaveBeenCalledTimes(1);
+    expect(channel.lastReply).toContain('未找到匹配记录');
+  });
+
+  it('★ 安全底线：已挂起二次确认不重试 —— 否则会挂出第二条待确认', async () => {
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const d = makeAuditedD([]);
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"DELETE","fields":{},"filters":{"项目名称":"A"},"confidence":0.9,"summary":"删"}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { recordId: 'r1', fields: { 项目名称: 'A' } },
+    ]);
+
+    await d.process(makeMsg({ content: '删掉项目 A' }), channel);
+
+    expect(mockChatCompletion).toHaveBeenCalledTimes(1);
+    expect(channel.lastReply).toContain('确认删除');
+  });
+
+  it('置信度不足与 UNKNOWN 不重试 —— 那是真实歧义，该问用户', async () => {
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+
+    const d1 = makeAuditedD([]);
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"CREATE","fields":{},"confidence":0.3,"summary":"模糊"}',
+    );
+    await d1.process(makeMsg({ content: '那个啥' }), channel);
+    expect(mockChatCompletion).toHaveBeenCalledTimes(1);
+
+    mockChatCompletion.mockReset();
+    const d2 = makeAuditedD([]);
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"UNKNOWN","fields":{},"confidence":0.9,"summary":"不知道"}',
+    );
+    await d2.process(makeMsg({ content: '你好' }), channel);
+    expect(mockChatCompletion).toHaveBeenCalledTimes(1);
+  });
+
+  it('重试上限：连续两次都失败就把最后一次的原因回给用户', async () => {
+    const events: BotEvent[] = [];
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const d = makeAuditedD(events);
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"CREATE","fields":{"星座":"处女座"},"confidence":0.95,"summary":"新增"}',
+    );
+
+    await d.process(makeMsg({ content: '新增项目' }), channel);
+
+    expect(mockChatCompletion).toHaveBeenCalledTimes(MAX_LLM_ATTEMPTS);
+    expect(channel.lastReply).toContain('星座');
+    const last = events.at(-1);
+    expect(last?.result).toBe('error');
+    expect(last?.resultData).toMatchObject({ attempts: MAX_LLM_ATTEMPTS });
   });
 });
