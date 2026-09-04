@@ -1250,11 +1250,27 @@ describe('Dispatcher — 候选序号与操作人字段', () => {
       chatId: msg.chatId,
       senderId: msg.senderId,
     });
-    expect(pending?.candidates).toHaveLength(MAX_CANDIDATE_DISPLAY);
-    // 提示语里给出的可选上界与真正可选的条数一致
+    // candidates 存全量（「全部更新」要用），但可选序号只到展示出来的条数
+    expect(pending?.candidates).toHaveLength(15);
+    expect(pending?.selectableCount).toBe(MAX_CANDIDATE_DISPLAY);
     expect(channel.lastReply).toContain(
       `共 15 条，仅列出前 ${MAX_CANDIDATE_DISPLAY} 条`,
     );
+
+    // 真正要守住的性质：回一个没展示过的序号必须被拒
+    await d.process(makeMsg({ content: '15' }), channel);
+    expect(adapter.updateRecord).not.toHaveBeenCalled();
+    expect(channel.lastReply).toContain('请回复序号');
+
+    // 展示范围内的序号照常生效
+    (adapter.updateRecord as ReturnType<typeof vi.fn>).mockResolvedValue({
+      recordId: 'r9',
+      fields: { 项目名称: 'p9', Node版本: '20' },
+    });
+    await d.process(makeMsg({ content: '10' }), channel);
+    expect(adapter.updateRecord).toHaveBeenCalledWith(expect.anything(), 'r9', {
+      Node版本: '20',
+    });
   });
 
   it('操作人字段用中文键名（录入人）时也会注入发送者', async () => {
@@ -2757,5 +2773,267 @@ describe('Dispatcher — 限流', () => {
       await d.process(msg, channel);
     }
     expect(channel.lastReply).not.toContain('消息太频繁');
+  });
+});
+
+describe('Dispatcher — AGGREGATE 聚合统计', () => {
+  const rows: SpreadsheetRecord[] = [
+    { recordId: 'r1', fields: { 项目名称: 'A', Node版本: '100' } },
+    { recordId: 'r2', fields: { 项目名称: 'B', Node版本: 200 } },
+    { recordId: 'r3', fields: { 项目名称: 'A', Node版本: '1,000' } },
+  ];
+
+  function setup() {
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue(rows);
+    return { d: makeDispatcher(), channel, adapter };
+  }
+
+  it('sum 不分组：给出合计与参与条数', async () => {
+    const { d, channel } = setup();
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"AGGREGATE","fields":{},"filters":{},"aggregate":{"op":"sum","field":"Node版本"},"confidence":0.9,"summary":"合计"}',
+    );
+    await d.process(makeMsg({ content: '台账 Node 版本合计' }), channel);
+    // 字符串 "100" 与带千分位的 "1,000" 都要能参与统计
+    expect(channel.lastReply).toContain('1300');
+    expect(channel.lastReply).toContain('共 3 条记录');
+  });
+
+  it('count 不需要 field', async () => {
+    const { d, channel } = setup();
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"AGGREGATE","fields":{},"filters":{},"aggregate":{"op":"count"},"confidence":0.9,"summary":"数一下"}',
+    );
+    await d.process(makeMsg({ content: '台账 一共几条' }), channel);
+    expect(channel.lastReply).toContain('3');
+  });
+
+  it('groupBy 按值降序分组，并给出总计', async () => {
+    const { d, channel } = setup();
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"AGGREGATE","fields":{},"filters":{},"aggregate":{"op":"sum","field":"Node版本","groupBy":"项目名称"},"confidence":0.9,"summary":"分组"}',
+    );
+    await d.process(makeMsg({ content: '台账 按项目统计' }), channel);
+    // A = 100 + 1000 = 1100 排在 B = 200 前面
+    expect(channel.lastReply).toContain('1. A：1100（2 条）');
+    expect(channel.lastReply).toContain('2. B：200（1 条）');
+    expect(channel.lastReply).toContain('总合计：1300');
+  });
+
+  it('非数字/空值被跳过并回显 —— 否则总和悄悄偏小', async () => {
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { recordId: 'r1', fields: { 项目名称: 'A', Node版本: '100' } },
+      { recordId: 'r2', fields: { 项目名称: 'B', Node版本: '' } },
+      { recordId: 'r3', fields: { 项目名称: 'C', Node版本: '待定' } },
+    ]);
+    const d = makeDispatcher();
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"AGGREGATE","fields":{},"filters":{},"aggregate":{"op":"sum","field":"Node版本"},"confidence":0.9,"summary":"合计"}',
+    );
+    await d.process(makeMsg({ content: '台账 合计' }), channel);
+    expect(channel.lastReply).toContain('100');
+    expect(channel.lastReply).toContain('2 条记录的「Node版本」为空或不是数字');
+  });
+
+  it('★ 拉取被截断时必须明说数字是错的 —— 截断的总和看起来和正确答案一样', async () => {
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    (
+      adapter as unknown as { queryRecordsWithMeta: ReturnType<typeof vi.fn> }
+    ).queryRecordsWithMeta = vi.fn(async () => ({
+      records: rows,
+      truncated: true,
+    }));
+    const d = makeDispatcher();
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"AGGREGATE","fields":{},"filters":{},"aggregate":{"op":"sum","field":"Node版本"},"confidence":0.9,"summary":"合计"}',
+    );
+    await d.process(makeMsg({ content: '台账 合计' }), channel);
+    const reply = channel.lastReply ?? '';
+    expect(reply).toContain('不完整');
+    // 警告必须在最前面，放末尾会被当成免责声明忽略
+    expect(reply.indexOf('不完整')).toBeLessThan(reply.indexOf('1300'));
+  });
+
+  it('统计字段不在映射里 → 拒绝并列出可用字段（算错了列没人能发现）', async () => {
+    const { d, channel, adapter } = setup();
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"AGGREGATE","fields":{},"filters":{},"aggregate":{"op":"sum","field":"毛利"},"confidence":0.9,"summary":"合计"}',
+    );
+    await d.process(makeMsg({ content: '台账 毛利合计' }), channel);
+    expect(adapter.queryRecords).not.toHaveBeenCalled();
+    expect(channel.lastReply).toContain('毛利');
+    expect(channel.lastReply).toContain('项目名称');
+  });
+
+  it('sum 缺 field 时提示，不猜一个字段去算钱', async () => {
+    const { d, channel } = setup();
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"AGGREGATE","fields":{},"filters":{},"aggregate":{"op":"sum"},"confidence":0.9,"summary":"合计"}',
+    );
+    await d.process(makeMsg({ content: '台账 合计' }), channel);
+    expect(channel.lastReply).toContain('需要指定统计哪个字段');
+  });
+
+  it('AGGREGATE 是只读的，不受写权限白名单限制', async () => {
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue(rows);
+    const d = new Dispatcher({ getBinding: () => baseBinding });
+    d.registry.register(
+      new DatabaseDrivenScene({ ...baseSceneConfig, writerIds: ['someone'] }),
+    );
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"AGGREGATE","fields":{},"filters":{},"aggregate":{"op":"count"},"confidence":0.9,"summary":"数"}',
+    );
+    await d.process(makeMsg({ content: '台账 一共几条' }), channel);
+    expect(channel.lastReply).not.toContain('写入权限');
+  });
+});
+
+describe('Dispatcher — 批量 UPDATE（回复「全部」）', () => {
+  function setupMulti(count: number) {
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const many = Array.from({ length: count }, (_, i) => ({
+      recordId: `r${i}`,
+      fields: { 项目名称: `p${i}` },
+    }));
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue(many);
+    const events: BotEvent[] = [];
+    const d = new Dispatcher({
+      getBinding: () => baseBinding,
+      pendingStore: new MemoryPendingActionStore(),
+      onEvent: (e) => {
+        events.push(e);
+      },
+    });
+    d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    return { d, channel, adapter, events };
+  }
+
+  it('回复「全部」更新所有命中记录（此前只能一条条点序号）', async () => {
+    const { d, channel, adapter, events } = setupMulti(15);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"UPDATE","filters":{"项目名称":"p"},"fields":{"Node版本":"20"},"confidence":0.9,"summary":"改"}',
+    );
+    await d.process(makeMsg({ content: '把项目 p 都改成 Node 20' }), channel);
+    // 提示语要说清「全部」会影响多少条
+    expect(channel.lastReply).toContain('回复「全部」把这 15 条都改成');
+
+    (adapter.updateRecord as ReturnType<typeof vi.fn>).mockResolvedValue({
+      recordId: 'x',
+      fields: {},
+    });
+    await d.process(makeMsg({ content: '全部' }), channel);
+
+    // 15 条全部更新，而不是只更新展示出来的 10 条
+    expect(adapter.updateRecord).toHaveBeenCalledTimes(15);
+    expect(channel.lastReply).toContain('已更新 15 条');
+    const last = events.at(-1);
+    expect(last?.intent).toBe('UPDATE');
+    expect(last?.resultData).toMatchObject({ updatedAll: true, updated: 15 });
+  });
+
+  it('部分失败时汇总，并记 error 与原因', async () => {
+    const { d, channel, adapter, events } = setupMulti(3);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"UPDATE","filters":{"项目名称":"p"},"fields":{"Node版本":"20"},"confidence":0.9,"summary":"改"}',
+    );
+    await d.process(makeMsg({ content: '把项目 p 都改一下' }), channel);
+    (adapter.updateRecord as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ recordId: 'r0', fields: {} })
+      .mockRejectedValueOnce(new Error('权限不足'))
+      .mockResolvedValueOnce({ recordId: 'r2', fields: {} });
+
+    await d.process(makeMsg({ content: '全部' }), channel);
+
+    expect(channel.lastReply).toContain('已更新 2/3 条');
+    expect(channel.lastReply).toContain('权限不足');
+    const last = events.at(-1);
+    expect(last?.result).toBe('error');
+    expect(last?.resultData).toMatchObject({ updated: 2, failed: 1 });
+  });
+
+  it('并发受闸门约束，不会一次性全量发出', async () => {
+    const { d, channel, adapter } = setupMulti(15);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"UPDATE","filters":{"项目名称":"p"},"fields":{"Node版本":"20"},"confidence":0.9,"summary":"改"}',
+    );
+    await d.process(makeMsg({ content: '把项目 p 都改一下' }), channel);
+
+    let inFlight = 0;
+    let peak = 0;
+    (adapter.updateRecord as ReturnType<typeof vi.fn>).mockImplementation(
+      async () => {
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        await new Promise((res) => setTimeout(res, 1));
+        inFlight--;
+        return { recordId: 'x', fields: {} };
+      },
+    );
+    await d.process(makeMsg({ content: '全部' }), channel);
+    expect(peak).toBeLessThanOrEqual(DESTRUCTIVE_CONCURRENCY);
+  });
+
+  it('「都改成完成」这类正常业务消息不会被当成「全部」', async () => {
+    const { d, channel, adapter } = setupMulti(3);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"UPDATE","filters":{"项目名称":"p"},"fields":{"Node版本":"20"},"confidence":0.9,"summary":"改"}',
+    );
+    await d.process(makeMsg({ content: '把项目 p 都改一下' }), channel);
+
+    await d.process(makeMsg({ content: '3条记录都改成完成' }), channel);
+    expect(adapter.updateRecord).not.toHaveBeenCalled();
+    expect(channel.lastReply).toContain('请回复序号');
+  });
+});
+
+describe('Dispatcher — 新错误文案与重试分类的配合', () => {
+  it('聚合字段名写错 → 可重试（正确答案就在字段清单里）', async () => {
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { recordId: 'r1', fields: { 项目名称: 'A', Node版本: '10' } },
+    ]);
+    const d = makeDispatcher();
+    mockChatCompletion
+      .mockResolvedValueOnce(
+        '{"intent":"AGGREGATE","fields":{},"filters":{},"aggregate":{"op":"sum","field":"毛利"},"confidence":0.9,"summary":"合计"}',
+      )
+      .mockResolvedValueOnce(
+        '{"intent":"AGGREGATE","fields":{},"filters":{},"aggregate":{"op":"sum","field":"Node版本"},"confidence":0.9,"summary":"合计"}',
+      );
+
+    await d.process(makeMsg({ content: '台账 毛利合计' }), channel);
+
+    expect(mockChatCompletion).toHaveBeenCalledTimes(2);
+    expect(channel.lastReply).toContain('10');
+  });
+
+  it('★ 聚合缺 field → 不重试（用户没说统计哪列，重试会让它挑一列去算钱）', async () => {
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const d = makeDispatcher();
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"AGGREGATE","fields":{},"filters":{},"aggregate":{"op":"sum"},"confidence":0.9,"summary":"合计"}',
+    );
+
+    await d.process(makeMsg({ content: '台账 合计' }), channel);
+
+    expect(mockChatCompletion).toHaveBeenCalledTimes(1);
+    expect(channel.lastReply).toContain('需要指定统计哪个字段');
   });
 });

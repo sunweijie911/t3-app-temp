@@ -12,7 +12,7 @@ import type { BotScene } from '../scenes/types';
 import { getSpreadsheetAdapter } from '../spreadsheets/factory';
 import type { SpreadsheetAdapter } from '../spreadsheets/types';
 import { MemoryDedupStore } from './dedup';
-import { renderRecordSummary } from './field-render';
+import { fieldToStringRaw, renderRecordSummary } from './field-render';
 import { chatCompletion, extractJson, type RetryContext } from './llm';
 import { MemoryPendingActionStore } from './pending-action';
 import { MemoryRateLimitStore } from './rate-limit';
@@ -20,6 +20,9 @@ import { SceneRegistry } from './scene-registry';
 import type { DedupStore, PendingActionStore, RateLimitStore } from './stores';
 import { pendingKeyOf } from './stores';
 import type {
+  AggregateOp,
+  AggregateResult,
+  AggregateSpec,
   BotEvent,
   ExecuteResult,
   FieldMappingValue,
@@ -335,6 +338,10 @@ const RETRYABLE_ERROR_PATTERNS: readonly RegExp[] = [
 const NEVER_RETRY_ERROR_PATTERNS: readonly RegExp[] = [
   /需要指定筛选条件/,
   /没有解析出要/,
+  // 用户没说统计哪一列。重试会让模型挑一列去算钱，而算错列的结果
+  // 看上去和正确答案一模一样，没人能发现。
+  // （目前不在 RETRYABLE 里所以本来也不会重试，但要写明是刻意的）
+  /需要指定统计哪个字段/,
   /未找到匹配记录/,
   /超过单次(可操作|删除)上限/,
   /未配置数据资源绑定/,
@@ -349,6 +356,110 @@ function isRetryableFailure(error: string | undefined): boolean {
   if (!error) return false;
   if (NEVER_RETRY_ERROR_PATTERNS.some((re) => re.test(error))) return false;
   return RETRYABLE_ERROR_PATTERNS.some((re) => re.test(error));
+}
+
+/**
+ * 把平台读回的值转成可参与统计的数字。
+ *
+ * 平台侧同一列可能给数字、给字符串（"108"）、给带千分位或货币符号的文本，
+ * 也可能是空。返回 null 表示"这条跳过"，由调用方计数并回显 ——
+ * 空值和脏数据会让总和悄悄偏小，不说的话用户不会怀疑这个数字。
+ */
+function toNumeric(v: unknown): number | null {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  if (typeof v === 'string') {
+    const cleaned = v.replace(/[,\s¥$￥]/g, '');
+    if (!cleaned) return null;
+    const n = Number(cleaned);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+/** 一组数字上的聚合。空组返回 null（调用方据此显示"无数据"） */
+function reduceNumbers(op: AggregateOp, values: number[]): number | null {
+  if (op === 'count') return values.length;
+  if (values.length === 0) return null;
+  switch (op) {
+    case 'sum':
+      return values.reduce((a, b) => a + b, 0);
+    case 'avg':
+      return values.reduce((a, b) => a + b, 0) / values.length;
+    case 'min':
+      return Math.min(...values);
+    case 'max':
+      return Math.max(...values);
+    default:
+      return null;
+  }
+}
+
+/**
+ * 在已拉取的记录上做聚合。
+ *
+ * 刻意放在内存里做，而不是下推给平台：三家平台的聚合能力差异极大
+ * （飞书有部分统计、钉钉/企微基本没有），下推会让同一个问题在不同
+ * provider 上给出不同答案 —— 而"金额算错"是这套系统里最不能接受的错。
+ * 记录集本身已被 MAX_DESTRUCTIVE_BATCH 之外的翻页上限约束住，规模可控。
+ */
+function aggregateRecords(
+  records: SpreadsheetRecord[],
+  spec: AggregateSpec,
+): AggregateResult {
+  const { op, field, groupBy } = spec;
+  let skipped = 0;
+
+  /** 取一条记录参与统计的数值；count 只关心"这条算不算" */
+  const numericOf = (r: SpreadsheetRecord): number | null => {
+    if (op === 'count') return 1;
+    if (!field) return null;
+    const n = toNumeric(r.fields[field]);
+    if (n === null) skipped++;
+    return n;
+  };
+
+  if (!groupBy) {
+    const values = records
+      .map(numericOf)
+      .filter((n): n is number => n !== null);
+    return {
+      op,
+      field,
+      recordCount: records.length,
+      value: reduceNumbers(op, values) ?? undefined,
+      ...(skipped > 0 ? { skipped } : {}),
+    };
+  }
+
+  const buckets = new Map<string, number[]>();
+  for (const r of records) {
+    // 分组键统一成字符串；空值单独归到「(空)」而不是丢掉 ——
+    // 「哪个分类花得最多」时"没填分类"本身就是一个有意义的答案
+    const raw = r.fields[groupBy];
+    const key = fieldToStringRaw(raw) || '(空)';
+    const n = numericOf(r);
+    if (n === null) continue;
+    const list = buckets.get(key);
+    if (list) list.push(n);
+    else buckets.set(key, [n]);
+  }
+
+  const groups = [...buckets.entries()]
+    .map(([key, values]) => ({
+      key,
+      value: reduceNumbers(op, values) ?? 0,
+      count: values.length,
+    }))
+    .sort((a, b) => b.value - a.value);
+
+  return {
+    op,
+    field,
+    groupBy,
+    recordCount: records.length,
+    groups,
+    ...(skipped > 0 ? { skipped } : {}),
+  };
 }
 
 /**
@@ -492,7 +603,7 @@ export class Dispatcher {
           confirm_update: '请回复"确认更新"执行，或回复"取消"放弃',
           confirm_upsert:
             '请回复"确认更新"合并到现有记录，"强制新建"创建新记录，或"取消"放弃',
-          select_record: `请回复序号(1~${pendingAction.candidates.length})选择，或回复"取消"放弃`,
+          select_record: `请回复序号(1~${pendingAction.selectableCount ?? pendingAction.candidates.length})选择一条，或回复"全部"更新全部 ${pendingAction.candidates.length} 条，或回复"取消"放弃`,
         };
         await channelAdapter.reply(msg, promptByType[pendingAction.type]);
         await logEvent({ sceneId: pendingAction.sceneId, result: 'ignored' });
@@ -1018,6 +1129,50 @@ export class Dispatcher {
         };
       }
 
+      case 'AGGREGATE': {
+        const spec = parsed.aggregate;
+        if (!spec) {
+          return {
+            success: false,
+            error:
+              '没有解析出要统计什么，请说清楚统计哪个字段（例如「本月支出金额合计」）',
+          };
+        }
+        // 统计字段与分组字段同样要过白名单。这里必须**拒绝**而不是丢弃：
+        // 字段猜错时算出来的是一个看着很正常的数字，用户没有任何办法
+        // 发现它统计错了列 —— 比查询范围变宽更难察觉。
+        const hasMapping = Object.keys(mapping).length > 0;
+        const badKeys = [spec.field, spec.groupBy].filter(
+          (k): k is string => !!k && hasMapping && !(k in mapping),
+        );
+        if (badKeys.length > 0) {
+          return {
+            success: false,
+            error: `「${badKeys.join('、')}」不是「${binding.alias}」里的字段，没法按它统计。可用字段：${Object.keys(mapping).join('、')}`,
+          };
+        }
+        if (spec.op !== 'count' && !spec.field) {
+          return {
+            success: false,
+            error: `${spec.op} 需要指定统计哪个字段。可用字段：${Object.keys(mapping).join('、')}`,
+          };
+        }
+
+        const { records, truncated } = await this.query(
+          adapter,
+          tableConfig,
+          filters,
+        );
+        return {
+          success: true,
+          aggregate: aggregateRecords(records, spec),
+          droppedFields,
+          // 对聚合来说截断不是"结果可能不全"，而是**算出来的数字是错的**。
+          // 渲染层据此换一句更重的措辞。
+          hitQueryLimit: truncated,
+        };
+      }
+
       case 'UPDATE': {
         // 仅统计有效筛选键（排除以 _ 开头的保留键，如 _conjunction），
         // 否则 LLM 返回 {"_conjunction":"or"} 会绕过空判断，
@@ -1073,21 +1228,27 @@ export class Dispatcher {
             error: `匹配到 ${records.length} 条记录，超过单次可操作上限 ${MAX_DESTRUCTIVE_BATCH} 条。请补充更精确的筛选条件后重试`,
           };
         }
-        // 只把**展示出来的**候选存进 pending：序号校验的上界是 candidates.length，
-        // 存全量而只列前 10 条时，用户可以回一个 15 去更新一条自己从没见过的记录
-        const selectable = records.slice(0, MAX_CANDIDATE_DISPLAY);
+        // candidates 存**全部**命中记录（此处已确保 ≤ MAX_DESTRUCTIVE_BATCH，
+        // 所以有界），「全部更新」才有完整的目标集；序号只能选到**展示出来**
+        // 的那些，由 selectableCount 单独约束 —— 存全量而只列前 10 条时，
+        // 用户回一个 15 就会更新一条自己从没见过的记录。
+        const selectableCount = Math.min(records.length, MAX_CANDIDATE_DISPLAY);
         await this.pending.set(pendingKeyOf(msg), {
           sceneId: scene.id,
           bindingAlias: binding.alias,
           type: 'select_record',
-          candidates: selectable,
+          candidates: records,
+          selectableCount,
           message: msg,
           updateFields: fields,
         });
+        const changes = Object.entries(fields)
+          .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+          .join('、');
         return {
           success: false,
           awaitingConfirmation: true,
-          error: `找到 ${records.length} 条匹配记录，请回复序号选择：\n${renderCandidateList(records, tableConfig.fieldMapping)}${limitWarning}`,
+          error: `找到 ${records.length} 条匹配记录，请回复序号选择其中一条，或回复「全部」把这 ${records.length} 条都改成 ${changes}：\n${renderCandidateList(records, tableConfig.fieldMapping)}${limitWarning}`,
         };
       }
 
@@ -1128,6 +1289,72 @@ export class Dispatcher {
       default:
         return { success: false, error: '无法识别的操作意图' };
     }
+  }
+
+  /**
+   * 批量更新 select_record 的全部候选。
+   *
+   * 与 confirm_delete 的批量删除同构：并发受闸门约束（飞书写接口 QPS 约 20，
+   * 一次性 Promise.all 全量发出会大面积 429），逐条汇总成功/失败 ——
+   * 串行 await 中途抛错会让一半改了一半没改，而用户只看到"服务繁忙"。
+   */
+  private async updateAll(
+    msg: UnifiedMessage,
+    action: PendingAction,
+    channelAdapter: ChannelAdapter,
+    adapterOf: () => SpreadsheetAdapter,
+  ): Promise<PendingOutcome> {
+    await this.pending.delete(pendingKeyOf(msg));
+    const binding = this.config.getBinding(action.sceneId, action.bindingAlias);
+    if (!binding) {
+      await channelAdapter.reply(
+        msg,
+        '⚠️ 表格配置已变更，刚才的操作已作废，请重新发送指令',
+      );
+      return { handled: true, resultData: { aborted: '资源绑定已变更' } };
+    }
+    const tableConfig = tableConfigOf(binding);
+    const adapter = adapterOf();
+    const fields = action.updateFields ?? {};
+
+    const results = await runWithConcurrency(
+      action.candidates.map(
+        (record) => () =>
+          adapter.updateRecord(tableConfig, record.recordId, fields),
+      ),
+      DESTRUCTIVE_CONCURRENCY,
+    );
+    const failed = results.filter((r) => r.status === 'rejected');
+    const okCount = results.length - failed.length;
+    const updatedIds = action.candidates
+      .filter((_, i) => results[i]?.status === 'fulfilled')
+      .map((r) => r.recordId);
+    const resultData = {
+      updatedAll: true,
+      updated: okCount,
+      recordIds: updatedIds.slice(0, 50),
+      fieldKeys: Object.keys(fields),
+    };
+
+    if (failed.length === 0) {
+      await channelAdapter.reply(msg, `✅ 已更新 ${okCount} 条记录`);
+      return { handled: true, intent: 'UPDATE', resultData };
+    }
+    const firstErr =
+      failed[0]?.status === 'rejected'
+        ? String((failed[0] as PromiseRejectedResult).reason)
+        : '';
+    console.error('[Dispatcher] 批量更新部分失败:', failed);
+    await channelAdapter.reply(
+      msg,
+      `⚠️ 已更新 ${okCount}/${results.length} 条，${failed.length} 条失败${firstErr ? `（首条原因：${firstErr.slice(0, 100)}）` : ''}`,
+    );
+    return {
+      handled: true,
+      intent: 'UPDATE',
+      errorMsg: `批量更新 ${failed.length}/${results.length} 条失败：${firstErr.slice(0, 200)}`,
+      resultData: { ...resultData, failed: failed.length },
+    };
   }
 
   /**
@@ -1380,6 +1607,16 @@ export class Dispatcher {
     }
 
     if (action.type === 'select_record') {
+      // 「全部」：把命中的每一条都改掉。以前只能一条条点序号 ——
+      // DELETE 早就支持批量，UPDATE 不支持是个没有理由的不对称，
+      // 「把 9 月所有已发货改成已收货」这种需求根本没法做。
+      // 精确匹配词组，避免吞掉正常业务消息。
+      if (['全部', '全部更新', '都改', '都更新'].includes(content)) {
+        return this.updateAll(msg, action, channelAdapter, () =>
+          getSpreadsheetAdapter(binding.provider),
+        );
+      }
+
       // 整条消息必须**只**是一个序号（允许「第2条」这类写法）。
       // 以前直接 Number.parseInt(content)：宽松解析会截取前缀数字，
       // 于是待选状态下一句正常业务消息「2条记录都改成完成」被当成
@@ -1387,7 +1624,12 @@ export class Dispatcher {
       const picked = /^第?(\d+)\s*条?$/.exec(content);
       if (!picked?.[1]) return { handled: false };
       const num = Number.parseInt(picked[1], 10);
-      if (num < 1 || num > action.candidates.length) return { handled: false };
+      // 上界是**展示出来的**条数，不是候选总数
+      const maxPick = Math.min(
+        action.selectableCount ?? action.candidates.length,
+        action.candidates.length,
+      );
+      if (num < 1 || num > maxPick) return { handled: false };
       await this.pending.delete(pendingKeyOf(msg));
       // biome-ignore lint/style/noNonNullAssertion: num 已校验在 [1, candidates.length] 范围内
       const target = action.candidates[num - 1]!;

@@ -59,6 +59,15 @@ export function renderResourceSchema(resources: SceneResource[]): string {
       lines.push('- APPEND 时把要写入的正文放在 fields.content');
     }
 
+    // 聚合的请求结构必须写清楚，否则 LLM 只会把 AGGREGATE 当 QUERY 用
+    if (r.actions.includes('AGGREGATE')) {
+      lines.push(
+        '- AGGREGATE 用于「总共/合计/平均/最多/最少/几条」这类统计，把请求放在 aggregate：',
+        '  {"op":"sum|count|avg|min|max","field":"要统计的数值字段","groupBy":"分组字段（可省略）"}',
+        '  count 不需要 field；filters 与 QUERY 写法一致。不要用 AGGREGATE 去取明细。',
+      );
+    }
+
     return lines.join('\n');
   });
 

@@ -29,7 +29,13 @@ const tableBinding: ResourceBinding = {
 describe('sceneResourceOf', () => {
   it('按 kind 带出可用动词，按映射类型带出取值提示', () => {
     const r = sceneResourceOf(tableBinding);
-    expect(r.actions).toEqual(['CREATE', 'UPDATE', 'QUERY', 'DELETE']);
+    expect(r.actions).toEqual([
+      'CREATE',
+      'UPDATE',
+      'QUERY',
+      'DELETE',
+      'AGGREGATE',
+    ]);
     expect(r.uniqueKey).toBe('项目名称');
     const byKey = Object.fromEntries(r.fields.map((f) => [f.key, f]));
     expect(byKey.业务域?.hint).toContain('多选');
@@ -63,7 +69,7 @@ describe('renderResourceSchema', () => {
   it('渲染字段清单、动词与唯一键', () => {
     const out = renderResourceSchema([sceneResourceOf(tableBinding)]);
     expect(out).toContain('「项目台账表」');
-    expect(out).toContain('CREATE / UPDATE / QUERY / DELETE');
+    expect(out).toContain('CREATE / UPDATE / QUERY / DELETE / AGGREGATE');
     expect(out).toContain('- 上线日期（日期，格式 YYYY-MM-DD）');
     expect(out).toContain('登录密码（回复中会脱敏）');
     expect(out).toContain('唯一键：项目名称');

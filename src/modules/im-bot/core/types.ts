@@ -38,6 +38,12 @@ export const INTENT_VERBS = [
   'UPDATE',
   'QUERY',
   'DELETE',
+  /**
+   * 聚合统计（只读）。记账/台账类表最高频的问题就是「本月总共花了多少」
+   * 「哪个平台卖得最多」，而在此之前只能把记录整条捞回来让用户自己数 ——
+   * 还会撞上回复的 10 条展示上限，等于答不了。
+   */
+  'AGGREGATE',
   'READ',
   'APPEND',
   'UNKNOWN',
@@ -62,12 +68,43 @@ export function isWriteIntent(intent: IntentVerb): boolean {
 
 /** 各资源类型支持的意图动词 */
 export const ACTIONS_BY_KIND: Record<ResourceKind, readonly IntentVerb[]> = {
-  table: ['CREATE', 'UPDATE', 'QUERY', 'DELETE'],
+  table: ['CREATE', 'UPDATE', 'QUERY', 'DELETE', 'AGGREGATE'],
   // QUERY 也接受：现有场景的 prompt 习惯用 QUERY 表达"查看"，
   // 对文档而言等价于 READ，不该因为动词选得不同就报错
   doc: ['READ', 'APPEND', 'QUERY'],
   file: [],
 };
+
+/** 支持的聚合算子 */
+export const AGGREGATE_OPS = ['sum', 'count', 'avg', 'min', 'max'] as const;
+export type AggregateOp = (typeof AGGREGATE_OPS)[number];
+
+/** LLM 给出的聚合请求 */
+export interface AggregateSpec {
+  op: AggregateOp;
+  /** 要统计的数值字段。count 不需要（数的是记录条数） */
+  field?: string;
+  /** 分组字段。省略则给一个总计标量 */
+  groupBy?: string;
+}
+
+/** 聚合结果 */
+export interface AggregateResult {
+  op: AggregateOp;
+  field?: string;
+  groupBy?: string;
+  /** 参与统计的记录数 */
+  recordCount: number;
+  /** 不分组时的结果值 */
+  value?: number;
+  /** 分组时的结果，按值降序 */
+  groups?: Array<{ key: string; value: number; count: number }>;
+  /**
+   * 该字段上无法解析成数字、因而被跳过的记录数。
+   * 必须回显：空值和脏数据会让总和悄悄偏小，不说用户不会怀疑这个数字。
+   */
+  skipped?: number;
+}
 
 /** 意图解析结果 */
 export interface ParsedIntent {
@@ -88,6 +125,8 @@ export interface ParsedIntent {
    * 字段名使用 fieldMapping 的逻辑 key（与 filters 的 key 同名空间）。
    */
   projectFields?: string[];
+  /** 仅 AGGREGATE 生效 */
+  aggregate?: AggregateSpec;
   confidence: number;
   summary: string;
 }
@@ -116,6 +155,8 @@ export interface ExecuteResult {
   doc?: DocumentContent;
   /** 文档：本次追加进去的文本（用于回复里回显写了什么） */
   appendedText?: string;
+  /** 聚合统计结果 */
+  aggregate?: AggregateResult;
   /**
    * true 表示"已挂起二次确认，等用户回复"，而不是执行失败。
    * error 字段此时承载给用户看的确认提示文案。
@@ -373,6 +414,15 @@ export interface PendingAction {
     | 'confirm_upsert'
     | 'confirm_update';
   candidates: SpreadsheetRecord[];
+  /**
+   * select_record 时允许用序号选到第几条。
+   *
+   * candidates 存的是**全部**命中记录（受 MAX_DESTRUCTIVE_BATCH 约束，
+   * 所以有界），这样「全部更新」才有完整的目标集；但序号只能选到**展示
+   * 出来的**那些 —— 存全量而只列前 10 条时，用户回一个 15 就会更新一条
+   * 自己从没见过的记录。两个上界不同，必须分开记。
+   */
+  selectableCount?: number;
   message: UnifiedMessage;
   updateFields?: Record<string, unknown>;
   expiresAt: number;

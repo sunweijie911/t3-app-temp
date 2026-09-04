@@ -9,13 +9,26 @@ import {
 } from '../core/field-render';
 import { renderResourceSchema } from '../core/schema-prompt';
 import type {
+  AggregateSpec,
   ExecuteResult,
   FieldMappingValue,
   ParsedIntent,
   SceneContext,
 } from '../core/types';
-import { INTENT_VERBS } from '../core/types';
+import { AGGREGATE_OPS, INTENT_VERBS } from '../core/types';
 import type { BotScene } from './types';
+
+/**
+ * 统计结果的数字格式化。
+ *
+ * 平均值这类除法会带一串浮点残留（26.612000000000023），直接 String()
+ * 丢进群里很难看；整数保持原样不加小数点。
+ */
+function formatNumber(v: number): string {
+  if (!Number.isFinite(v)) return String(v);
+  if (Number.isInteger(v)) return String(v);
+  return String(Number.parseFloat(v.toPrecision(12)));
+}
 
 function applyFieldVars(
   tpl: string,
@@ -62,6 +75,21 @@ function applyFieldVars(
  * 丢掉之后 fields 为空 → "没有解析出要写入的字段"，filters 为空 →
  * "删除操作需要指定筛选条件"，两条都是能照着改的提示。
  */
+/**
+ * 解析 LLM 给出的聚合请求。op 不在白名单里就整个丢掉 ——
+ * 让 AGGREGATE 落到"没有聚合请求"的报错分支，比拿一个猜的算子去算钱要好。
+ */
+function asAggregate(v: unknown): AggregateSpec | undefined {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const o = v as Record<string, unknown>;
+  const op = typeof o.op === 'string' ? o.op.toLowerCase() : '';
+  if (!(AGGREGATE_OPS as readonly string[]).includes(op)) return undefined;
+  const field = typeof o.field === 'string' && o.field ? o.field : undefined;
+  const groupBy =
+    typeof o.groupBy === 'string' && o.groupBy ? o.groupBy : undefined;
+  return { op: op as AggregateSpec['op'], field, groupBy };
+}
+
 function asFieldRecord(v: unknown): Record<string, unknown> | undefined {
   if (v === null || v === undefined) return undefined;
   if (typeof v !== 'object' || Array.isArray(v)) return undefined;
@@ -179,6 +207,7 @@ export class DatabaseDrivenScene implements BotScene {
         resource: resource || undefined,
         fields: fields ?? {},
         filters,
+        aggregate: asAggregate(obj.aggregate),
         projectFields:
           projectFields && projectFields.length > 0 ? projectFields : undefined,
         confidence: Number(obj.confidence) || 0,
@@ -228,6 +257,13 @@ export class DatabaseDrivenScene implements BotScene {
       // READ / QUERY：正文可能很长，按群消息上限截断
       const body = text.trim() || '(文档为空)';
       return clampReply(`📄 《${title}》\n\n${body}${link}`);
+    }
+
+    // ── 聚合能力 ───────────────────────────────────────────
+    // 同样排在 replyTemplate 之前：模板的变量是明细取向的
+    // （${fields.xxx} / each 块），聚合结果里没有 records，套模板会全渲染成空
+    if (result.aggregate) {
+      return clampReply(this.formatAggregate(result));
     }
 
     // 有自定义回复模板时使用模板（表格结果专用）
@@ -349,6 +385,57 @@ export class DatabaseDrivenScene implements BotScene {
     }
     if (intent.intent === 'DELETE') return `✅ 已删除${this.name}`;
     return '✅ 操作完成';
+  }
+
+  /** 聚合结果渲染 */
+  private formatAggregate(result: ExecuteResult): string {
+    const agg = result.aggregate;
+    if (!agg) return '✅ 操作完成';
+    const OP_LABELS: Record<string, string> = {
+      sum: '合计',
+      count: '条数',
+      avg: '平均',
+      min: '最小',
+      max: '最大',
+    };
+    const opLabel = OP_LABELS[agg.op] ?? agg.op;
+    const subject = agg.op === 'count' ? '记录' : (agg.field ?? '');
+
+    // 截断对聚合是**致命**的：拉取不全意味着算出来的数字直接是错的，
+    // 而它看上去和正确答案一模一样。所以这里的措辞比 QUERY 侧重得多，
+    // 且放在最前面 —— 放末尾容易被当成免责声明忽略掉。
+    const warning = result.hitQueryLimit
+      ? '⚠️ 数据量超过单次拉取上限，**下面的数字是不完整的**，请缩小范围（如按月/按分类）后重新统计\n\n'
+      : '';
+    const skipped = agg.skipped
+      ? `\n（有 ${agg.skipped} 条记录的「${agg.field}」为空或不是数字，未计入）`
+      : '';
+
+    if (agg.groups) {
+      if (agg.groups.length === 0) {
+        return `${warning}📊 没有符合条件的${this.name}`;
+      }
+      const GROUP_LIMIT = 20;
+      const shown = agg.groups.slice(0, GROUP_LIMIT);
+      const lines = shown.map(
+        (g, i) =>
+          `${i + 1}. ${g.key}：${formatNumber(g.value)}（${g.count} 条）`,
+      );
+      const rest =
+        agg.groups.length > shown.length
+          ? `\n…（共 ${agg.groups.length} 组，仅展示前 ${GROUP_LIMIT} 组）`
+          : '';
+      const total =
+        agg.op === 'sum' || agg.op === 'count'
+          ? `\n\n总${opLabel}：${formatNumber(agg.groups.reduce((a, g) => a + g.value, 0))}`
+          : '';
+      return `${warning}📊 按「${agg.groupBy}」${opLabel}${subject ? `「${subject}」` : ''}\n${lines.join('\n')}${rest}${total}${skipped}`;
+    }
+
+    if (agg.value === undefined) {
+      return `${warning}📊 没有符合条件的${this.name}`;
+    }
+    return `${warning}📊 ${subject ? `「${subject}」` : ''}${opLabel}：${formatNumber(agg.value)}（共 ${agg.recordCount} 条记录）${skipped}`;
   }
 
   /**
