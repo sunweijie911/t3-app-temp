@@ -1,3 +1,4 @@
+// cspell:ignore isanyof anyof oneof
 import type { SpreadsheetRecord } from '../core/types';
 
 /**
@@ -113,6 +114,20 @@ function matchesValue(actual: unknown, expected: unknown): boolean {
   return String(actual ?? '') === exp;
 }
 
+/**
+ * 「命中任一」：筛选值是数组时逐元素比，标量时退化为单值比较。
+ *
+ * 与飞书侧的 ANY_OF_OPS 展开一一对应。少了这层，`{op:'in',value:[...]}`
+ * 会落到等值分支拿 `String(['待发货','已发货'])` 去比，
+ * 恒不命中 —— 钉钉/企微上表现为静默 0 条（飞书那边则是 InvalidFilter）。
+ */
+function matchesAny(actual: unknown, expected: unknown): boolean {
+  if (Array.isArray(expected)) {
+    return expected.some((one) => matchesValue(actual, one));
+  }
+  return matchesValue(actual, expected);
+}
+
 export function filterRecords(
   records: SpreadsheetRecord[],
   filters: Record<string, unknown>,
@@ -133,7 +148,7 @@ export function filterRecords(
     // 静默退化成「该字段为空」。实测 {业务域:['门户','督导']} 只命中
     // 业务域为空的那条记录，而飞书侧对同一份 LLM 输出给的是另一个错答案。
     if (Array.isArray(expected)) {
-      return expected.some((one) => matchesValue(actual, one));
+      return matchesAny(actual, expected);
     }
     if (expected !== null && typeof expected === 'object') {
       const { op, value } = expected as { op?: string; value?: unknown };
@@ -149,6 +164,13 @@ export function filterRecords(
           return actualStr !== '';
         case 'between':
           return matchBetween(actual, value);
+        // 「命中任一」。LLM 会自发产出 op:'in'，即使 prompt 没教过它
+        case 'in':
+        case 'isanyof':
+        case 'anyof':
+        case 'oneof':
+        case 'includes':
+          return matchesAny(actual, value);
         case '!=':
         case 'isnot':
           return compareAsDate(actual, value, '!=') ?? actualStr !== v;
@@ -161,7 +183,9 @@ export function filterRecords(
             compareNumeric(actual, value, opKey)
           );
         default:
-          return matchesValue(actual, value);
+          // 未知 op 退化为等值；值是数组时按「命中任一」，
+          // 否则又会走回 String(数组) 那个静默给错答案的比较
+          return matchesAny(actual, value);
       }
     }
     return matchesValue(actual, expected);

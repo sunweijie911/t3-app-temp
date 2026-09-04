@@ -255,3 +255,33 @@ describe('filterRecords — 数组筛选值 = 命中任一（回归）', () => {
     ).toEqual(['d1', 'd3']);
   });
 });
+
+describe('filterRecords — op:"in" 命中任一（回归）', () => {
+  const records: SpreadsheetRecord[] = [
+    { recordId: 'r1', fields: { 状态: '待发货' } },
+    { recordId: 'r2', fields: { 状态: '已发货' } },
+    { recordId: 'r3', fields: { 状态: '已结算' } },
+  ];
+
+  it('回归 —— 以前落到等值分支拿 String(数组) 比较，钉钉/企微上静默 0 条', () => {
+    expect(
+      filterRecords(records, {
+        状态: { op: 'in', value: ['待发货', '已发货'] },
+      }).map((r) => r.recordId),
+    ).toEqual(['r1', 'r2']);
+  });
+
+  it('同义写法一致', () => {
+    for (const op of ['isAnyOf', 'anyOf', 'oneOf', 'includes']) {
+      expect(
+        filterRecords(records, { 状态: { op, value: ['待发货', '已结算'] } }),
+      ).toHaveLength(2);
+    }
+  });
+
+  it('未知 op 带数组值同样按命中任一', () => {
+    expect(
+      filterRecords(records, { 状态: { op: '乱写的', value: ['待发货'] } }),
+    ).toHaveLength(1);
+  });
+});

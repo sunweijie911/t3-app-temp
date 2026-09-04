@@ -445,3 +445,67 @@ describe('buildFilterConditions — 数组筛选值 = 命中任一（回归）',
     expect(requiresOrConjunction(conds)).toBe(false);
   });
 });
+
+describe('buildFilterConditions — op:"in" 命中任一（线上实测的 LLM 输出形态）', () => {
+  it('回归 —— in 不在 OP_ALIASES 里，以前落到未知 op 兜底被 String() 拼成一个字面量', () => {
+    // 线上日志：filters={"订单状态":"in"} → 飞书回 InvalidFilter，整条查询失败
+    expect(
+      buildFilterConditions('订单状态', {
+        op: 'in',
+        value: ['待发货', '已发货'],
+      }),
+    ).toEqual([
+      { field_name: '订单状态', operator: 'is', value: ['待发货'] },
+      { field_name: '订单状态', operator: 'is', value: ['已发货'] },
+    ]);
+  });
+
+  it('in 展开后必须以 OR 连接', () => {
+    const conds = buildFilterConditions('售出平台', {
+      op: 'in',
+      value: ['闲鱼', '微信'],
+    });
+    expect(requiresOrConjunction(conds)).toBe(true);
+  });
+
+  it('同义写法 isAnyOf / anyOf / oneOf / includes 一致对待', () => {
+    for (const op of ['isAnyOf', 'anyOf', 'oneOf', 'includes']) {
+      expect(
+        buildFilterConditions('订单状态', { op, value: ['待发货', '已发货'] }),
+      ).toHaveLength(2);
+    }
+  });
+
+  it('未知 op 带数组值也按命中任一处理，不再 String(数组)', () => {
+    expect(
+      buildFilterConditions('订单状态', { op: '乱写的', value: ['A', 'B'] }),
+    ).toEqual([
+      { field_name: '订单状态', operator: 'is', value: ['A'] },
+      { field_name: '订单状态', operator: 'is', value: ['B'] },
+    ]);
+  });
+
+  it('in 的值是标量时退化为单条 is', () => {
+    expect(
+      buildFilterConditions('订单状态', { op: 'in', value: '待发货' }),
+    ).toEqual([{ field_name: '订单状态', operator: 'is', value: ['待发货'] }]);
+  });
+
+  it('日期列的 in 逐元素转 ExactDate', () => {
+    const conds = buildFilterConditions('日期', {
+      op: 'in',
+      value: ['2026-09-01', '2026-09-02'],
+    });
+    expect(conds).toHaveLength(2);
+    expect(conds[0]?.value[0]).toBe('ExactDate');
+  });
+
+  it('between 不被 any-of 规则吞掉（它在 OP_ALIASES 里也查不到，但有专属分支）', () => {
+    const conds = buildFilterConditions('日期', {
+      op: 'between',
+      value: ['2026-09-01', '2026-09-30'],
+    });
+    expect(conds.map((c) => c.operator)).toEqual(['isGreater', 'isLess']);
+    expect(requiresAndConjunction(conds)).toBe(true);
+  });
+});

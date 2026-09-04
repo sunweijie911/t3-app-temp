@@ -1,3 +1,4 @@
+// cspell:ignore isanyof anyof oneof
 import { feishuTokenManager } from '../auth/feishu-token';
 import type { DisplayType } from '../core/field-render';
 import type {
@@ -235,6 +236,37 @@ const OP_ALIASES: Record<string, string> = {
   islessequal: 'isLessEqual',
 };
 
+/**
+ * 「命中任一」类操作符。
+ *
+ * 飞书**没有** isAnyOf 这种操作符，所以它们只能展开成 N 个 is 由外层用 or
+ * 连接（requiredConjunctionOf 会识别出这一组必须 OR）。
+ *
+ * 必须显式列出来：实测 LLM 会自发产出 `{op:'in', value:['待发货','已发货']}`
+ * —— 即使 prompt 里没教过这个写法，它也是「取多个候选值」最自然的表达。
+ * 而 OP_ALIASES 里没有 'in'，就会落到未知 op 的兜底分支，那里
+ * `String(obj.value)` 把数组拼成 "待发货,已发货" 一个字面量下发，
+ * 飞书直接回 InvalidFilter，整条查询失败。
+ */
+const ANY_OF_OPS = new Set(['in', 'isanyof', 'anyof', 'oneof', 'includes']);
+
+/**
+ * 有专属分支、不走 OP_ALIASES 的操作符。
+ * 它们在 OP_ALIASES 里查不到，但**不是**未知 op —— 漏掉这一层的话
+ * `between` 会被下面的「未知 op + 数组值」规则当成「命中任一」吞掉，
+ * 日期区间直接失效。
+ */
+const DEDICATED_OPS = new Set(['between']);
+
+/** 该 { op, value } 是否表达「命中任一」：显式 any-of，或未知 op 带了数组值 */
+function isAnyOfCondition(opKey: string, value: unknown): boolean {
+  if (ANY_OF_OPS.has(opKey)) return true;
+  if (DEDICATED_OPS.has(opKey)) return false;
+  // 未知 op + 数组值：兜底分支的 String(数组) 是个静默给错答案的陷阱，
+  // 宁可按「命中任一」理解 —— 数组本身就只有这一种合理语义
+  return !OP_ALIASES[opKey] && Array.isArray(value);
+}
+
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
 /** YYYY-MM-DD → 该日 CST 零点的毫秒值 */
@@ -355,6 +387,13 @@ export function buildFilterConditions(
           value: ['ExactDate', String(upperMs)],
         },
       ];
+    }
+
+    // 「命中任一」：脱掉 { op, value } 的壳，交给下面的数组分支逐元素展开。
+    // 递归而不是复制一份展开逻辑 —— 日期元素要转 ExactDate、空元素要过滤，
+    // 那些规则只该有一处。放在 between 之后、未知 op 兜底之前。
+    if (isAnyOfCondition(opKey, obj.value)) {
+      return buildFilterConditions(fieldName, obj.value, displayType);
     }
 
     const op = OP_ALIASES[opKey];
@@ -539,14 +578,30 @@ async function buildLinkFilterConditions(
   if (value == null || value === '') {
     return [{ field_name: link.name, operator: 'isEmpty', value: [] }];
   }
-  const recordId = await resolveLinkRecordId(workspaceId, link, String(value));
-  if (!recordId) {
+
+  // 多值同样要逐个反查。以前直接 String(value)，数组会变成 "A,B" 去查一条
+  // 叫「A,B」的关联记录 —— 必然查不到，于是走 __not_found__ 让结果恒为空。
+  const wanted = (Array.isArray(value) ? value : [value]).filter(
+    (v) => v != null && v !== '',
+  );
+  const recordIds = (
+    await Promise.all(
+      wanted.map((v) => resolveLinkRecordId(workspaceId, link, String(v))),
+    )
+  ).filter((id): id is string => !!id);
+
+  if (recordIds.length === 0) {
     // 反查不到：用一个不可能成立的条件让结果集为空
     return [
       { field_name: link.name, operator: 'is', value: ['__not_found__'] },
     ];
   }
-  return [{ field_name: link.name, operator: 'contains', value: [recordId] }];
+  // 多个 contains 由 requiredConjunctionOf 判定为需要 OR（命中任一）
+  return recordIds.map((id) => ({
+    field_name: link.name,
+    operator: 'contains',
+    value: [id],
+  }));
 }
 
 export function reverseMapFields(
@@ -573,11 +628,20 @@ function buildMultiSelectFilterConditions(
   fieldName: string,
   raw: unknown,
 ): Array<{ field_name: string; operator: string; value: string[] }> {
+  let value = raw;
   if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
-    return buildFilterConditions(fieldName, raw);
+    const obj = raw as { op?: string; value?: unknown };
+    const opKey = (obj.op ?? '').toString().toLowerCase();
+    // {op:'in', value:[...]} 在多选字段上等价于裸数组，但**不能**转交
+    // buildFilterConditions —— 那边会展开成 is，而飞书多选字段只认 contains。
+    // 剥掉壳后走下面的数组分支。
+    if (!isAnyOfCondition(opKey, obj.value)) {
+      return buildFilterConditions(fieldName, raw);
+    }
+    value = obj.value;
   }
-  if (Array.isArray(raw)) {
-    return raw
+  if (Array.isArray(value)) {
+    return value
       .filter((v) => v != null && v !== '')
       .map((v) => ({
         field_name: fieldName,
