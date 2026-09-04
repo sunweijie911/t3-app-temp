@@ -45,5 +45,18 @@ export interface ChannelAdapter {
    */
   decode(req: Request): Promise<DecodeResult>;
 
+  /**
+   * ack **之后**才跑的富化步骤：补发送者名 / 群名，以及需要网络往返才能
+   * 做的过滤判断（飞书的「群里 @ 的是不是我」）。
+   *
+   * 为什么必须与 decode 分开：decode 跑在回调 ack 之前，而这些查询都要
+   * 网络往返 —— 飞书那三个查询各自 3s 超时，冷启动还要先换 token（10s 超时），
+   * 叠起来远超平台 3 秒的重试阈值。首条消息因此几乎必然触发重试。
+   * 现在 decode 只做验签 + 解析（纯 CPU），富化挪到 after() 里。
+   *
+   * @returns 富化后的消息；`null` 表示这条不该继续处理
+   */
+  enrich?(msg: UnifiedMessage): Promise<UnifiedMessage | null>;
+
   reply(msg: UnifiedMessage, content: string): Promise<void>;
 }

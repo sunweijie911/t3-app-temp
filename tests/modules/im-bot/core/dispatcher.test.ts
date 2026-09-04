@@ -40,11 +40,13 @@ import {
   DESTRUCTIVE_CONCURRENCY,
   MAX_CANDIDATE_DISPLAY,
   MAX_LLM_ATTEMPTS,
+  RATE_LIMIT_MAX,
 } from '@/modules/im-bot/constants';
 import { MemoryDedupStore } from '@/modules/im-bot/core/dedup';
 import { Dispatcher } from '@/modules/im-bot/core/dispatcher';
 import { chatCompletion } from '@/modules/im-bot/core/llm';
 import { MemoryPendingActionStore } from '@/modules/im-bot/core/pending-action';
+import { MemoryRateLimitStore } from '@/modules/im-bot/core/rate-limit';
 import type {
   BotEvent,
   ResourceBinding,
@@ -2632,5 +2634,128 @@ describe('Dispatcher — 失败后让 LLM 纠正重试', () => {
     const last = events.at(-1);
     expect(last?.result).toBe('error');
     expect(last?.resultData).toMatchObject({ attempts: MAX_LLM_ATTEMPTS });
+  });
+});
+
+describe('Dispatcher — 限流', () => {
+  function makeLimitedD(events: BotEvent[], store: MemoryRateLimitStore) {
+    const d = new Dispatcher({
+      getBinding: () => baseBinding,
+      pendingStore: new MemoryPendingActionStore(),
+      rateLimitStore: store,
+      onEvent: (e) => {
+        events.push(e);
+      },
+    });
+    d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    return d;
+  }
+
+  it('超过配额后不再调 LLM，且只在刚超限那一次回提示', async () => {
+    const events: BotEvent[] = [];
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const d = makeLimitedD(events, new MemoryRateLimitStore());
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"QUERY","fields":{},"filters":{"项目名称":"A"},"confidence":0.9,"summary":"查"}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+    // 打满配额
+    for (let i = 0; i < RATE_LIMIT_MAX; i++) {
+      await d.process(makeMsg({ content: '查项目 A' }), channel);
+    }
+    const callsAtLimit = mockChatCompletion.mock.calls.length;
+    const repliesAtLimit = (channel.reply as ReturnType<typeof vi.fn>).mock
+      .calls.length;
+
+    // 第 MAX+1 条：被拦，回一次提示
+    await d.process(makeMsg({ content: '查项目 A' }), channel);
+    expect(mockChatCompletion.mock.calls.length).toBe(callsAtLimit);
+    expect(channel.lastReply).toContain('消息太频繁');
+    expect((channel.reply as ReturnType<typeof vi.fn>).mock.calls.length).toBe(
+      repliesAtLimit + 1,
+    );
+
+    // 第 MAX+2 条起：继续拦，但保持沉默（刷屏时每条都回等于把流量翻倍）
+    await d.process(makeMsg({ content: '查项目 A' }), channel);
+    await d.process(makeMsg({ content: '查项目 A' }), channel);
+    expect((channel.reply as ReturnType<typeof vi.fn>).mock.calls.length).toBe(
+      repliesAtLimit + 1,
+    );
+
+    const last = events.at(-1);
+    expect(last?.result).toBe('ignored');
+    expect(last?.errorMsg).toContain('触发限流');
+  });
+
+  it('不同用户各自计数，互不影响', async () => {
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const d = makeLimitedD([], new MemoryRateLimitStore());
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"QUERY","fields":{},"filters":{"项目名称":"A"},"confidence":0.9,"summary":"查"}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+    for (let i = 0; i <= RATE_LIMIT_MAX; i++) {
+      await d.process(
+        makeMsg({ content: '查项目 A', senderId: 'uA' }),
+        channel,
+      );
+    }
+    expect(channel.lastReply).toContain('消息太频繁');
+
+    // uB 是干净的
+    await d.process(makeMsg({ content: '查项目 A', senderId: 'uB' }), channel);
+    expect(channel.lastReply).not.toContain('消息太频繁');
+  });
+
+  it('★ 二次确认不消耗配额 —— 否则用户会被卡在等待态里出不来', async () => {
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const store = new MemoryRateLimitStore();
+    const d = makeLimitedD([], store);
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"DELETE","fields":{},"filters":{"项目名称":"A"},"confidence":0.9,"summary":"删"}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { recordId: 'r1', fields: { 项目名称: 'A' } },
+    ]);
+    (adapter.deleteRecord as ReturnType<typeof vi.fn>).mockResolvedValue(
+      undefined,
+    );
+
+    // 挂起确认（消耗 1 次配额），再把余下配额打满
+    await d.process(makeMsg({ content: '删掉项目 A' }), channel);
+    for (let i = 1; i < RATE_LIMIT_MAX + 3; i++) {
+      await store.hit({ platform: 'feishu', chatId: 'chatA', senderId: 'uX' });
+    }
+
+    // 配额已爆，但"确认删除"必须照样生效
+    await d.process(makeMsg({ content: '确认删除' }), channel);
+    expect(adapter.deleteRecord).toHaveBeenCalled();
+    expect(channel.lastReply).toContain('已删除');
+  });
+
+  it('平台重试同一 eventId 不消耗配额', async () => {
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    const d = makeLimitedD([], new MemoryRateLimitStore());
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"QUERY","fields":{},"filters":{"项目名称":"A"},"confidence":0.9,"summary":"查"}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+    const msg = makeMsg({ content: '查项目 A' });
+    // 同一条消息发 (MAX + 5) 次：幂等在限流之前，只有第一次真正处理
+    for (let i = 0; i < RATE_LIMIT_MAX + 5; i++) {
+      await d.process(msg, channel);
+    }
+    expect(channel.lastReply).not.toContain('消息太频繁');
   });
 });

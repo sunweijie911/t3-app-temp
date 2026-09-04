@@ -1,20 +1,26 @@
 import { eq, lt, sql } from 'drizzle-orm';
 import { db } from '@/server/db';
 import type { BotPlatform } from '../constants';
-import { DEDUP_TTL_MS, PENDING_ACTION_TTL_MS } from '../constants';
+import {
+  DEDUP_TTL_MS,
+  PENDING_ACTION_TTL_MS,
+  RATE_LIMIT_WINDOW_MS,
+} from '../constants';
 import {
   type DedupStore,
   type PendingActionStore,
   type PendingKeyParts,
+  type RateLimitStore,
   serializeDedupKey,
   serializePendingKey,
+  serializeRateLimitKey,
 } from '../core/stores';
 import type {
   PendingAction,
   SpreadsheetRecord,
   UnifiedMessage,
 } from '../core/types';
-import { botEventDedup, botPendingActions } from '../schema';
+import { botEventDedup, botPendingActions, botRateLimits } from '../schema';
 
 /** 过期行清理的最小间隔：避免每条消息都扫一次表 */
 const GC_INTERVAL_MS = 5 * 60 * 1000;
@@ -38,6 +44,48 @@ function maybeGc() {
     .where(lt(botPendingActions.expiresAt, now))
     .execute()
     .catch((err) => console.error('[DbStores] 清理过期待确认记录失败:', err));
+  void db
+    .delete(botRateLimits)
+    .where(lt(botRateLimits.expiresAt, now))
+    .execute()
+    .catch((err) => console.error('[DbStores] 清理过期限流计数失败:', err));
+}
+
+/**
+ * DB 限流存储 —— 多实例安全。
+ *
+ * 计数是一条语句：窗口起点在主键里，所以「同窗口再来一次」必然撞主键，
+ * `DO UPDATE SET count = count + 1 RETURNING count` 直接拿到累计值。
+ * 没有读改写，也就没有并发窗口。
+ */
+export class DbRateLimitStore implements RateLimitStore {
+  async hit(
+    key: PendingKeyParts,
+    windowMs: number = RATE_LIMIT_WINDOW_MS,
+  ): Promise<number> {
+    const now = Date.now();
+    const k = serializeRateLimitKey(key, windowMs, now);
+    try {
+      const [row] = await db
+        .insert(botRateLimits)
+        .values({
+          limitKey: k,
+          count: 1,
+          expiresAt: new Date(now + windowMs),
+        })
+        .onConflictDoUpdate({
+          target: botRateLimits.limitKey,
+          set: { count: sql`${botRateLimits.count} + 1` },
+        })
+        .returning({ count: botRateLimits.count });
+      return row?.count ?? 1;
+    } catch (err) {
+      // 与幂等判定同理：DB 故障时**放行**。限流是成本闸门，
+      // 不是安全边界；因为计数表挂了就让所有人用不了机器人显然更糟。
+      console.error('[DbRateLimitStore] 计数失败，放行本次处理:', err);
+      return 1;
+    }
+  }
 }
 
 /**

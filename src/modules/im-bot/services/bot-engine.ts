@@ -21,11 +21,16 @@ import type {
 import { DatabaseDrivenScene, parseKeywords } from '../scenes/db-scene';
 import { botEventLogs, botResourceBindings, botScenes } from '../schema';
 import { resetCredentialsCache } from './credentials';
-import { DbDedupStore, DbPendingActionStore } from './db-stores';
+import {
+  DbDedupStore,
+  DbPendingActionStore,
+  DbRateLimitStore,
+} from './db-stores';
 
-// 幂等/待确认状态走 DB，多实例部署下才能共享
+// 幂等/待确认/限流状态走 DB，多实例部署下才能共享
 const dedupStore = new DbDedupStore();
 const pendingStore = new DbPendingActionStore();
+const rateLimitStore = new DbRateLimitStore();
 
 const channelAdapters: Record<BotPlatform, ChannelAdapter> = {
   feishu: new FeishuChannelAdapter(),
@@ -136,6 +141,7 @@ async function getDispatcher(): Promise<Dispatcher> {
       onEvent: logBotEvent,
       dedupStore,
       pendingStore,
+      rateLimitStore,
     });
 
     for (const s of scenes) {
@@ -249,8 +255,16 @@ export async function handleBotWebhook(
   // 平台 3s 内不回 200 就重试，所以必须先返回再处理。
   // 用 after() 而不是裸 fire-and-forget：后者在 serverless 上响应返回即冻结，
   // 用户永远收不到回复、审计日志也不会落库。
+  // 富化（查用户名/群名、判断群里 @ 的是不是自己）挪到 ack **之后**：
+  // 那几个查询都要网络往返，冷启动还要先换 token（10s 超时），叠起来
+  // 远超飞书的 3 秒重试阈值。decode 现在只做验签与解析，零网络调用。
   const run = () =>
-    disp.process(msg, adapter).catch((err) => {
+    (async () => {
+      const enriched = adapter.enrich ? await adapter.enrich(msg) : msg;
+      // null = 富化后判定不该处理（如群里 @ 的不是本机器人）
+      if (!enriched) return;
+      await disp.process(enriched, adapter);
+    })().catch((err) => {
       console.error('[BotEngine] 异步处理异常:', err);
     });
 

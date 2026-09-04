@@ -5,6 +5,7 @@ import {
   MAX_CANDIDATE_DISPLAY,
   MAX_DESTRUCTIVE_BATCH,
   MAX_LLM_ATTEMPTS,
+  RATE_LIMIT_MAX,
 } from '../constants';
 import { documentConfigOf, getDocumentAdapter } from '../documents/factory';
 import type { BotScene } from '../scenes/types';
@@ -14,8 +15,9 @@ import { MemoryDedupStore } from './dedup';
 import { renderRecordSummary } from './field-render';
 import { chatCompletion, extractJson, type RetryContext } from './llm';
 import { MemoryPendingActionStore } from './pending-action';
+import { MemoryRateLimitStore } from './rate-limit';
 import { SceneRegistry } from './scene-registry';
-import type { DedupStore, PendingActionStore } from './stores';
+import type { DedupStore, PendingActionStore, RateLimitStore } from './stores';
 import { pendingKeyOf } from './stores';
 import type {
   BotEvent,
@@ -63,6 +65,11 @@ interface DispatcherConfig {
    */
   dedupStore?: DedupStore;
   pendingStore?: PendingActionStore;
+  /**
+   * 限流存储。默认进程内实现，多实例下实际放行量是配额 × 实例数，
+   * 生产环境注入 DbRateLimitStore。
+   */
+  rateLimitStore?: RateLimitStore;
 }
 
 /** 该筛选项是否构成一个真正的条件 */
@@ -410,12 +417,14 @@ export class Dispatcher {
   readonly registry = new SceneRegistry();
   private dedup: DedupStore;
   private pending: PendingActionStore;
+  private rateLimit: RateLimitStore;
   private config: DispatcherConfig;
 
   constructor(config: DispatcherConfig) {
     this.config = config;
     this.dedup = config.dedupStore ?? new MemoryDedupStore();
     this.pending = config.pendingStore ?? new MemoryPendingActionStore();
+    this.rateLimit = config.rateLimitStore ?? new MemoryRateLimitStore();
   }
 
   async process(
@@ -487,6 +496,30 @@ export class Dispatcher {
         };
         await channelAdapter.reply(msg, promptByType[pendingAction.type]);
         await logEvent({ sceneId: pendingAction.sceneId, result: 'ignored' });
+        return;
+      }
+
+      // 2.5 限流。
+      //
+      // 位置是刻意的：
+      // - 在**幂等占坑之后** —— 平台重试同一个 eventId 不该消耗用户配额
+      // - 在**待确认处理之后** —— "确认删除"这类回复不走 LLM，几乎不花钱，
+      //   而把人卡在等待态里出不来是更糟的结果
+      // - 在**场景匹配之前** —— 匹配本身就可能调一次 LLM，闸门必须在它前面
+      const hits = await this.rateLimit.hit(pendingKey);
+      if (hits > RATE_LIMIT_MAX) {
+        // 只在**刚**超限那一次回提示，之后沉默：有人刷屏时每条都回
+        // 等于把流量翻倍，还会被平台按频率限速
+        if (hits === RATE_LIMIT_MAX + 1) {
+          await channelAdapter.reply(
+            msg,
+            `⏳ 消息太频繁了，请稍后再试（每分钟最多 ${RATE_LIMIT_MAX} 条）`,
+          );
+        }
+        await logEvent({
+          result: 'ignored',
+          errorMsg: `触发限流（本窗口第 ${hits} 条）`,
+        });
         return;
       }
 

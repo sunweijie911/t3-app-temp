@@ -198,6 +198,35 @@ export const botEventDedup = createTable(
   (t) => [index('bot_event_dedup_expires_at_idx').on(t.expiresAt)],
 );
 
+// ── 限流计数表 ────────────────────────────────────────────────
+
+/**
+ * 按 (平台, 会话, 发送者, 时间窗) 计数的固定窗口限流。
+ *
+ * 为什么必须有：每条 @机器人 的消息都会触发 1~2 次 LLM 调用，而在此之前
+ * 全链路**没有任何闸门** —— 群里有人刷屏，或者有人拿脚本 @ 机器人，
+ * 成本直接线性涨，也没有任何地方能拦住。
+ *
+ * 为什么把窗口起点放进主键：这样计数就是一条
+ * `INSERT ... ON CONFLICT DO UPDATE SET count = count + 1 RETURNING count`
+ * —— 原子、多实例安全、一次往返。代价是窗口边界上最多放过 2 倍配额，
+ * 对"防刷 + 控成本"这个目的完全够用，不值得为它引入滑动窗口的复杂度。
+ */
+export const botRateLimits = createTable(
+  'bot_rate_limit',
+  (d) => ({
+    /** `${platform}:${chatId}:${senderId}:${windowStart}` */
+    limitKey: d.varchar({ length: 512 }).primaryKey(),
+    count: d.integer().notNull().default(0),
+    expiresAt: d.timestamp({ withTimezone: true }).notNull(),
+    createdAt: d
+      .timestamp({ withTimezone: true })
+      .$defaultFn(() => new Date())
+      .notNull(),
+  }),
+  (t) => [index('bot_rate_limit_expires_at_idx').on(t.expiresAt)],
+);
+
 // ── 待确认交互表 ──────────────────────────────────────────────
 
 /**

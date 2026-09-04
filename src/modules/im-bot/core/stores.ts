@@ -18,6 +18,18 @@ export interface DedupStore {
   ): Promise<boolean>;
 }
 
+/**
+ * 限流存储。
+ *
+ * 只有一个 `hit()`：语义是「记一次，并告诉我现在第几次」。返回值让调用方
+ * 自己判断超没超 —— 也因此能做到「只在**刚**超限那一次回一句提示，
+ * 之后保持沉默」：有人刷屏时，每条都回复等于把流量翻倍。
+ */
+export interface RateLimitStore {
+  /** @returns 本窗口内累计到第几次（含本次） */
+  hit(key: PendingKeyParts, windowMs?: number): Promise<number>;
+}
+
 /** 待确认交互的定位键 */
 export interface PendingKeyParts {
   platform: BotPlatform;
@@ -54,4 +66,17 @@ export function serializeDedupKey(
   eventId: string,
 ): string {
   return `${platform}:${eventId}`;
+}
+
+/**
+ * 限流键。把**窗口起点**拼进键里 —— 于是"换窗口"等于"换一行"，
+ * 计数可以用一条原子 upsert 完成，不需要读改写。
+ */
+export function serializeRateLimitKey(
+  k: PendingKeyParts,
+  windowMs: number,
+  now: number = Date.now(),
+): string {
+  const windowStart = Math.floor(now / windowMs) * windowMs;
+  return `${serializePendingKey(k)}:${windowStart}`;
 }

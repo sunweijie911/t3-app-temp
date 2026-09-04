@@ -90,6 +90,16 @@ export const MAX_LLM_ATTEMPTS = 2;
 /** 事件去重 TTL (ms) */
 export const DEDUP_TTL_MS = 5 * 60 * 1000;
 
+/**
+ * 限流：单个用户在单个会话里，每个窗口最多能触发几次**要花 LLM 调用**的处理。
+ *
+ * 20 条 / 分钟对真人来说宽松到基本感觉不到（正常记账一分钟发不了 20 条），
+ * 但足以挡住刷屏和脚本。二次确认（"确认删除"这类）不消耗配额 ——
+ * 它们不走 LLM，且把人卡在等待态里出不来是更糟的结果。
+ */
+export const RATE_LIMIT_MAX = 20;
+export const RATE_LIMIT_WINDOW_MS = 60 * 1000;
+
 /** PendingAction 超时 (ms) */
 export const PENDING_ACTION_TTL_MS = 60 * 1000;
 

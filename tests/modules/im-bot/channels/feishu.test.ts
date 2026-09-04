@@ -121,15 +121,30 @@ describe('FeishuChannelAdapter.decode — 验签与 challenge', () => {
 });
 
 describe('FeishuChannelAdapter.decode — 消息解析', () => {
-  it('群聊 @机器人 → ok，剥离 @ 占位符并带上群名', async () => {
+  it('群聊 @机器人 → ok，剥离 @ 占位符；名称由 enrich 补齐', async () => {
     const r = await adapter.decode(makeReq(makeEvent({})));
     expect(r.kind).toBe('ok');
     if (r.kind !== 'ok') throw new Error('expected ok');
     expect(r.message.content).toBe('新增项目 A');
     expect(r.message.chatType).toBe('group');
-    expect(r.message.senderName).toBe('张三');
-    expect(r.message.chatName).toBe('前端项目群');
     expect(r.message.eventId).toBe('ev-1');
+    // decode 阶段还没查名字，senderName 先用 senderId 占位
+    expect(r.message.senderName).toBe('ou_abc');
+    expect(r.message.chatName).toBeUndefined();
+
+    const enriched = await adapter.enrich(r.message);
+    expect(enriched?.senderName).toBe('张三');
+    expect(enriched?.chatName).toBe('前端项目群');
+  });
+
+  it('★ decode 阶段零网络调用 —— 它跑在 3 秒 ack 之前', async () => {
+    // 回归：三个查询各 3s 超时、冷启动还要先换 token（10s 超时），
+    // 留在 decode 里会让首条消息几乎必然触发飞书重试
+    const r = await adapter.decode(makeReq(makeEvent({})));
+    expect(r.kind).toBe('ok');
+    expect(mockBotOpenId).not.toHaveBeenCalled();
+    expect(mockUserName).not.toHaveBeenCalled();
+    expect(mockChatName).not.toHaveBeenCalled();
   });
 
   it('单聊免 @：以前无条件要求 mentions，导致所有私聊被丢弃', async () => {
@@ -142,8 +157,10 @@ describe('FeishuChannelAdapter.decode — 消息解析', () => {
     if (r.kind !== 'ok') throw new Error('expected ok');
     expect(r.message.chatType).toBe('p2p');
     expect(r.message.content).toBe('查一下项目 A');
-    // 单聊不查群名
+    // 单聊不查群名、也不查机器人自身 open_id（没有 @ 判定）
+    await adapter.enrich(r.message);
     expect(mockChatName).not.toHaveBeenCalled();
+    expect(mockBotOpenId).not.toHaveBeenCalled();
   });
 
   it('群聊未 @机器人 → ignored', async () => {
@@ -227,8 +244,10 @@ describe('群聊 @ 判定：被 @ 的必须是机器人自己（P2）', () => {
       ),
     );
 
-    expect(r.kind).toBe('ignored');
-    if (r.kind === 'ignored') expect(r.reason).toContain('不是机器人');
+    // decode 只看载荷（有 mentions 就先放过），需要网络的 @ 判定在 enrich
+    expect(r.kind).toBe('ok');
+    if (r.kind !== 'ok') throw new Error('expected ok');
+    expect(await adapter.enrich(r.message)).toBeNull();
   });
 
   it('同时 @ 了机器人和别人 → 仍然处理', async () => {
@@ -301,7 +320,9 @@ describe('ack 前的查询并发发出，不叠加超时（P2）', () => {
     mockUserName.mockImplementation(gate('user', 10));
     mockChatName.mockImplementation(gate('chat', 10));
 
-    await adapter.decode(makeReq(makeEvent({})));
+    const r = await adapter.decode(makeReq(makeEvent({})));
+    if (r.kind !== 'ok') throw new Error('expected ok');
+    await adapter.enrich(r.message);
 
     // 串行的话 order 会是 start/end 交替；并发时三个 start 先挤在一起
     expect(order.slice(0, 3)).toEqual([

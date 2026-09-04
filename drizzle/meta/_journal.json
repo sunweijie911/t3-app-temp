@@ -190,6 +190,13 @@
       "when": 1788418945146,
       "tag": "0026_bot_scene_access",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1788502385139,
+      "tag": "0027_im_bot_rate_limit",
+      "breakpoints": true
     }
   ]
 }

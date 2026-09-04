@@ -140,28 +140,10 @@ export class FeishuChannelAdapter implements ChannelAdapter {
     const senderId = senderInfo?.open_id ?? senderInfo?.user_id ?? '';
     const chatId = message.chat_id as string;
 
-    // 三个查询一起发。各自都有独立缓存、3s 超时、失败各自降级，但**串行**
-    // 起来就会把 ack 时间叠成 9s+（冷启动还要叠上 token 刷新的 10s），
-    // 而飞书 3s 内不回 200 就重试 —— decode() 整个跑在 ack 之前。
-    // 机器人自身 open_id 只有群聊的 @ 判定要用，单聊不查。
-    const [botOpenId, senderName, chatName] = await Promise.all([
-      chatType === 'group' ? getFeishuBotOpenId() : Promise.resolve(null),
-      senderId ? getFeishuUserName(senderId) : Promise.resolve(null),
-      chatType === 'group' ? getFeishuChatName(chatId) : Promise.resolve(null),
-    ]);
-
-    // mentions 里是**所有**被 @ 的人。标准权限下平台只推送 @机器人 的消息，
-    // 但开通"接收群里所有消息"后，只判断非空会让机器人去应答
-    // 「@张三 帮我看下」这类跟它无关的消息。
-    // 拿不到自身 open_id 时 fail-open（退回旧行为）—— 见 auth/feishu-bot.ts
-    if (
-      chatType === 'group' &&
-      botOpenId &&
-      !mentions?.some((m) => m.id?.open_id === botOpenId)
-    ) {
-      return { kind: 'ignored', reason: '群聊 @ 的不是机器人' };
-    }
-
+    // 到这里为止**零网络调用**：用户名、群名、以及「@ 的是不是我」的判定
+    // 全部挪到 enrich()（ack 之后）。它们各自 3s 超时、冷启动还要先换
+    // token（10s 超时），留在 ack 之前会让首条消息几乎必然触发飞书重试。
+    // senderName 先用 senderId 占位，enrich 里再替换成真名。
     return {
       kind: 'ok',
       message: {
@@ -169,14 +151,53 @@ export class FeishuChannelAdapter implements ChannelAdapter {
         eventId: header.event_id as string,
         messageId: message.message_id as string,
         chatId,
-        chatName: chatName ?? undefined,
         chatType,
         senderId,
-        senderName: senderName ?? senderId,
+        senderName: senderId,
         content,
         timestamp: Number(header.create_time) || Date.now(),
         raw: body,
       },
+    };
+  }
+
+  /**
+   * ack 之后补齐用户名 / 群名，并完成需要网络往返的 @ 判定。
+   */
+  async enrich(msg: UnifiedMessage): Promise<UnifiedMessage | null> {
+    const body = msg.raw as Record<string, unknown> | undefined;
+    const event = body?.event as Record<string, unknown> | undefined;
+    const message = event?.message as Record<string, unknown> | undefined;
+    const mentions = message?.mentions as
+      | Array<{ key: string; id?: { open_id?: string } }>
+      | undefined;
+    const isGroup = msg.chatType === 'group';
+
+    // 三个查询一起发。各自都有独立缓存、3s 超时、失败各自降级，但**串行**
+    // 起来会叠成 9s+。机器人自身 open_id 只有群聊的 @ 判定要用，单聊不查。
+    const [botOpenId, senderName, chatName] = await Promise.all([
+      isGroup ? getFeishuBotOpenId() : Promise.resolve(null),
+      msg.senderId ? getFeishuUserName(msg.senderId) : Promise.resolve(null),
+      isGroup ? getFeishuChatName(msg.chatId) : Promise.resolve(null),
+    ]);
+
+    // mentions 里是**所有**被 @ 的人。标准权限下平台只推送 @机器人 的消息，
+    // 但开通"接收群里所有消息"后，只判断非空会让机器人去应答
+    // 「@张三 帮我看下」这类跟它无关的消息。
+    // 拿不到自身 open_id 时 fail-open（退回旧行为）—— 见 auth/feishu-bot.ts
+    if (
+      isGroup &&
+      botOpenId &&
+      !mentions?.some((m) => m.id?.open_id === botOpenId)
+    ) {
+      console.log('[FeishuChannel] 群聊 @ 的不是机器人，忽略');
+      return null;
+    }
+
+    return {
+      ...msg,
+      senderName: senderName ?? msg.senderId,
+      chatName: chatName ?? undefined,
     };
   }
 
