@@ -448,9 +448,19 @@ export default function ImBotScenesPage() {
                 />
                 <Typography.Text style={{ fontSize: 12 }} type="secondary">
                   {/* biome-ignore-start lint/suspicious/noTemplateCurlyInString: 文档展示给用户的占位符语法 */}
-                  支持变量：{'${intent}'} 操作类型、{'${summary}'} 摘要、
-                  {'${fieldList}'} 字段列表、{'${count}'} 记录数、
+                  全局变量：{'${intent}'} 操作类型、{'${summary}'} 摘要、
+                  {'${fieldList}'} 字段列表、{'${count}'} 命中总数、
                   {'${sceneName}'} 场景名
+                  <br />
+                  单字段：{'${fields.字段名}'}
+                  （用字段映射里的逻辑字段名；敏感字段会自动脱敏，整行占位符
+                  都为空时该行会被删掉）
+                  <br />
+                  查询循环：{'<!--each-->'} … {'<!--/each-->'}
+                  对每条记录展开，多条时自动加【第 N 条】序号
+                  <br />
+                  展示条数受目标平台单条消息字节上限约束（企微仅 2048
+                  字节），超出部分会显示成「共 N 条，仅展示前 M 条」。
                   {/* biome-ignore-end lint/suspicious/noTemplateCurlyInString: end */}
                 </Typography.Text>
               </Form.Item>

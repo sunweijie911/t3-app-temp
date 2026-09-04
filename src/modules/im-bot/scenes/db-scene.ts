@@ -1,12 +1,15 @@
 import type { BotWriteMode } from '../constants';
 import {
   clampReply,
+  DEFAULT_REPLY_BUDGET_BYTES,
   fieldMeta,
   fieldToString,
+  fitCountByBytes,
   maskSensitive,
   primaryKeyOf,
   renderFieldEntry,
   truncateForDisplay,
+  utf8ByteLength,
 } from '../core/field-render';
 import { renderResourceSchema } from '../core/schema-prompt';
 import type {
@@ -31,6 +34,33 @@ function formatNumber(v: number): string {
   if (!Number.isFinite(v)) return String(v);
   if (Number.isInteger(v)) return String(v);
   return String(Number.parseFloat(v.toPrecision(12)));
+}
+
+/**
+ * 「…（共 N 条，仅展示前 M 条）」这句本身的字节开销预留。
+ * 它是在条数定下来之后才拼出来的，所以只能按上界预估 ——
+ * 少留会让最后一条把这句挤出预算，反倒变成从中间截断。
+ */
+const TRUNCATED_NOTE_BYTES = 80;
+
+/** 模板 each 块的条数硬上限，与默认渲染路径的 HARD_LIMIT 同一量级 */
+const TEMPLATE_EACH_HARD_LIMIT = 20;
+
+/**
+ * 拉取撞上翻页硬上限时追加的提示。
+ *
+ * 提成模块级函数是因为它必须出现在**每一条** QUERY 回复上，包括走
+ * 自定义 replyTemplate 的那条 —— 以前它只写在默认渲染分支里，配了
+ * 模板的场景永远收不到这句，而这是「你看到的结果可能不全」唯一的告知渠道。
+ *
+ * 这里**不能**把 records.length 当成"上限"报出来：截断由 adapter 上报，
+ * 而钉钉/企微的截断发生在内存过滤之前，过滤后可能只剩 3 条 ——
+ * 会渲染成"已达单次查询上限 3 条"这种自相矛盾的话。
+ */
+function queryLimitHint(result: ExecuteResult): string {
+  return result.hitQueryLimit
+    ? '\n\n⚠️ 数据量已达单次拉取上限，结果可能不完整，请缩窄筛选条件'
+    : '';
 }
 
 function applyFieldVars(
@@ -245,6 +275,7 @@ export class DatabaseDrivenScene implements BotScene {
     intent: ParsedIntent,
     result: ExecuteResult,
     fieldMapping?: Record<string, FieldMappingValue>,
+    budgetBytes: number = DEFAULT_REPLY_BUDGET_BYTES,
   ): string {
     // 失败分支同样要 clamp：dispatcher 的候选列表 / 确认提示走的就是 result.error，
     // 不截断会拼出超长文本，导致 IM 侧发送失败、用户一条回复都收不到
@@ -280,12 +311,15 @@ export class DatabaseDrivenScene implements BotScene {
     // 同样排在 replyTemplate 之前：模板的变量是明细取向的
     // （${fields.xxx} / each 块），聚合结果里没有 records，套模板会全渲染成空
     if (result.aggregate) {
-      return clampReply(this.formatAggregate(result));
+      return clampReply(this.formatAggregate(result, budgetBytes));
     }
 
     // 有自定义回复模板时使用模板（表格结果专用）
     if (this.replyTemplate) {
-      return clampReply(this.applyReplyTemplate(intent, result, fieldMapping));
+      return clampReply(
+        this.applyReplyTemplate(intent, result, fieldMapping, budgetBytes) +
+          queryLimitHint(result),
+      );
     }
 
     // 通用默认格式
@@ -301,22 +335,18 @@ export class DatabaseDrivenScene implements BotScene {
       if (result.records.length === 0)
         return `📊 查询结果: 未找到匹配的${this.name}`;
 
-      // 拉取撞上 adapter 的翻页硬上限，说明真实匹配可能更多、被静默截断了。
-      //
-      // 这里**不能**把 records.length 当成"上限"报出来：截断由 adapter 上报，
-      // 而钉钉/企微的截断发生在内存过滤之前，过滤后可能只剩 3 条 ——
-      // 会渲染成"已达单次查询上限 3 条"这种自相矛盾的话。上限值各平台不同、
-      // 也没必要让用户知道，说清"结果可能不全 + 怎么办"就够了。
-      const limitHint = result.hitQueryLimit
-        ? '\n\n⚠️ 数据量已达单次拉取上限，结果可能不完整，请缩窄筛选条件'
-        : '';
+      // 拉取撞上 adapter 的翻页硬上限，说明真实匹配可能更多、被静默截断了
+      const limitHint = queryLimitHint(result);
 
       // 投影模式：LLM 标记了 projectFields → 只渲染主标识 + 指定列，
       // 避免对大表（20 字段）查询时一次性刷屏
       const project = intent.projectFields ?? [];
       if (project.length > 0) {
-        const DISPLAY_LIMIT = 20; // 投影模式更紧凑，可多显示几条
-        const displayed = result.records.slice(0, DISPLAY_LIMIT);
+        // 条数上限取「硬上限」与「字节预算能放下多少」的较小者。
+        // 硬上限是可读性（刷屏）的约束，预算是平台协议的约束 ——
+        // 企微 2048 字节下 20 条投影行必然被从中间砍断。
+        const HARD_LIMIT = 20; // 投影模式更紧凑，可多显示几条
+        const displayed = result.records.slice(0, HARD_LIMIT);
         // 主标识：优先取显式声明 primary 的字段。
         // 不能"取记录第一个非空字段"——fieldMapping 存 jsonb，键序被
         // Postgres 重排过，实测会把公式列「利润」当成标识，渲染出
@@ -353,22 +383,30 @@ export class DatabaseDrivenScene implements BotScene {
         if (result.records.length === 1 && project.length === 1) {
           return clampReply(`📊 ${lines[0]}${limitHint}`);
         }
-        // 多条：列表
+        // 多条：列表。序号与"共 N 条"抬头都要算进预算的开销里
+        const header = `📊 共 ${result.records.length} 条\n`;
+        const shownCount = Math.min(
+          lines.length,
+          fitCountByBytes(
+            lines,
+            budgetBytes,
+            utf8ByteLength(header + limitHint) + TRUNCATED_NOTE_BYTES,
+          ),
+        );
+        const shown = lines.slice(0, shownCount);
         const truncated =
-          result.records.length > DISPLAY_LIMIT
-            ? `\n…（共 ${result.records.length} 条，仅展示前 ${DISPLAY_LIMIT} 条）`
+          result.records.length > shownCount
+            ? `\n…（共 ${result.records.length} 条，仅展示前 ${shownCount} 条）`
             : '';
         const numbered =
           result.records.length > 1
-            ? lines.map((l, i) => `${i + 1}. ${l}`).join('\n')
-            : lines.join('\n');
-        return clampReply(
-          `📊 共 ${result.records.length} 条\n${numbered}${truncated}${limitHint}`,
-        );
+            ? shown.map((l, i) => `${i + 1}. ${l}`).join('\n')
+            : shown.join('\n');
+        return clampReply(`${header}${numbered}${truncated}${limitHint}`);
       }
 
-      const DISPLAY_LIMIT = 10;
-      const displayed = result.records.slice(0, DISPLAY_LIMIT);
+      const HARD_LIMIT = 10;
+      const displayed = result.records.slice(0, HARD_LIMIT);
       const items = displayed.map((r, i) => {
         const lines = Object.entries(r.fields)
           .map(([k, v]) => renderFieldEntry(k, v, fieldMapping))
@@ -378,12 +416,22 @@ export class DatabaseDrivenScene implements BotScene {
           (result.records?.length ?? 0) > 1 ? `【第 ${i + 1} 条】\n` : '';
         return `${header}${lines.join('\n')}`;
       });
+      const head = `📊 查询结果 (共 ${result.records.length} 条)\n\n`;
+      const shownCount = Math.min(
+        items.length,
+        fitCountByBytes(
+          items,
+          budgetBytes,
+          utf8ByteLength(head + limitHint) + TRUNCATED_NOTE_BYTES,
+        ),
+      );
+      const shownItems = items.slice(0, shownCount);
       const truncated =
-        result.records.length > DISPLAY_LIMIT
-          ? `\n…（共 ${result.records.length} 条，仅展示前 ${DISPLAY_LIMIT} 条）`
+        result.records.length > shownCount
+          ? `\n…（共 ${result.records.length} 条，仅展示前 ${shownCount} 条）`
           : '';
       return clampReply(
-        `📊 查询结果 (共 ${result.records.length} 条)\n\n${items.join('\n\n')}${truncated}${limitHint}`,
+        `${head}${shownItems.join('\n\n')}${truncated}${limitHint}`,
       );
     }
 
@@ -405,7 +453,10 @@ export class DatabaseDrivenScene implements BotScene {
   }
 
   /** 聚合结果渲染 */
-  private formatAggregate(result: ExecuteResult): string {
+  private formatAggregate(
+    result: ExecuteResult,
+    budgetBytes: number = DEFAULT_REPLY_BUDGET_BYTES,
+  ): string {
     const agg = result.aggregate;
     if (!agg) return '✅ 操作完成';
     const OP_LABELS: Record<string, string> = {
@@ -432,15 +483,26 @@ export class DatabaseDrivenScene implements BotScene {
       if (agg.groups.length === 0) {
         return `${warning}📊 没有符合条件的${this.name}`;
       }
-      const GROUP_LIMIT = 20;
-      const shown = agg.groups.slice(0, GROUP_LIMIT);
-      const lines = shown.map(
-        (g, i) =>
-          `${i + 1}. ${g.key}：${formatNumber(g.value)}（${g.count} 条）`,
+      // 与 QUERY 同理：硬上限管可读性，字节预算管平台协议。
+      // 分组结果按值降序，砍掉的是最小的那些 —— 这正是该砍的顺序。
+      const HARD_LIMIT = 20;
+      const allLines = agg.groups
+        .slice(0, HARD_LIMIT)
+        .map(
+          (g, i) =>
+            `${i + 1}. ${g.key}：${formatNumber(g.value)}（${g.count} 条）`,
+        );
+      // 抬头 / 总计 / skipped 说明都还没拼出来，按上界给聚合留一段固定开销
+      const AGG_OVERHEAD_BYTES = 240;
+      const shownCount = fitCountByBytes(
+        allLines,
+        budgetBytes,
+        utf8ByteLength(warning) + AGG_OVERHEAD_BYTES,
       );
+      const lines = allLines.slice(0, shownCount);
       const rest =
-        agg.groups.length > shown.length
-          ? `\n…（共 ${agg.groups.length} 组，仅展示前 ${GROUP_LIMIT} 组）`
+        agg.groups.length > lines.length
+          ? `\n…（共 ${agg.groups.length} 组，仅展示前 ${lines.length} 组）`
           : '';
       const total =
         agg.op === 'sum' || agg.op === 'count'
@@ -466,10 +528,16 @@ export class DatabaseDrivenScene implements BotScene {
     intent: ParsedIntent,
     result: ExecuteResult,
     fieldMapping?: Record<string, FieldMappingValue>,
+    budgetBytes: number = DEFAULT_REPLY_BUDGET_BYTES,
   ): string {
     if (!this.replyTemplate) return '✅ 操作完成';
 
-    const records = result.records ?? (result.record ? [result.record] : []);
+    const allRecords = result.records ?? (result.record ? [result.record] : []);
+    // 模板的 each 块以前对**全部**记录展开，没有任何条数上限（默认渲染路径
+    // 早就有 slice(0, 10)）。一次命中 800 条的 QUERY 会先拼出 800 条的巨串，
+    // 再被 clampReply 从 20000 字符处硬砍 —— 用户看到的是从半条记录中间断掉
+    // 的文本，而且连"共 N 条"都没有。这里补上与默认路径同源的两道上限。
+    const records = allRecords.slice(0, TEMPLATE_EACH_HARD_LIMIT);
     const firstFields = records[0]?.fields ?? {};
 
     const fieldList = Object.entries(firstFields)
@@ -483,7 +551,9 @@ export class DatabaseDrivenScene implements BotScene {
       .replaceAll('${intent}', intent.intent)
       .replaceAll('${summary}', intent.summary)
       .replaceAll('${fieldList}', fieldList)
-      .replaceAll('${count}', String(records.length))
+      // ${count} 始终是**命中总数**，不是展示条数 —— 模板里写「共 ${count} 条」
+      // 的场景很多，改成展示数会让它变成一个默默变小的假数字
+      .replaceAll('${count}', String(allRecords.length))
       .replaceAll('${sceneName}', this.name);
     // biome-ignore-end lint/suspicious/noTemplateCurlyInString: end
 
@@ -495,7 +565,22 @@ export class DatabaseDrivenScene implements BotScene {
         const prefix = records.length > 1 ? `【第 ${i + 1} 条】\n` : '';
         return prefix + applyFieldVars(rowTpl, r.fields, fieldMapping);
       });
-      const joined = rows.join('\n');
+      // 开销只算 each 块**之外**的模板文本：块内那段源码马上就会被
+      // 渲染结果替换掉，把它也算进去等于同一段内容收两次费 ——
+      // 行模板越长少展示的记录越多（企微 2048 字节下，一个 300 字节的
+      // 行模板白白吃掉一整条记录的位置）。
+      const outsideEach = tpl.replace(/<!--each-->[\s\S]*?<!--\/each-->/, '');
+      const shownCount = fitCountByBytes(
+        rows,
+        budgetBytes,
+        utf8ByteLength(outsideEach) + TRUNCATED_NOTE_BYTES,
+      );
+      const shown = rows.slice(0, shownCount);
+      const omitted =
+        allRecords.length > shown.length
+          ? `\n…（共 ${allRecords.length} 条，仅展示前 ${shown.length} 条）`
+          : '';
+      const joined = shown.join('\n') + omitted;
       tpl = tpl.replace(/<!--each-->[\s\S]*?<!--\/each-->/, () => joined);
     } else {
       // 无 each 块时直接对第一条记录展开（CREATE/UPDATE）

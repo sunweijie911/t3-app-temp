@@ -77,15 +77,22 @@ function makeMsg(overrides: Partial<UnifiedMessage> = {}): UnifiedMessage {
   };
 }
 
-function makeChannel(): ChannelAdapter & { lastReply?: string } {
+function makeChannel(
+  /** 目标平台的单条消息字节上限。缺省取飞书量级 */
+  maxReplyBytes = 30_000,
+): ChannelAdapter & { lastReply?: string; replies: string[] } {
   const ch = {
     platform: 'feishu' as const,
+    maxReplyBytes,
     verify: vi.fn(),
     parse: vi.fn(),
+    replies: [] as string[],
     reply: vi.fn(async (_msg: UnifiedMessage, content: string) => {
-      (ch as { lastReply?: string }).lastReply = content;
+      const self = ch as { lastReply?: string; replies: string[] };
+      self.lastReply = content;
+      self.replies.push(content);
     }),
-  } as unknown as ChannelAdapter & { lastReply?: string };
+  } as unknown as ChannelAdapter & { lastReply?: string; replies: string[] };
   return ch;
 }
 
@@ -97,6 +104,14 @@ function makeAdapter(): SpreadsheetAdapter {
     updateRecord: vi.fn(),
     queryRecords: vi.fn(),
     deleteRecord: vi.fn(),
+  };
+}
+
+/** 带 queryRecordsWithMeta 的 adapter —— 用来测「拉取被截断」这条分支 */
+function makeAdapterWithMeta(): SpreadsheetAdapter {
+  return {
+    ...makeAdapter(),
+    queryRecordsWithMeta: vi.fn(),
   };
 }
 
@@ -3298,5 +3313,232 @@ describe('Dispatcher — selectableCount 丢失时必须更严而不是更松', 
     expect(adapter.updateRecord).toHaveBeenCalledWith(expect.anything(), 'r9', {
       Node版本: '20',
     });
+  });
+});
+
+describe('Dispatcher — 删除确认：未列出的记录也会被删，必须说穿', () => {
+  function manyRecs(n: number): SpreadsheetRecord[] {
+    return Array.from({ length: n }, (_, i) => ({
+      recordId: `r${i}`,
+      fields: { 项目名称: `项目${i}`, Node版本: '18' },
+    }));
+  }
+
+  it('命中数超过展示条数时，确认提示里明说"未列出的将一并删除"', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"DELETE","filters":{"Node版本":"18"},"confidence":0.9,"summary":""}',
+    );
+    // MAX_CANDIDATE_DISPLAY = 10，MAX_DESTRUCTIVE_BATCH = 20
+    const hit = MAX_CANDIDATE_DISPLAY + 5;
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      manyRecs(hit),
+    );
+
+    await d.process(makeMsg({ eventId: 'x1', content: '删除 18 的' }), channel);
+    expect(channel.lastReply).toContain(`确认删除以下 ${hit} 条`);
+    expect(channel.lastReply).toContain('未列出');
+    expect(channel.lastReply).toContain('一并删除');
+  });
+
+  it('全部列得下时不加这句噪音', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"DELETE","filters":{"Node版本":"18"},"confidence":0.9,"summary":""}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      manyRecs(3),
+    );
+    await d.process(makeMsg({ eventId: 'x2', content: '删除 18 的' }), channel);
+    expect(channel.lastReply).not.toContain('未列出');
+  });
+});
+
+describe('Dispatcher — 候选列表受平台字节预算约束', () => {
+  function fatRecs(n: number): SpreadsheetRecord[] {
+    return Array.from({ length: n }, (_, i) => ({
+      recordId: `r${i}`,
+      fields: {
+        // 每条摘要约 250 字节，10 条就超过企微的 2048 —— 预算这一层才会真的
+        // 起作用；再短的话只是 MAX_CANDIDATE_DISPLAY 在起作用，测不出东西
+        项目名称: `${'一个名字相当长的前端项目用于占据足够的字节数'.repeat(3)}第${i}号`,
+        Node版本: '18.20.4',
+      },
+    }));
+  }
+
+  it('企微预算下 select_record 只列得下更少条，且序号上界跟着收', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel(2_048); // 企微
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"UPDATE","filters":{"Node版本":"18.20.4"},"fields":{"Node版本":"20"},"confidence":0.9,"summary":""}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      fatRecs(MAX_CANDIDATE_DISPLAY),
+    );
+
+    await d.process(makeMsg({ eventId: 'b1', content: '都升到 20' }), channel);
+    const reply = channel.lastReply ?? '';
+    expect(reply).toContain(`找到 ${MAX_CANDIDATE_DISPLAY} 条匹配记录`);
+    // 整条提示必须装得进企微的上限，而不是靠 clampReplyBytes 从中间硬砍
+    expect(new TextEncoder().encode(reply).length).toBeLessThanOrEqual(2_048);
+
+    // 序号上界必须与**实际列出**的条数同源：列了 M 条却允许选到第 10 条，
+    // 用户就能改一条自己从没见过的记录
+    const listed = (reply.match(/^\d+\. /gm) ?? []).length;
+    expect(listed).toBeGreaterThan(0);
+    expect(listed).toBeLessThan(MAX_CANDIDATE_DISPLAY);
+    await d.process(
+      makeMsg({ eventId: 'b2', content: String(listed + 1) }),
+      channel,
+    );
+    expect(adapter.updateRecord).not.toHaveBeenCalled();
+
+    // 列出来的最后一条则可以正常选中
+    await d.process(
+      makeMsg({ eventId: 'b3', content: String(listed) }),
+      channel,
+    );
+    expect(adapter.updateRecord).toHaveBeenCalledOnce();
+  });
+});
+
+describe('Dispatcher — CREATE 查重撞上拉取上限时不能默默新建', () => {
+  it('查重为空但拉取被截断 → 拒绝并要求人工确认', async () => {
+    const d = makeDispatcher({ ...baseBinding, uniqueKey: '项目名称' });
+    const channel = makeChannel();
+    const adapter = makeAdapterWithMeta();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"CREATE","fields":{"项目名称":"督导2.0"},"confidence":0.9,"summary":""}',
+    );
+    (
+      adapter.queryRecordsWithMeta as ReturnType<typeof vi.fn>
+    ).mockResolvedValueOnce({ records: [], truncated: true });
+
+    await d.process(
+      makeMsg({ eventId: 'c1', content: '新增督导2.0' }),
+      channel,
+    );
+    expect(adapter.createRecord).not.toHaveBeenCalled();
+    expect(channel.lastReply).toContain('无法确认');
+  });
+
+  it('查重为空且没被截断 → 正常新建', async () => {
+    const d = makeDispatcher({ ...baseBinding, uniqueKey: '项目名称' });
+    const channel = makeChannel();
+    const adapter = makeAdapterWithMeta();
+    mockGetAdapter.mockReturnValue(adapter);
+    (adapter.createRecord as ReturnType<typeof vi.fn>).mockResolvedValue({
+      recordId: 'r1',
+      fields: {},
+    });
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"CREATE","fields":{"项目名称":"督导2.0"},"confidence":0.9,"summary":""}',
+    );
+    (
+      adapter.queryRecordsWithMeta as ReturnType<typeof vi.fn>
+    ).mockResolvedValueOnce({ records: [], truncated: false });
+
+    await d.process(
+      makeMsg({ eventId: 'c2', content: '新增督导2.0' }),
+      channel,
+    );
+    expect(adapter.createRecord).toHaveBeenCalledOnce();
+  });
+});
+
+describe('Dispatcher — 待确认态下的无法识别输入也受限流约束', () => {
+  it('刷屏时提示会停下来，且 pending 保留不作废', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"DELETE","filters":{"项目名称":"p"},"confidence":0.9,"summary":""}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { recordId: 'r1', fields: { 项目名称: 'p' } },
+    ]);
+    await d.process(makeMsg({ eventId: 'p0', content: '删除 p' }), channel);
+    expect(channel.lastReply).toContain('确认删除');
+
+    const before = channel.replies.length;
+    for (let i = 0; i < RATE_LIMIT_MAX + 5; i++) {
+      await d.process(
+        makeMsg({ eventId: `p${i + 1}`, content: '这不是确认词' }),
+        channel,
+      );
+    }
+    // 提示条数受配额约束，不会一条不落地跟着刷
+    expect(channel.replies.length - before).toBeLessThanOrEqual(RATE_LIMIT_MAX);
+
+    // 但 pending 仍在：限流不该把人踢出等待态
+    await d.process(makeMsg({ eventId: 'pz', content: '确认删除' }), channel);
+    expect(adapter.deleteRecord).toHaveBeenCalledOnce();
+  });
+});
+
+describe('Dispatcher — 确认指令不能被字节预算挤掉', () => {
+  function fatRecs(n: number): SpreadsheetRecord[] {
+    return Array.from({ length: n }, (_, i) => ({
+      recordId: `r${i}`,
+      fields: {
+        项目名称: `${'一个名字相当长的前端项目用于占据足够的字节数'.repeat(3)}第${i}号`,
+        Node版本: '18.20.4',
+      },
+    }));
+  }
+
+  it('企微预算下删除确认仍带得上「回复"确认删除"执行」这行指令', async () => {
+    // 「另有 N 条未列出」和「共 N 条，仅列出前 M 条」都是条数定下来**之后**
+    // 才拼出来的。不给它们预留字节，最后会被 clampReplyBytes 从尾部砍掉，
+    // 而尾部恰恰是用户唯一能照着做的那句话 —— 提示变成一段读不懂的残文。
+    const d = makeDispatcher();
+    const channel = makeChannel(2_048);
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"DELETE","filters":{"Node版本":"18.20.4"},"confidence":0.9,"summary":""}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      fatRecs(MAX_CANDIDATE_DISPLAY),
+    );
+
+    await d.process(makeMsg({ eventId: 'w1', content: '删掉' }), channel);
+    const reply = channel.lastReply ?? '';
+    expect(new TextEncoder().encode(reply).length).toBeLessThanOrEqual(2_048);
+    expect(reply).toContain('确认删除');
+    expect(reply).toContain('取消');
+    expect(reply).toContain('一并删除');
+    // 没被 clampReplyBytes 兜底截断过
+    expect(reply).not.toContain('消息过长已截断');
+  });
+
+  it('企微预算下 select_record 也留得住「回复序号 / 全部 / 取消」', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel(2_048);
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"UPDATE","filters":{"Node版本":"18.20.4"},"fields":{"Node版本":"20"},"confidence":0.9,"summary":""}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      fatRecs(MAX_CANDIDATE_DISPLAY),
+    );
+
+    await d.process(makeMsg({ eventId: 'w2', content: '都升到20' }), channel);
+    const reply = channel.lastReply ?? '';
+    expect(new TextEncoder().encode(reply).length).toBeLessThanOrEqual(2_048);
+    expect(reply).toContain('全部');
+    expect(reply).not.toContain('消息过长已截断');
   });
 });

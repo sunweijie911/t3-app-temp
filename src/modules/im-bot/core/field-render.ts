@@ -95,6 +95,44 @@ export function clampReplyBytes(s: string, maxBytes: number): string {
   return withSuffix ? out + TRUNCATED_SUFFIX : out;
 }
 
+/**
+ * 回复字节预算的兜底值。
+ *
+ * 只在调用方拿不到 adapter 时使用（老调用方、测试替身）。取飞书的量级 ——
+ * 三个平台里最宽松的那个，等于「不按预算裁」，与加预算之前的行为一致。
+ */
+export const DEFAULT_REPLY_BUDGET_BYTES = 30_000;
+
+/**
+ * 在字节预算内最多能完整放下几条。
+ *
+ * 为什么需要：`ChannelAdapter.maxReplyBytes` 把平台差异声明得很清楚
+ * （飞书 30000 / 钉钉 20000 / **企微 2048**），但展示条数一直是全平台
+ * 共用的常量（QUERY 10 条、投影 20 条、分组 20 组），按飞书的量级定的。
+ * 企微上一条 6 字段的中文记录约 250 字节，10 条就 ~2500 字节 —— 超了之后
+ * clampReplyBytes 会从**某条记录的中间**截断，用户看到半行乱码。
+ * 与其事后砍，不如先按预算决定放几条，再明说"共 N 条，仅展示前 M 条"。
+ *
+ * @param overheadBytes 标题、警告、序号等非条目文本预留的字节
+ * @returns 能放下的条数；**至少 1**（单条就超预算时交给 clampReplyBytes 截，
+ *   总比回一句"共 8 条，仅展示前 0 条"强）
+ */
+export function fitCountByBytes(
+  items: string[],
+  budgetBytes: number,
+  overheadBytes = 0,
+): number {
+  let used = overheadBytes;
+  let count = 0;
+  for (const item of items) {
+    // +1 是条目之间的换行
+    used += utf8ByteLength(item) + 1;
+    if (used > budgetBytes) break;
+    count++;
+  }
+  return Math.max(1, count);
+}
+
 /** 单字段展示截断，仅用于面向用户的最终输出，不影响内部值传递 */
 export function truncateForDisplay(s: string): string {
   if (s.length <= FIELD_DISPLAY_MAX_LEN) return s;

@@ -12,7 +12,13 @@ import type { BotScene } from '../scenes/types';
 import { getSpreadsheetAdapter } from '../spreadsheets/factory';
 import type { SpreadsheetAdapter } from '../spreadsheets/types';
 import { MemoryDedupStore } from './dedup';
-import { fieldToStringRaw, renderRecordSummary } from './field-render';
+import {
+  DEFAULT_REPLY_BUDGET_BYTES,
+  fieldToStringRaw,
+  fitCountByBytes,
+  renderRecordSummary,
+  utf8ByteLength,
+} from './field-render';
 import { chatCompletion, extractJson, type RetryContext } from './llm';
 import { MemoryPendingActionStore } from './pending-action';
 import { MemoryRateLimitStore } from './rate-limit';
@@ -296,6 +302,15 @@ function summarizeResult(result: ExecuteResult): Record<string, unknown> {
 }
 
 /**
+ * 候选列表尾注的字节预留。
+ *
+ * 覆盖两段：`renderCandidateList` 自己的「共 N 条，仅列出前 M 条」（约 60 字节），
+ * 以及调用方在其后追加的未列出警告（DELETE 那句最长，约 130 字节）。
+ * 都是条数确定之后才拼出来的，只能按上界预估。
+ */
+const CANDIDATE_NOTE_RESERVE_BYTES = 220;
+
+/**
  * 渲染候选记录列表（UPDATE 多条命中 / DELETE 确认）。
  * 必须走 renderRecordSummary —— 以前这里直接 JSON.stringify(r.fields)，
  * 既绕过 sensitive/字段名脱敏，也不做长度截断。
@@ -303,16 +318,36 @@ function summarizeResult(result: ExecuteResult): Record<string, unknown> {
 function renderCandidateList(
   records: SpreadsheetRecord[],
   fieldMapping?: Record<string, FieldMappingValue>,
-): string {
-  const shown = records.slice(0, MAX_CANDIDATE_DISPLAY);
-  const lines = shown.map(
-    (r, i) => `${i + 1}. ${renderRecordSummary(r.fields, fieldMapping)}`,
+  budgetBytes: number = DEFAULT_REPLY_BUDGET_BYTES,
+  /** 列表之外的提示文案（确认语、变更字段…）占掉的字节 */
+  overheadBytes = 0,
+): { text: string; shownCount: number } {
+  const lines = records
+    .slice(0, MAX_CANDIDATE_DISPLAY)
+    .map((r, i) => `${i + 1}. ${renderRecordSummary(r.fields, fieldMapping)}`);
+  // 候选列表尤其不能被 clampReplyBytes 从中间截断：用户要照着它选序号 /
+  // 判断该不该确认删除，半行摘要没法判断。企微 2048 字节下 10 条摘要
+  // 常常就超了，所以条数按预算收。
+  //
+  // 除了调用方传进来的 overhead，还要给两段"事后才拼出来"的文字留位置：
+  // 本函数尾部的「共 N 条，仅列出前 M 条」，以及调用方在列表之后追加的
+  // 那句「另有 N 条未列出，确认后将一并删除」。它们只在**条数定下来之后**
+  // 才存在，不预留的话正好把最关键的一段挤出预算 —— 被 clampReplyBytes
+  // 从尾部砍掉的恰恰是「回复"确认删除"执行，回复"取消"放弃」这行指令。
+  const shownCount = Math.min(
+    lines.length,
+    fitCountByBytes(
+      lines,
+      budgetBytes,
+      overheadBytes + CANDIDATE_NOTE_RESERVE_BYTES,
+    ),
   );
+  const shown = lines.slice(0, shownCount);
   const rest =
-    records.length > shown.length
-      ? `\n…（共 ${records.length} 条，仅列出前 ${shown.length} 条；如需选择更后面的记录请缩窄筛选条件）`
+    records.length > shownCount
+      ? `\n…（共 ${records.length} 条，仅列出前 ${shownCount} 条）`
       : '';
-  return lines.join('\n') + rest;
+  return { text: shown.join('\n') + rest, shownCount };
 }
 
 /**
@@ -671,7 +706,21 @@ export class Dispatcher {
           });
           return;
         }
-        // 无法识别的输入：提示用户并保留 PendingAction，不走正常流程
+        // 无法识别的输入：提示用户并保留 PendingAction，不走正常流程。
+        //
+        // 这条路径也要过限流闸门。它不花 LLM，所以位置在幂等之后、正常
+        // 限流点之前是对的；但它**会回一条消息**，而 pending 的 TTL 有 60 秒
+        // —— 不拦的话有人在等待态里刷屏，机器人就陪着刷 60 秒。
+        // 超限时静默保留 pending：把人卡在等待态里出不来才是更糟的结果。
+        const promptHits = await this.rateLimit.hit(pendingKey);
+        if (promptHits > RATE_LIMIT_MAX) {
+          await logEvent({
+            sceneId: pendingAction.sceneId,
+            result: 'ignored',
+            errorMsg: `待确认提示触发限流（本窗口第 ${promptHits} 条）`,
+          });
+          return;
+        }
         const promptByType: Record<PendingAction['type'], string> = {
           confirm_delete: '请回复"确认删除"执行，或回复"取消"放弃',
           confirm_update: '请回复"确认更新"执行，或回复"取消"放弃',
@@ -764,7 +813,16 @@ export class Dispatcher {
       // InvalidFilter 就是这么堵死的 —— 同一个模型缺陷，一边自愈一边卡住。
       // 注意 attemptOnce 内部对「不该重试」的失败会返回 stop（见
       // NEVER_RETRY_ERROR_PATTERNS：放宽筛选条件会放大 UPDATE/DELETE 影响面）。
-      let outcome = await this.attemptOnce(scene, msg, systemPrompt);
+      // 目标平台的单条消息字节预算。展示条数（查询结果、候选列表、分组）
+      // 都按它推导 —— 企微只有 2048 字节，按飞书的 10 条渲染必然被
+      // clampReplyBytes 从某条记录的中间砍断。
+      const budgetBytes = channelAdapter.maxReplyBytes;
+      let outcome = await this.attemptOnce(
+        scene,
+        msg,
+        systemPrompt,
+        budgetBytes,
+      );
       let attempts = 1;
       const retryReasons: string[] = [];
       while (outcome.kind === 'retry' && attempts < MAX_LLM_ATTEMPTS) {
@@ -773,10 +831,16 @@ export class Dispatcher {
           `[Dispatcher] 第 ${attempts} 次解析失败，让 LLM 纠正后重试:`,
           outcome.reason.slice(0, 200),
         );
-        outcome = await this.attemptOnce(scene, msg, systemPrompt, {
-          previousOutput: outcome.rawOutput,
-          error: outcome.reason,
-        });
+        outcome = await this.attemptOnce(
+          scene,
+          msg,
+          systemPrompt,
+          budgetBytes,
+          {
+            previousOutput: outcome.rawOutput,
+            error: outcome.reason,
+          },
+        );
         attempts++;
       }
       /** 重试留痕：几次、为什么重的。不记就看不出"这条是重试后才成的" */
@@ -816,7 +880,12 @@ export class Dispatcher {
         parsed,
         binding?.fieldMapping,
       );
-      const reply = scene.formatReply(parsed, result, binding?.fieldMapping);
+      const reply = scene.formatReply(
+        parsed,
+        result,
+        binding?.fieldMapping,
+        budgetBytes,
+      );
       // 被丢弃的字段必须点名：否则用户以为自己说的内容都记下来了
       const notices = [
         result.droppedFields?.length
@@ -897,6 +966,7 @@ export class Dispatcher {
     scene: BotScene,
     msg: UnifiedMessage,
     systemPrompt: string,
+    budgetBytes: number,
     retry?: RetryContext,
   ): Promise<AttemptOutcome> {
     const llmOutput = await chatCompletion(systemPrompt, msg.content, retry);
@@ -962,7 +1032,7 @@ export class Dispatcher {
       }
     }
 
-    const result = await this.execute(scene, parsed, msg);
+    const result = await this.execute(scene, parsed, msg, budgetBytes);
 
     // 成功、以及挂起二次确认（设计正路）都算 done。
     // awaitingConfirmation 尤其不能重试：pending 已经写进存储了，
@@ -981,6 +1051,7 @@ export class Dispatcher {
           parsed,
           result,
           this.config.getBinding(scene.id, parsed.resource)?.fieldMapping,
+          budgetBytes,
         ),
         errorMsg: result.error,
         logResult: 'error',
@@ -994,6 +1065,7 @@ export class Dispatcher {
         parsed,
         result,
         this.config.getBinding(scene.id, parsed.resource)?.fieldMapping,
+        budgetBytes,
       ),
       errorMsg: result.error,
       logResult: 'error',
@@ -1043,6 +1115,7 @@ export class Dispatcher {
     scene: BotScene,
     parsed: ParsedIntent,
     msg: UnifiedMessage,
+    budgetBytes: number,
   ): Promise<ExecuteResult> {
     const binding = this.config.getBinding(scene.id, parsed.resource);
     if (!binding) {
@@ -1074,7 +1147,7 @@ export class Dispatcher {
       if (binding.kind === 'doc') {
         return await this.executeDoc(binding, parsed);
       }
-      return await this.executeTable(binding, scene, parsed, msg);
+      return await this.executeTable(binding, scene, parsed, msg, budgetBytes);
     } catch (err) {
       console.error('[Dispatcher] 能力层执行失败:', err);
       return {
@@ -1118,6 +1191,7 @@ export class Dispatcher {
     scene: BotScene,
     parsed: ParsedIntent,
     msg: UnifiedMessage,
+    budgetBytes: number = DEFAULT_REPLY_BUDGET_BYTES,
   ): Promise<ExecuteResult> {
     const tableConfig = tableConfigOf(binding);
 
@@ -1170,9 +1244,20 @@ export class Dispatcher {
         const uniqueKey = tableConfig.uniqueKey;
         const uniqueValue = uniqueKey ? createFields[uniqueKey] : undefined;
         if (uniqueKey && uniqueValue != null && uniqueValue !== '') {
-          const existing = await adapter.queryRecords(tableConfig, {
-            [uniqueKey]: uniqueValue,
-          });
+          // 走 this.query 而不是裸 queryRecords：钉钉/企微的唯一键过滤发生在
+          // **内存里**，拉取被翻页上限截断时命中集可能不全 —— existing 为空
+          // 就直接新建，静默造出一条重复记录，而查重恰恰是为了防这件事。
+          const { records: existing, truncated } = await this.query(
+            adapter,
+            tableConfig,
+            { [uniqueKey]: uniqueValue },
+          );
+          if (existing.length === 0 && truncated) {
+            return {
+              success: false,
+              error: `数据量已达单次拉取上限，无法确认「${uniqueKey}=${String(uniqueValue)}」是否已存在。为避免重复录入，请先在表里确认后再操作`,
+            };
+          }
           if (existing.length > 0) {
             await this.pending.set(pendingKeyOf(msg), {
               sceneId: scene.id,
@@ -1314,27 +1399,40 @@ export class Dispatcher {
             error: `匹配到 ${records.length} 条记录，超过单次可操作上限 ${MAX_DESTRUCTIVE_BATCH} 条。请补充更精确的筛选条件后重试`,
           };
         }
+        const changes = Object.entries(fields)
+          .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+          .join('、');
+        const prompt = `找到 ${records.length} 条匹配记录，请回复序号选择其中一条，或回复「全部」把这 ${records.length} 条都改成 ${changes}：\n`;
+        const candidateList = renderCandidateList(
+          records,
+          tableConfig.fieldMapping,
+          budgetBytes,
+          utf8ByteLength(prompt + limitWarning),
+        );
         // candidates 存**全部**命中记录（此处已确保 ≤ MAX_DESTRUCTIVE_BATCH，
         // 所以有界），「全部更新」才有完整的目标集；序号只能选到**展示出来**
         // 的那些，由 selectableCount 单独约束 —— 存全量而只列前 10 条时，
         // 用户回一个 15 就会更新一条自己从没见过的记录。
-        const selectableCount = Math.min(records.length, MAX_CANDIDATE_DISPLAY);
+        // 上界取渲染时**实际列出**的条数：预算不够时列表会更短，两者必须同源。
         await this.pending.set(pendingKeyOf(msg), {
           sceneId: scene.id,
           bindingAlias: binding.alias,
           type: 'select_record',
           candidates: records,
-          selectableCount,
+          selectableCount: candidateList.shownCount,
           message: msg,
           updateFields: fields,
         });
-        const changes = Object.entries(fields)
-          .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
-          .join('、');
+        // 没列全时要说清「怎么够到没列出来的那些」——「全部」是全量的，
+        // 但按序号只能选到列出来的这几条
+        const unlisted =
+          records.length > candidateList.shownCount
+            ? `\n（未列出的 ${records.length - candidateList.shownCount} 条无法按序号选中，「全部」仍会全部更新；要逐条选请缩窄筛选条件）`
+            : '';
         return {
           success: false,
           awaitingConfirmation: true,
-          error: `找到 ${records.length} 条匹配记录，请回复序号选择其中一条，或回复「全部」把这 ${records.length} 条都改成 ${changes}：\n${renderCandidateList(records, tableConfig.fieldMapping)}${limitWarning}`,
+          error: `${prompt}${candidateList.text}${unlisted}${limitWarning}`,
         };
       }
 
@@ -1365,10 +1463,26 @@ export class Dispatcher {
           candidates: records,
           message: msg,
         });
+        const head = `确认删除以下 ${records.length} 条记录？\n`;
+        const tail = `${limitWarning}\n\n回复"确认删除"执行，回复"取消"放弃`;
+        const list = renderCandidateList(
+          records,
+          tableConfig.fieldMapping,
+          budgetBytes,
+          utf8ByteLength(head + tail),
+        );
+        // 删除不可回滚，所以「确认将删除但没列出来」这件事必须说穿。
+        // 以前列表尾部只有一句「如需选择更后面的记录请缩窄筛选条件」——
+        // 那是给 select_record 写的，在删除语境里读起来像"还能再选"，
+        // 而实际上一句"确认删除"会把没列出来的那些一并删掉。
+        const unlisted =
+          records.length > list.shownCount
+            ? `\n⚠️ 另有 ${records.length - list.shownCount} 条未列出，确认后将**一并删除**；要逐条核对请缩窄筛选条件`
+            : '';
         return {
           success: false,
           awaitingConfirmation: true,
-          error: `确认删除以下 ${records.length} 条记录？\n${renderCandidateList(records, tableConfig.fieldMapping)}${limitWarning}\n\n回复"确认删除"执行，回复"取消"放弃`,
+          error: `${head}${list.text}${unlisted}${tail}`,
         };
       }
 
@@ -1624,6 +1738,7 @@ export class Dispatcher {
               },
               { success: true, record: updated },
               tableConfig.fieldMapping,
+              channelAdapter.maxReplyBytes,
             ),
         );
       }
@@ -1666,6 +1781,7 @@ export class Dispatcher {
               },
               { success: true, record: updated },
               tableConfig.fieldMapping,
+              channelAdapter.maxReplyBytes,
             ),
         );
       }
@@ -1690,6 +1806,7 @@ export class Dispatcher {
               },
               { success: true, record },
               tableConfig.fieldMapping,
+              channelAdapter.maxReplyBytes,
             ),
         );
       }
@@ -1754,6 +1871,7 @@ export class Dispatcher {
             },
             { success: true, record: updated },
             tableConfig.fieldMapping,
+            channelAdapter.maxReplyBytes,
           ),
       );
     }

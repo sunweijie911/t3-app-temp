@@ -31,10 +31,15 @@ export interface BotScene {
    * 渲染机器人在群里回复的文本。
    * @param fieldMapping 当前表的字段映射，渲染时用其中的 label / displayType
    *                     替换默认 logicalKey 展示和日期启发式（可选，缺省退化为旧行为）
+   * @param budgetBytes 目标平台单条消息的 UTF-8 字节上限
+   *                    （`ChannelAdapter.maxReplyBytes`）。展示条数按它推导 ——
+   *                    企微只有 2048 字节，按飞书的 10 条渲染必然被从记录中间
+   *                    截断。缺省时退化为飞书量级，与加这个参数之前行为一致。
    */
   formatReply(
     intent: ParsedIntent,
     result: ExecuteResult,
     fieldMapping?: Record<string, FieldMappingValue>,
+    budgetBytes?: number,
   ): string;
 }

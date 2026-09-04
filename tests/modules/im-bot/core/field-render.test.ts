@@ -4,6 +4,7 @@ import {
   clampReplyBytes,
   fieldMeta,
   fieldToString,
+  fitCountByBytes,
   MASKED_PLACEHOLDER,
   primaryKeyOf,
   renderFieldEntry,
@@ -256,5 +257,43 @@ describe('主标识与浮点噪声（P0/P1）', () => {
     expect(t(0.0001)).toBe('0.0001');
     expect(t(108)).toBe('108');
     expect(t(-108)).toBe('-108');
+  });
+});
+
+describe('fitCountByBytes — 按字节预算决定展示条数', () => {
+  // 平台差异被 ChannelAdapter.maxReplyBytes 声明得很清楚（飞书 30000 /
+  // 钉钉 20000 / 企微 2048），但展示条数一直是按飞书量级定的常量。
+  // 企微上 10 条中文记录常常就超了，超了会被 clampReplyBytes 从**某条
+  // 记录的中间**截断 —— 用户看到半行乱码。
+  const record = '商品名称：护手霜 / 金额：128 / 日期：2026-01-03'; // ~60 字节
+
+  it('预算充足时全部放下', () => {
+    expect(fitCountByBytes([record, record, record], 30_000)).toBe(3);
+  });
+
+  it('预算紧张时按字节收敛', () => {
+    const n = fitCountByBytes(Array(10).fill(record), 200);
+    expect(n).toBeGreaterThan(0);
+    expect(n).toBeLessThan(10);
+  });
+
+  it('overhead 会挤占条目预算', () => {
+    const withoutOverhead = fitCountByBytes(Array(10).fill(record), 500, 0);
+    const withOverhead = fitCountByBytes(Array(10).fill(record), 500, 300);
+    expect(withOverhead).toBeLessThan(withoutOverhead);
+  });
+
+  it('单条就超预算时仍返回 1 —— 回"仅展示前 0 条"没有意义', () => {
+    expect(fitCountByBytes(['x'.repeat(5000)], 100)).toBe(1);
+  });
+
+  it('空列表返回 1（调用方会先和实际条数取 min）', () => {
+    expect(fitCountByBytes([], 100)).toBe(1);
+  });
+
+  it('按 UTF-8 字节而不是字符数算 —— 一个汉字 3 字节', () => {
+    // 30 个汉字 = 90 字节 + 换行；预算 100 只放得下 1 条
+    const cn = '一'.repeat(30);
+    expect(fitCountByBytes([cn, cn], 100)).toBe(1);
   });
 });

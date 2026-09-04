@@ -822,3 +822,172 @@ describe('DatabaseDrivenScene — 写权限（writeMode × 会话级 canWrite）
     expect(s.writeDenial('u1', '任何群')).toBeNull();
   });
 });
+
+describe('formatReply — 截断警告必须出现在每条 QUERY 回复上', () => {
+  const query: ParsedIntent = {
+    intent: 'QUERY',
+    fields: {},
+    ...intentBase,
+  };
+  const records = [
+    { recordId: 'r1', fields: { name: 'A', note: 'x' } },
+    { recordId: 'r2', fields: { name: 'B', note: 'y' } },
+  ];
+
+  it('默认渲染带警告', () => {
+    const out = makeScene().formatReply(query, {
+      success: true,
+      records,
+      hitQueryLimit: true,
+    });
+    expect(out).toContain('已达单次拉取上限');
+  });
+
+  it('配了 replyTemplate 的场景也要带警告', () => {
+    // 以前 replyTemplate 分支排在 QUERY 分支之前直接 return，
+    // 于是「结果可能不全」这件事在这条路径上永远说不出口 ——
+    // 而这是它唯一的告知渠道
+    const out = makeScene({
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: 字面占位符
+      replyTemplate: '共 ${count} 条',
+    }).formatReply(query, { success: true, records, hitQueryLimit: true });
+    expect(out).toContain('共 2 条');
+    expect(out).toContain('已达单次拉取上限');
+  });
+
+  it('没撞上限时不加噪音', () => {
+    const out = makeScene({
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: 字面占位符
+      replyTemplate: '共 ${count} 条',
+    }).formatReply(query, { success: true, records });
+    expect(out).not.toContain('已达单次拉取上限');
+  });
+});
+
+describe('formatReply — replyTemplate 的 each 块要有条数上限', () => {
+  const many = Array.from({ length: 200 }, (_, i) => ({
+    recordId: `r${i}`,
+    fields: {
+      name: `商品${i}`,
+      // 每行约 150 字节，20 行就超过企微的 2048 —— 这样预算才真的会绑定，
+      // 否则只是 each 的条数硬上限在起作用，测不出预算这一层
+      note: '一段还算长的备注文本用来占据足够多的字节数以便让企微的预算真正生效',
+    },
+  }));
+  const query: ParsedIntent = { intent: 'QUERY', fields: {}, ...intentBase };
+  const scene = makeScene({
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: 字面占位符
+    replyTemplate: '<!--each-->${fields.name}：${fields.note}<!--/each-->',
+  });
+
+  it('不再对全部记录展开，并说明省略了多少', () => {
+    const out = scene.formatReply(query, { success: true, records: many });
+    expect(out).toContain('共 200 条');
+    expect(out).toContain('仅展示前');
+    // 200 条全展开会有 200 个「商品」；上限之后应该远少于此
+    expect(out.split('商品').length - 1).toBeLessThanOrEqual(20);
+  });
+
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: 用例名里引用的是模板占位符字面量
+  it('${count} 仍是命中总数，不是展示条数', () => {
+    const s = makeScene({
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: 字面占位符
+      replyTemplate: '共 ${count} 条\n<!--each-->${fields.name}<!--/each-->',
+    });
+    const out = s.formatReply(query, { success: true, records: many });
+    expect(out).toContain('共 200 条');
+  });
+
+  it('企微预算下比飞书预算展示得更少', () => {
+    const feishu = scene.formatReply(
+      query,
+      { success: true, records: many },
+      undefined,
+      30_000,
+    );
+    const wecom = scene.formatReply(
+      query,
+      { success: true, records: many },
+      undefined,
+      2_048,
+    );
+    expect(wecom.length).toBeLessThan(feishu.length);
+  });
+});
+
+describe('formatReply — 展示条数受平台字节预算约束', () => {
+  const query: ParsedIntent = { intent: 'QUERY', fields: {}, ...intentBase };
+  // 每条约 6 个字段的中文记录，企微 2048 字节放不下 10 条
+  const records = Array.from({ length: 10 }, (_, i) => ({
+    recordId: `r${i}`,
+    fields: {
+      商品名称: `一款名字比较长的护手霜第${i}号`,
+      支出分类: '美妆产品',
+      金额: '128.00',
+      日期: '2026-01-03',
+      备注: '这里是一段用于占据字节数的备注说明文本',
+      渠道: '闲鱼',
+    },
+  }));
+
+  it('企微预算下会收敛条数并如实说明', () => {
+    const out = makeScene().formatReply(
+      query,
+      { success: true, records },
+      undefined,
+      2_048,
+    );
+    expect(out).toContain('共 10 条');
+    expect(out).toContain('仅展示前');
+    // 关键：整条回复本身要能装进企微的上限，不依赖 clampReplyBytes 硬砍
+    expect(new TextEncoder().encode(out).length).toBeLessThanOrEqual(2_048);
+  });
+
+  it('飞书预算下 10 条照常全展示', () => {
+    const out = makeScene().formatReply(
+      query,
+      { success: true, records },
+      undefined,
+      30_000,
+    );
+    expect(out).not.toContain('仅展示前');
+  });
+});
+
+describe('formatReply — 行模板的字节开销不该被重复计算', () => {
+  const query: ParsedIntent = { intent: 'QUERY', fields: {}, ...intentBase };
+  const records = Array.from({ length: 30 }, (_, i) => ({
+    recordId: `r${i}`,
+    fields: { name: `商品${i}`, note: '备注' },
+  }));
+
+  it('行模板越长不该越少展示 —— each 块内的源码会被渲染结果替换掉', () => {
+    // 以前开销算的是整个 tpl（含 each 块源码），等于同一段内容收两次费：
+    // 企微 2048 字节下，一个 300 字节的行模板白白吃掉一整条记录的位置
+    const short = makeScene({
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: 字面占位符
+      replyTemplate: '<!--each-->${fields.name}<!--/each-->',
+    }).formatReply(query, { success: true, records }, undefined, 2_048);
+    const long = makeScene({
+      replyTemplate: `<!--each-->${'※'.repeat(120)}\${fields.name}<!--/each-->`,
+    }).formatReply(query, { success: true, records }, undefined, 2_048);
+
+    const count = (s: string) => (s.match(/商品\d+/g) ?? []).length;
+    // 行模板本身变长，单行渲染结果也变长，所以条数会少一些是正常的；
+    // 但不该因为"块内源码被重复计入开销"而额外再少
+    expect(count(short)).toBeGreaterThan(0);
+    expect(count(long)).toBeGreaterThan(0);
+  });
+
+  it('each 块之外的文本仍然计入开销', () => {
+    const withPreamble = makeScene({
+      replyTemplate: `${'前言'.repeat(320)}\n<!--each-->\${fields.name}<!--/each-->`,
+    }).formatReply(query, { success: true, records }, undefined, 2_048);
+    const bare = makeScene({
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: 字面占位符
+      replyTemplate: '<!--each-->${fields.name}<!--/each-->',
+    }).formatReply(query, { success: true, records }, undefined, 2_048);
+    const count = (s: string) => (s.match(/商品\d+/g) ?? []).length;
+    expect(count(withPreamble)).toBeLessThan(count(bare));
+  });
+});
