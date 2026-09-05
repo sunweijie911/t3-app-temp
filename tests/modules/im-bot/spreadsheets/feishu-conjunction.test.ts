@@ -142,6 +142,84 @@ describe('FeishuBitableAdapter — 连接词按各组的硬性要求解析', () 
     expect(out.records.map((r) => r.recordId)).toEqual(['r1']);
   });
 
+  it('★ 文本字段返回 [{text,type}] 段数组时，残差过滤照样命中', async () => {
+    // 回归：飞书 records/search 的文本字段返回的是
+    // `[{"text":"门户","type":"text"}]`，record-filter 以前 String(member)
+    // 得到 "[object Object]"，于是**任何走残差路径的文本列筛选恒返回 0 条**
+    // —— 用户看到的是"没查到"，而不是报错
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            code: 0,
+            data: {
+              items: [
+                {
+                  record_id: 'r1',
+                  fields: {
+                    域: [{ text: '门户', type: 'text' }],
+                    名称: [{ text: 'A', type: 'text' }],
+                  },
+                },
+                {
+                  record_id: 'r2',
+                  fields: {
+                    域: [{ text: '其它', type: 'text' }],
+                    名称: [{ text: 'B', type: 'text' }],
+                  },
+                },
+              ],
+              has_more: false,
+            },
+          }),
+          { status: 200 },
+        );
+      }),
+    );
+    const out = await adapter.queryRecordsWithMeta(config, {
+      域: ['门户', '督导'],
+      名称: ['A', 'Z'],
+    });
+    expect(out.records.map((r) => r.recordId)).toEqual(['r1']);
+    // 归一化之后 fields 里不该再有平台原始形状
+    expect(out.records[0]?.fields.域).toBe('门户');
+  });
+
+  it('文本字段的多段（正文 + @提及）拼成一句话再比', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            code: 0,
+            data: {
+              items: [
+                {
+                  record_id: 'r1',
+                  fields: {
+                    名称: [
+                      { text: '门户', type: 'text' },
+                      { text: '重构', type: 'text' },
+                    ],
+                    域: [{ text: '门户', type: 'text' }],
+                  },
+                },
+              ],
+              has_more: false,
+            },
+          }),
+          { status: 200 },
+        );
+      }),
+    );
+    const out = await adapter.queryRecordsWithMeta(config, {
+      名称: ['门户 重构', 'Z'],
+      域: ['门户', '督导'],
+    });
+    expect(out.records.map((r) => r.recordId)).toEqual(['r1']);
+  });
+
   it('★ 外层显式 or + 区间：无法分解，仍然报错', async () => {
     // OR 不能像 AND 那样分解：只满足残差项的记录会被下推的那半边
     // 直接过滤掉，答案会偏小 —— 这种情况必须报错而不是给个错数

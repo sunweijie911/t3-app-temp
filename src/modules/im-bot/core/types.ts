@@ -20,7 +20,7 @@ export interface UnifiedMessage {
    *
    * 必须保留：飞书用 tenant token 主动发消息，不依赖回调内容；但
    * - 钉钉群机器人回复要用 body 里的 `sessionWebhook`（一次性、有时效）
-   * - 企微智能机器人回复要用 body 里的 `webhook_url`（同样是一次性的）
+   * - 企微智能机器人回复要用 body 里的 `response_url`（一次性、1 小时有效）
    * 以前 parse() 把原始 body 丢掉，导致这两个平台的 reply() 根本写不出来。
    */
   raw?: unknown;

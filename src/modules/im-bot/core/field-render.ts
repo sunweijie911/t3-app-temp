@@ -1,3 +1,4 @@
+import { scalarOf } from '../spreadsheets/normalize';
 import type { FieldMappingValue } from './types';
 
 /**
@@ -107,10 +108,10 @@ export const DEFAULT_REPLY_BUDGET_BYTES = 30_000;
  * 在字节预算内最多能完整放下几条。
  *
  * 为什么需要：`ChannelAdapter.maxReplyBytes` 把平台差异声明得很清楚
- * （飞书 30000 / 钉钉 20000 / **企微 2048**），但展示条数一直是全平台
+ * （飞书 30000 / **钉钉 20000** / 企微 20480），但展示条数一直是全平台
  * 共用的常量（QUERY 10 条、投影 20 条、分组 20 组），按飞书的量级定的。
- * 企微上一条 6 字段的中文记录约 250 字节，10 条就 ~2500 字节 —— 超了之后
- * clampReplyBytes 会从**某条记录的中间**截断，用户看到半行乱码。
+ * 一条 6 字段的中文记录约 250 字节，长文本字段一多就能把预算吃满 ——
+ * 超了之后 clampReplyBytes 会从**某条记录的中间**截断，用户看到半行乱码。
  * 与其事后砍，不如先按预算决定放几条，再明说"共 N 条，仅展示前 M 条"。
  *
  * @param overheadBytes 标题、警告、序号等非条目文本预留的字节
@@ -186,20 +187,20 @@ export function fieldToStringRaw(
   if (Array.isArray(v)) {
     return v
       .map((item) => {
-        if (item != null && typeof item === 'object') {
-          const obj = item as Record<string, unknown>;
-          if (typeof obj.text === 'string') return obj.text;
-          if (typeof obj.name === 'string') return obj.name;
-          return fieldToStringRaw(item, displayType);
-        }
-        return String(item);
+        // 取显示标量用 normalize 的 scalarOf，不再在这里手抄键列表 ——
+        // 这份以前只认 text/name，record-filter 那份认 text/name/userName，
+        // 于是企微人员字段「筛选时认出了、展示时渲染成 JSON」
+        const s = scalarOf(item);
+        if (s !== null) return fieldToStringRaw(s, displayType);
+        return fieldToStringRaw(item, displayType);
       })
       .filter(Boolean)
       .join(' ');
   }
   if (typeof v === 'object') {
+    const s = scalarOf(v);
+    if (s !== null) return fieldToStringRaw(s, displayType);
     const obj = v as Record<string, unknown>;
-    if (typeof obj.text === 'string') return obj.text;
     if ('value' in obj && Array.isArray(obj.value)) {
       return fieldToStringRaw(obj.value, displayType);
     }

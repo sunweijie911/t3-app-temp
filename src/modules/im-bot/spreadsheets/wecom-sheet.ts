@@ -1,12 +1,12 @@
 // cspell:ignore wedoc smartsheet docid
 import { wecomTokenManager } from '../auth/wecom-token';
-import type { DisplayType } from '../core/field-render';
 import type {
   FieldMappingValue,
   SpreadsheetRecord,
   SpreadsheetTableConfig,
 } from '../core/types';
 import { dateStringToMs, displayTypeOf } from './field-types';
+import { normalizeCell } from './normalize';
 import { filterRecords } from './record-filter';
 import type { SpreadsheetAdapter, SpreadsheetQueryResult } from './types';
 
@@ -15,8 +15,8 @@ import type { SpreadsheetAdapter, SpreadsheetQueryResult } from './types';
  *
  * 与飞书 Bitable 的两处协议差异：
  * 1. 定位用 docid + sheet_id 两级；我们把 workspaceId 当 docid、tableId 当 sheet_id。
- * 2. 单元格值不是裸值，而是**类型化数组**，形如
- *    `{"项目名称": [{"type":"text","text":"督导2.0"}]}`。
+ * 2. `values` 的 key 是**字段名称**，value 的形状随字段类型变
+ *    （文本裸字符串、数字裸 double、日期字符串、选项 `[{text}]`）。
  *    这层转换是本文件唯一有实际逻辑的部分，因此单独导出以便单测。
  */
 
@@ -25,6 +25,38 @@ const API_BASE = 'https://qyapi.weixin.qq.com/cgi-bin/wedoc/smartsheet';
 const PAGE_SIZE = 1000;
 /** 续拉页数上限，防止超大表把内存和时延拖垮 */
 const MAX_PAGES = 5;
+
+/** 写记录的两个接口。只有它们的错误才值得附带选项列诊断信息 */
+function isWritePath(path: string): boolean {
+  return path === '/add_records' || path === '/update_records';
+}
+
+/**
+ * 从请求体里挑出「按选项形状写入」的列名，**只要列名不要值**。
+ *
+ * 选项列的 value 是 `[{text}]`（缺服务端 id，见 toWecomValue 的 TODO），
+ * 平台拒绝时给的 errcode 不指名是哪一列 —— 有这行日志才能一眼看出
+ * "报错的这次写入正好碰了这几个选项列"。
+ */
+function optionColumnsOf(body: unknown): string[] {
+  if (!body || typeof body !== 'object') return [];
+  const records = (body as { records?: unknown }).records;
+  if (!Array.isArray(records)) return [];
+  const names = new Set<string>();
+  for (const rec of records) {
+    const values = (rec as { values?: unknown })?.values;
+    if (!values || typeof values !== 'object') continue;
+    for (const [key, cell] of Object.entries(values)) {
+      if (
+        Array.isArray(cell) &&
+        cell.every((v) => v !== null && typeof v === 'object')
+      ) {
+        names.add(key);
+      }
+    }
+  }
+  return [...names];
+}
 
 async function wecomApi(path: string, body: unknown): Promise<unknown> {
   const token = await wecomTokenManager.getToken();
@@ -48,11 +80,15 @@ async function wecomApi(path: string, body: unknown): Promise<unknown> {
     [k: string]: unknown;
   };
   if (data.errcode && data.errcode !== 0) {
-    // 与飞书 adapter 一致：不打印 body 原文，避免用户写入的字段值落进日志
+    // 与飞书 adapter 一致：不打印 body 原文，避免用户写入的字段值落进日志。
+    // 但写接口出错时**只打列名**：选项列少了服务端 id 是已知风险
+    // （见 toWecomValue 的 TODO），错误码本身不说是哪一列，
+    // 没有这行就只能靠猜。列名来自 fieldMapping，不含用户数据。
     console.error('[WecomSheet] API 错误', {
       path,
       errcode: data.errcode,
       errmsg: data.errmsg,
+      ...(isWritePath(path) ? { optionColumns: optionColumnsOf(body) } : {}),
     });
     throw new Error(`企微智能表格 API 错误: ${data.errmsg ?? data.errcode}`);
   }
@@ -63,73 +99,89 @@ function platformKeyOf(mapping: FieldMappingValue): string {
   return typeof mapping === 'string' ? mapping : mapping.name;
 }
 
-/** 企微智能表格的类型化单元格 */
-export type WecomCell =
-  | { type: 'text'; text: string }
-  | { type: 'number'; number: number }
-  | { type: 'date'; date: number }
-  | { type: 'checkbox'; checkbox: boolean };
+/** 选项 / 多选字段的写入形状：只有 text，没有服务端的选项 id */
+export interface WecomOption {
+  text: string;
+}
 
 /**
- * 把逻辑值转成企微的类型化单元格数组。
- * - number → number 单元格
- * - boolean → checkbox
- * - YYYY-MM-DD 字符串 → date（CST 当天 00:00，与飞书/钉钉侧共用
- *   field-types.ts 的换算）；声明为 number/text 的列走 text，
- *   不再误判成日期单元格
- * - 数组 → 逐元素转（多选/多值字段）
- * - 其它 → text
+ * 该列是否按「选项」写入。
+ *
+ * 单选与多选在 add_records 里都要 `[{id,text}]`，我们没有服务端返回的选项 id，
+ * 只给 text。判据是 fieldMapping 的显式声明（multiSelect，或 plain 带 options）
+ * —— 从值本身分辨不出「一个字符串」是文本还是单选。
  */
-export function toWecomCells(
+function isOptionField(mapping: FieldMappingValue | undefined): boolean {
+  if (!mapping || typeof mapping === 'string') return false;
+  if (mapping.type === 'multiSelect') return true;
+  return mapping.type === 'plain' && (mapping.options?.length ?? 0) > 0;
+}
+
+/**
+ * 逻辑值 → 企微 `values` 里的一个 value。
+ *
+ * 形状按官方 add_records 文档（path/101240，与本机 wecom-cli 的
+ * smart-sheet-record-values 参考一致）：
+ * - 文本 / 电话 / 邮箱 / 条码：**裸字符串**
+ * - 数字 / 货币 / 百分比 / 进度：**裸 double**
+ * - 复选框：**裸布尔**
+ * - 日期：**字符串** `"YYYY-MM-DD HH:mm:ss"`
+ * - 单选 / 多选：`[{id, text}]`，只有 text 时写 `[{text}]`
+ *
+ * 以前这里写的是自造的类型化数组 `[{type:'text',text}]` —— 那是**读**
+ * 回来的形状，写进去平台并不认，数字列会被当文本、日期列直接写不进去。
+ */
+export function toWecomValue(
   value: unknown,
-  displayType?: DisplayType,
-): WecomCell[] {
-  if (value === null || value === undefined || value === '') return [];
+  mapping?: FieldMappingValue,
+): unknown {
+  const displayType = displayTypeOf(mapping);
+  // 清空一列：选项列要给空数组，其它列给空串 —— 给错形状平台会报参数错误
+  if (value === null || value === undefined || value === '') {
+    return isOptionField(mapping) ? [] : '';
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') return value;
+
+  // 数组一律按多选写：元素只有 text，没有选项 id
   if (Array.isArray(value)) {
-    return value.flatMap((v) => toWecomCells(v, displayType));
+    return value
+      .filter((v) => v !== null && v !== undefined && v !== '')
+      .map((v): WecomOption => ({ text: String(v) }));
   }
-  if (typeof value === 'number') {
-    return [{ type: 'number', number: value }];
+
+  // 选项判定必须排在日期之前：声明了 options 的列即使值长得像 'YYYY-MM-DD'
+  // （比如选项就是几个日期档位），也得按 [{text}] 写 —— 写成日期串平台会
+  // 报参数错误。反过来日期列不会声明 options，这个顺序没有副作用。
+  //
+  // TODO(企微选项 id)：官方 add_records 契约要求 `[{id,text}]`，我们只给
+  // text。实测大多数表能按 text 匹配到既有选项，但**新选项 / 同名选项**上
+  // 平台可能直接拒绝或落成空值，且错误码不指名列（诊断信息见 wecomApi 的
+  // optionColumns 日志）。后续方案：`spreadsheets/fields.ts` 的 digOptions
+  // 已经从平台拉到过完整选项，把 `{id,text}` 一并落进 fieldMapping.options，
+  // 这里再按 text 反查 id 写全形状。
+  if (isOptionField(mapping)) return [{ text: String(value) } as WecomOption];
+
+  // 日期统一为 CST 当天 00:00（见 field-types.ts 里为什么是 00:00），
+  // 所以时间部分恒为 00:00:00；声明为 number/text 的列不做这层转换
+  if (dateStringToMs(value, displayType) !== null) {
+    return `${value} 00:00:00`;
   }
-  if (typeof value === 'boolean') {
-    return [{ type: 'checkbox', checkbox: value }];
-  }
-  const ms = dateStringToMs(value, displayType);
-  if (ms !== null) return [{ type: 'date', date: ms }];
-  return [{ type: 'text', text: String(value) }];
+
+  return String(value);
 }
 
-/** 把企微的类型化单元格数组还原为可读值 */
-export function fromWecomCells(cells: unknown): unknown {
-  if (!Array.isArray(cells)) return cells ?? '';
-  const vals = cells.map((c) => {
-    if (!c || typeof c !== 'object') return String(c ?? '');
-    const cell = c as Record<string, unknown>;
-    if (typeof cell.text === 'string') return cell.text;
-    if (typeof cell.number === 'number') return cell.number;
-    if (typeof cell.date === 'number') return cell.date;
-    if (typeof cell.checkbox === 'boolean') return cell.checkbox;
-    // 人员/关联等复合类型：优先取 name
-    if (typeof cell.name === 'string') return cell.name;
-    return '';
-  });
-  if (vals.length === 0) return '';
-  if (vals.length === 1) return vals[0];
-  return vals;
-}
-
-/** 逻辑字段 → 企微 values（平台字段名 + 类型化单元格） */
+/** 逻辑字段 → 企微 values（key 是平台字段名称，value 随字段类型） */
 export function mapValuesForWrite(
   fields: Record<string, unknown>,
   config: SpreadsheetTableConfig,
-): Record<string, WecomCell[]> {
-  const out: Record<string, WecomCell[]> = {};
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
   for (const [logicalKey, value] of Object.entries(fields)) {
     // 与飞书侧一致：跳过 null/undefined，避免 LLM 幻觉字段静默清空数据
     if (value === null || value === undefined) continue;
     const mapping = config.fieldMapping[logicalKey];
     const platformKey = platformKeyOf(mapping ?? logicalKey);
-    out[platformKey] = toWecomCells(value, displayTypeOf(mapping));
+    out[platformKey] = toWecomValue(value, mapping);
   }
   return out;
 }
@@ -143,8 +195,10 @@ export function mapValuesFromRead(
     Object.entries(fieldMapping).map(([k, v]) => [platformKeyOf(v), k]),
   );
   const mapped: Record<string, unknown> = {};
-  for (const [platformKey, cells] of Object.entries(values)) {
-    mapped[reverse[platformKey] ?? platformKey] = fromWecomCells(cells);
+  for (const [platformKey, cell] of Object.entries(values)) {
+    // 读侧形状比写侧杂得多（裸值 / [{text}] / [{id,text}] / [{userName}] /
+    // 早期写入的 [{type,text}]），统一交给 normalize.ts 收口
+    mapped[reverse[platformKey] ?? platformKey] = normalizeCell(cell);
   }
   // 以 fieldMapping 为基准补齐空值，保证展示时表头完整（与飞书侧一致）
   const result: Record<string, unknown> = Object.fromEntries(

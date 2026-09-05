@@ -285,3 +285,62 @@ describe('filterRecords — op:"in" 命中任一（回归）', () => {
     ).toHaveLength(1);
   });
 });
+
+describe('filterRecords — 元素是对象时的防御（归一化被绕过的情形）', () => {
+  // 正常读路径已过 spreadsheets/normalize.ts；外部 adapter、测试替身或
+  // 新平台绕过它时，String({text:'门户'}) 会得到 "[object Object]"，
+  // 过滤结果**静默恒不命中**。这层兜底保证至少还能按显示文本比。
+  const rec = (fields: Record<string, unknown>) => ({ recordId: 'r', fields });
+
+  it('数组成员是 {text} 时按显示文本命中', () => {
+    const records = [rec({ 域: [{ text: '门户', type: 'text' }] })];
+    expect(filterRecords(records, { 域: '门户' })).toHaveLength(1);
+  });
+
+  it('数组成员是 {name} / {userName} 时同样命中', () => {
+    expect(
+      filterRecords([rec({ 人: [{ name: '张三' }] })], { 人: '张三' }),
+    ).toHaveLength(1);
+    expect(
+      filterRecords([rec({ 人: [{ userName: '李四' }] })], { 人: '李四' }),
+    ).toHaveLength(1);
+  });
+
+  it('contains 也走同一套文本化，不再拿 "[object Object]" 去 includes', () => {
+    const records = [rec({ 域: [{ text: '门户重构', type: 'text' }] })];
+    expect(
+      filterRecords(records, { 域: { op: 'contains', value: '重构' } }),
+    ).toHaveLength(1);
+  });
+
+  it('不该命中的仍然不命中', () => {
+    const records = [rec({ 域: [{ text: '其它', type: 'text' }] })];
+    expect(filterRecords(records, { 域: '门户' })).toHaveLength(0);
+  });
+
+  it('★ 键列表与 normalize.scalarOf 同源：{title} / 老版 {number} 都认', () => {
+    // 这两个键以前只有 normalize 认识，record-filter 自己抄的那份没有 ——
+    // 于是绕过归一化时，附件列筛不出来、老版数字单元格拿 "[object Object]"
+    // 去比。两处改成共用 scalarOf 之后不会再分叉。
+    expect(
+      filterRecords([rec({ 金额: [{ type: 'number', number: 42 }] })], {
+        金额: 42,
+      }),
+    ).toHaveLength(1);
+    expect(
+      filterRecords([rec({ 附件: [{ id: 'f1', title: '合同.pdf' }] })], {
+        附件: '合同.pdf',
+      }),
+    ).toHaveLength(1);
+  });
+
+  it('企微原始日期串（未过归一化）也能按日期筛', () => {
+    // adapter 正常会收口成毫秒；这里是替身直接塞原始串的情形
+    const records = [rec({ 日期: '2026-05-11 00:00:00' })];
+    expect(filterRecords(records, { 日期: '2026-05-11' })).toHaveLength(1);
+    expect(
+      filterRecords(records, { 日期: { op: '>=', value: '2026-05-01' } }),
+    ).toHaveLength(1);
+    expect(filterRecords(records, { 日期: '2026-05-12' })).toHaveLength(0);
+  });
+});

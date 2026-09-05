@@ -15,6 +15,7 @@ import {
   PLATFORM_SECRET_FIELDS,
   SCENE_CHAT_ACCESS_SCHEMA,
 } from '../constants';
+import { startOfBusinessDay } from '../core/business-date';
 import {
   botEventDedup,
   botEventLogs,
@@ -104,20 +105,6 @@ function primaryKeysOf(fieldMapping: Record<string, unknown>): string[] {
         (v as { primary?: unknown }).primary === true,
     )
     .map(([k]) => k);
-}
-
-/** 业务时区固定 CST(+08:00)，与飞书日期字段的处理保持一致 */
-const BUSINESS_TZ_OFFSET_MS = 8 * 60 * 60 * 1000;
-
-/**
- * 返回「业务时区今天 00:00」对应的 UTC 时刻。
- * 直接用 `new Date().setHours(0,0,0,0)` 取的是**服务器本地时区**，
- * 容器一般跑 UTC，会把凌晨 0~8 点的数据算进前一天。
- */
-function startOfBusinessDay(now: Date = new Date()): Date {
-  const shifted = new Date(now.getTime() + BUSINESS_TZ_OFFSET_MS);
-  shifted.setUTCHours(0, 0, 0, 0);
-  return new Date(shifted.getTime() - BUSINESS_TZ_OFFSET_MS);
 }
 
 export const imBotAdminRouter = createTRPCRouter({

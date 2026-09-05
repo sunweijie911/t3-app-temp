@@ -459,8 +459,9 @@ export default function ImBotScenesPage() {
                   查询循环：{'<!--each-->'} … {'<!--/each-->'}
                   对每条记录展开，多条时自动加【第 N 条】序号
                   <br />
-                  展示条数受目标平台单条消息字节上限约束（企微仅 2048
-                  字节），超出部分会显示成「共 N 条，仅展示前 M 条」。
+                  展示条数受目标平台单条消息字节上限约束（飞书 30000 / 钉钉
+                  20000 / 企微 20480 字节），超出部分会显示成「共 N 条，仅展示前
+                  M 条」。
                   {/* biome-ignore-end lint/suspicious/noTemplateCurlyInString: end */}
                 </Typography.Text>
               </Form.Item>

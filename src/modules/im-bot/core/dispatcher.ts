@@ -11,9 +11,12 @@ import { documentConfigOf, getDocumentAdapter } from '../documents/factory';
 import type { BotScene } from '../scenes/types';
 import { getSpreadsheetAdapter } from '../spreadsheets/factory';
 import type { SpreadsheetAdapter } from '../spreadsheets/types';
+import { todayInBusinessTz } from './business-date';
 import { MemoryDedupStore } from './dedup';
 import {
   DEFAULT_REPLY_BUDGET_BYTES,
+  fieldMeta,
+  fieldToString,
   fieldToStringRaw,
   fitCountByBytes,
   renderRecordSummary,
@@ -326,7 +329,7 @@ function renderCandidateList(
     .slice(0, MAX_CANDIDATE_DISPLAY)
     .map((r, i) => `${i + 1}. ${renderRecordSummary(r.fields, fieldMapping)}`);
   // 候选列表尤其不能被 clampReplyBytes 从中间截断：用户要照着它选序号 /
-  // 判断该不该确认删除，半行摘要没法判断。企微 2048 字节下 10 条摘要
+  // 判断该不该确认删除，半行摘要没法判断。预算紧的平台上 10 条摘要
   // 常常就超了，所以条数按预算收。
   //
   // 除了调用方传进来的 overhead，还要给两段"事后才拼出来"的文字留位置：
@@ -790,7 +793,9 @@ export class Dispatcher {
 
       // 4. LLM 意图解析
       const ctx: SceneContext = {
-        today: new Date().toISOString().slice(0, 10),
+        // 必须按业务时区取：UTC 日在北京时间 08:00 之前差一天，
+        // 而 LLM 会拿这个 today 去填日期字段（见 business-date.ts）
+        today: todayInBusinessTz(),
         senderName: msg.senderName,
         chatName: msg.chatName,
         // 字段清单从绑定实时派生，不再依赖管理员在 prompt 里手抄
@@ -814,7 +819,7 @@ export class Dispatcher {
       // 注意 attemptOnce 内部对「不该重试」的失败会返回 stop（见
       // NEVER_RETRY_ERROR_PATTERNS：放宽筛选条件会放大 UPDATE/DELETE 影响面）。
       // 目标平台的单条消息字节预算。展示条数（查询结果、候选列表、分组）
-      // 都按它推导 —— 企微只有 2048 字节，按飞书的 10 条渲染必然被
+      // 都按它推导 —— 三家上限差一个量级，按最宽松的那个渲染会被
       // clampReplyBytes 从某条记录的中间砍断。
       const budgetBytes = channelAdapter.maxReplyBytes;
       let outcome = await this.attemptOnce(
@@ -1383,8 +1388,23 @@ export class Dispatcher {
               message: msg,
               updateFields: fields,
             });
+            // 用 label + displayType 渲染，而不是 JSON.stringify：后者会把
+            // label 换成 logicalKey、把日期显示成裸毫秒、还给字符串加引号。
+            //
+            // **刻意不过 maskSensitive**：这里显示的是用户自己刚在群里说出来
+            // 的待写入值，脱敏保护不了任何东西（原文就在上一条消息里），
+            // 却会让二次确认变成"盲确认" —— 用户看到「接口密钥: ***（已脱敏）」
+            // 根本无法判断 LLM 有没有把值解析错，而这正是二次确认的全部意义。
+            // 记录侧的候选摘要仍然脱敏（那是表里的存量数据，见
+            // renderCandidateList），两者的风险不是一回事。
             const changes = Object.entries(fields)
-              .map(([k, v]) => `  ${k}: ${JSON.stringify(v)}`)
+              .map(([k, v]) => {
+                const { label, displayType } = fieldMeta(
+                  k,
+                  tableConfig.fieldMapping,
+                );
+                return `  ${label}: ${fieldToString(v, displayType)}`;
+              })
               .join('\n');
             return {
               success: false,
@@ -1399,8 +1419,16 @@ export class Dispatcher {
             error: `匹配到 ${records.length} 条记录，超过单次可操作上限 ${MAX_DESTRUCTIVE_BATCH} 条。请补充更精确的筛选条件后重试`,
           };
         }
+        // 同上：「都改成 X」是用户自己说的待写入值，走 label + displayType
+        // 渲染但不脱敏，否则用户没法确认这批更新到底要写什么
         const changes = Object.entries(fields)
-          .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+          .map(([k, v]) => {
+            const { label, displayType } = fieldMeta(
+              k,
+              tableConfig.fieldMapping,
+            );
+            return `${label}=${fieldToString(v, displayType)}`;
+          })
           .join('、');
         const prompt = `找到 ${records.length} 条匹配记录，请回复序号选择其中一条，或回复「全部」把这 ${records.length} 条都改成 ${changes}：\n`;
         const candidateList = renderCandidateList(

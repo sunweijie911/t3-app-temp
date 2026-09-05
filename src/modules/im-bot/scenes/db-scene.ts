@@ -344,7 +344,7 @@ export class DatabaseDrivenScene implements BotScene {
       if (project.length > 0) {
         // 条数上限取「硬上限」与「字节预算能放下多少」的较小者。
         // 硬上限是可读性（刷屏）的约束，预算是平台协议的约束 ——
-        // 企微 2048 字节下 20 条投影行必然被从中间砍断。
+        // 预算小的平台上 20 条投影行会被从中间砍断。
         const HARD_LIMIT = 20; // 投影模式更紧凑，可多显示几条
         const displayed = result.records.slice(0, HARD_LIMIT);
         // 主标识：优先取显式声明 primary 的字段。
@@ -567,7 +567,7 @@ export class DatabaseDrivenScene implements BotScene {
       });
       // 开销只算 each 块**之外**的模板文本：块内那段源码马上就会被
       // 渲染结果替换掉，把它也算进去等于同一段内容收两次费 ——
-      // 行模板越长少展示的记录越多（企微 2048 字节下，一个 300 字节的
+      // 行模板越长少展示的记录越多（预算紧的平台上，一个 300 字节的
       // 行模板白白吃掉一整条记录的位置）。
       const outsideEach = tpl.replace(/<!--each-->[\s\S]*?<!--\/each-->/, '');
       const shownCount = fitCountByBytes(

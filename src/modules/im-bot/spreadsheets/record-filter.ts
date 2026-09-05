@@ -1,5 +1,8 @@
 // cspell:ignore isanyof anyof oneof
+import { BUSINESS_TZ_OFFSET_MS } from '../core/business-date';
 import type { SpreadsheetRecord } from '../core/types';
+import { datetimeStringToMs, dayStartMs, isDateString } from './field-types';
+import { scalarOf } from './normalize';
 
 /**
  * 客户端侧记录过滤。
@@ -11,32 +14,43 @@ import type { SpreadsheetRecord } from '../core/types';
  */
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-const CST_OFFSET_MS = 8 * 60 * 60 * 1000;
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-function isDateStr(v: unknown): v is string {
-  return typeof v === 'string' && DATE_RE.test(v);
-}
-
-/** YYYY-MM-DD → 该日 CST 零点的毫秒值 */
-function dayStartMs(s: string): number {
-  return new Date(`${s}T00:00:00+08:00`).getTime();
+/**
+ * 记录侧的值转成可比较 / 可展示的文本。
+ *
+ * 读路径已经过 spreadsheets/normalize.ts，正常只会拿到标量或字符串数组。
+ * 这里对「元素还是对象」再兜一层：`String({text:'门户'})` 是
+ * `'[object Object]'`，一旦哪条路径绕过了归一化（外部 adapter、测试替身、
+ * 新平台），过滤结果会**静默恒不命中**而不是报错。
+ *
+ * 取标量用 normalize 的 scalarOf，不再在这里手抄一份键列表 —— 抄两份的
+ * 结果是同一个附件单元格「筛选时认出了、展示时没认出」（field-render 那份
+ * 少了 userName，这份少了 title）。
+ */
+function toText(v: unknown): string {
+  if (v === null || v === undefined) return '';
+  const s = scalarOf(v);
+  if (s !== null) return String(s);
+  return String(v);
 }
 
 /** 毫秒值 → 它在 CST 下所属自然日的 YYYY-MM-DD */
 function cstDayOf(ms: number): string {
-  return new Date(ms + CST_OFFSET_MS).toISOString().slice(0, 10);
+  return new Date(ms + BUSINESS_TZ_OFFSET_MS).toISOString().slice(0, 10);
 }
 
 /**
  * 把记录侧的值转成可比较的毫秒值。
- * 平台读回的日期字段是毫秒数（企微 date 单元格、钉钉裸值都是），
- * 但也兼容配置成文本列的 'YYYY-MM-DD'。
+ *
+ * 归一化之后日期就是毫秒数，但这里仍要认字符串：
+ * - 配置成文本列的 'YYYY-MM-DD'（归一化层不敢转，它拿不到 displayType）
+ * - 绕过归一化的路径（外部 adapter / 测试替身）送来的
+ *   企微原始形态 '2026-05-11 00:00:00'
+ * 少认一种形态的代价不是报错，而是该列上**所有日期筛选恒 0 条**。
  */
 function actualMs(actual: unknown): number | null {
   if (typeof actual === 'number' && Number.isFinite(actual)) return actual;
-  if (isDateStr(actual)) return dayStartMs(actual);
-  return null;
+  return datetimeStringToMs(actual);
 }
 
 /**
@@ -57,7 +71,7 @@ function compareAsDate(
   expected: unknown,
   op: string,
 ): boolean | null {
-  if (!isDateStr(expected)) return null;
+  if (!isDateString(expected)) return null;
   const ms = actualMs(actual);
   if (ms === null) return null;
 
@@ -90,8 +104,10 @@ function matchBetween(actual: unknown, value: unknown): boolean {
     if (Number.isNaN(n)) return false;
     return n >= Number(rawStart) && n <= Number(rawEnd);
   }
-  const lower = isDateStr(rawStart) ? dayStartMs(rawStart) : Number(rawStart);
-  const upper = isDateStr(rawEnd)
+  const lower = isDateString(rawStart)
+    ? dayStartMs(rawStart)
+    : Number(rawStart);
+  const upper = isDateString(rawEnd)
     ? dayStartMs(rawEnd) + ONE_DAY_MS
     : Number(rawEnd) + 1;
   return ms >= lower && ms < upper;
@@ -107,11 +123,11 @@ function matchBetween(actual: unknown, value: unknown): boolean {
 function matchesValue(actual: unknown, expected: unknown): boolean {
   const byDate = compareAsDate(actual, expected, '=');
   if (byDate !== null) return byDate;
-  const exp = String(expected ?? '');
+  const exp = toText(expected);
   if (Array.isArray(actual)) {
-    return actual.some((member) => String(member ?? '') === exp);
+    return actual.some((member) => toText(member) === exp);
   }
-  return String(actual ?? '') === exp;
+  return toText(actual) === exp;
 }
 
 /**
@@ -140,8 +156,8 @@ export function filterRecords(
     const expected = filters[key];
     const actual = r.fields[key];
     const actualStr = Array.isArray(actual)
-      ? actual.map(String).join(' ')
-      : String(actual ?? '');
+      ? actual.map(toText).join(' ')
+      : toText(actual);
     // 数组筛选值 = 「命中任一」，且必须判在 object 分支**之前**：
     // `typeof [] === 'object'` 为真，走进 { op, value } 分支后两者都解构成
     // undefined，于是 default 分支拿 v='' 做等值比较 —— 任何数组筛选都
@@ -153,7 +169,7 @@ export function filterRecords(
     if (expected !== null && typeof expected === 'object') {
       const { op, value } = expected as { op?: string; value?: unknown };
       const opKey = (op ?? '').toLowerCase();
-      const v = String(value ?? '');
+      const v = toText(value);
       switch (opKey) {
         case 'contains':
         case '~':

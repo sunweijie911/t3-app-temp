@@ -123,13 +123,11 @@ async function logBotEvent(event: BotEvent) {
     .catch((err) => console.error('[BotEngine] 审计日志写入失败:', err));
 }
 
-async function getDispatcher(): Promise<Dispatcher> {
-  if (dispatcher && Date.now() < dispatcherExpiresAt) return dispatcher;
-  if (initPromise) return initPromise;
-  if (lastInitError && Date.now() < lastInitError.expiresAt) {
-    throw lastInitError.error;
-  }
-
+/**
+ * 真正去 DB 拉一次配置并换上新的 Dispatcher。
+ * 同一时刻只会有一个在飞（initPromise 去重），失败时登记熔断窗口。
+ */
+function startInit(): Promise<Dispatcher> {
   initPromise = (async () => {
     const [bindings, scenes] = await Promise.all([
       loadResourceBindings(),
@@ -172,6 +170,22 @@ async function getDispatcher(): Promise<Dispatcher> {
         error: err,
         expiresAt: Date.now() + INIT_FAILURE_COOLDOWN_MS,
       };
+      // 手里有旧实例时，把**配置缓存的有效期**也推到熔断窗口末尾。
+      //
+      // 不推的话 dispatcherExpiresAt 永远停在过去，于是熔断窗口一到期，
+      // 下一条消息立刻又发起一次重载 —— DB 持续慢时等于每 30s 拿一条消息
+      // 去当探针（旧实例还在，探针本身不影响回复，但白白多一轮 DB 压力，
+      // 而这正是熔断想避免的）。推到窗口末尾后，这 30s 内一次都不试。
+      //
+      // warn 打在这里而不是每条消息上：一次失败只需要一行日志，
+      // 「接下来 30s 用的是上一版配置」这个事实说一遍就够了。
+      if (dispatcher) {
+        dispatcherExpiresAt = Date.now() + INIT_FAILURE_COOLDOWN_MS;
+        console.warn(
+          '[BotEngine] 配置重载失败，暂时沿用上一版配置（熔断窗口内）:',
+          err,
+        );
+      }
       throw err;
     })
     .finally(() => {
@@ -179,6 +193,41 @@ async function getDispatcher(): Promise<Dispatcher> {
     });
 
   return initPromise;
+}
+
+async function getDispatcher(): Promise<Dispatcher> {
+  const now = Date.now();
+  if (dispatcher && now < dispatcherExpiresAt) return dispatcher;
+
+  const cooling = lastInitError !== null && now < lastInitError.expiresAt;
+
+  // 手里还有旧实例时**一律先拿旧的走**，重载放到后台（stale-while-revalidate）。
+  //
+  // 过期的只是「配置缓存」，不是 dispatcher 本身：场景、绑定、systemPrompt
+  // 分钟级才变一次，用上一版跑几十秒的代价是「刚改的场景名晚一条消息生效」。
+  // 让消息等一次重载的代价则是**它陪着 DB 一起超时**，重载失败时更是直接
+  // 失声 —— 两者不对等。
+  //
+  // 这一段必须排在 initPromise 之前。以前是 `if (initPromise) return
+  // initPromise` 在最前面，于是重载进行中到达的消息全部跟着这次重载一起
+  // 失败（DB 挂了就是全挂）；触发重载的那一条更是从来没有降级可言，
+  // 它自己就是发起方，还没有 lastInitError 可依。
+  if (dispatcher) {
+    // 熔断窗口内不再发起新的重载；窗口外且没有在飞的重载才补一次
+    if (!cooling && !initPromise) {
+      // 后台跑，这条消息不等它。rejection 由 startInit 内部登记，
+      // 这里必须再挂一个 catch，否则成 unhandledRejection
+      void startInit().catch(() => {});
+    }
+    return dispatcher;
+  }
+
+  if (initPromise) return initPromise;
+  // 一次都没成功初始化过（没有旧配置可用）时才抛。熔断窗口在这条路径上的
+  // 意义是：别让每条 webhook 都去捶一次已经挂了的 DB。
+  if (cooling && lastInitError) throw lastInitError.error;
+
+  return startInit();
 }
 
 /**
@@ -286,6 +335,7 @@ export async function handleBotWebhook(
   //   冷启动还要先建连接；它抛错时整个 route 会 500，把平台推去重试，
   //   而重试同样会撞上 30s 的 init 熔断窗口，再 500 一次
   // 两者叠起来远超飞书的 3 秒阈值，所以都在 run 里。decode 只做验签与解析。
+  const startedAt = Date.now();
   const run = () =>
     (async () => {
       const [disp, enriched] = await Promise.all([
@@ -295,8 +345,33 @@ export async function handleBotWebhook(
       // null = 富化后判定不该处理（如群里 @ 的不是本机器人）
       if (!enriched) return;
       await disp.process(enriched, adapter);
-    })().catch((err) => {
+    })().catch(async (err) => {
       console.error('[BotEngine] 异步处理异常:', err);
+      // 这里是 ack 之后的最后一道兜底：走到这条路径说明 getDispatcher /
+      // enrich / process 整个塌了，用户那边是**彻底没有回音**，后台也没有
+      // 任何审计记录 —— 现象只剩下"机器人不理人"，连查都无从查起。
+      // 所以补两件事：给用户一句话，给运维一条 result='error' 的日志。
+      // 两者自己都可能再失败（回复要打平台接口、审计要写 DB，而 DB 很可能
+      // 正是塌掉的那一环），各自吞掉异常，不能让兜底再抛一次。
+      await adapter
+        .reply(msg, '⚠️ 服务暂时繁忙，请稍后再试')
+        .catch((replyErr) =>
+          console.error('[BotEngine] 兜底回复失败:', replyErr),
+        );
+      await logBotEvent({
+        platform,
+        eventId: msg.eventId,
+        chatId: msg.chatId,
+        senderId: msg.senderId,
+        senderName: msg.senderName,
+        content: msg.content,
+        result: 'error',
+        errorMsg: err instanceof Error ? err.message : String(err),
+        costMs: Date.now() - startedAt,
+        createdAt: new Date(),
+      }).catch((logErr) =>
+        console.error('[BotEngine] 兜底审计日志失败:', logErr),
+      );
     });
 
   try {

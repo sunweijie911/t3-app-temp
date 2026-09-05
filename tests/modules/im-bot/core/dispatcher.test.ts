@@ -1422,6 +1422,42 @@ describe('Dispatcher — 审计事件', () => {
   });
 });
 
+// biome-ignore lint/suspicious/noTemplateCurlyInString: ${today} 是场景模板的占位符名
+describe('Dispatcher — ${today} 按业务时区注入', () => {
+  it('UTC 当日 23:00（= 北京次日 07:00）注入的是北京日期', async () => {
+    // 回归：以前用 new Date().toISOString().slice(0,10) 取的是 UTC 日，
+    // 北京时间每天 08:00 之前都会差一天 —— LLM 拿它去填日期字段，
+    // 凌晨录入的记录会被静默写成前一天
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-11T23:00:00.000Z'));
+    try {
+      const d = new Dispatcher({ getBinding: () => baseBinding });
+      d.registry.register(
+        new DatabaseDrivenScene({
+          ...baseSceneConfig,
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: 这是场景模板里的占位符，不是 JS 模板串
+          systemPrompt: '今天是 ${today}',
+        }),
+      );
+      const channel = makeChannel();
+      const adapter = makeAdapter();
+      mockGetAdapter.mockReturnValue(adapter);
+      (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+      mockChatCompletion.mockResolvedValueOnce(
+        '{"intent":"QUERY","filters":{"项目名称":"x"},"confidence":0.95,"summary":"查"}',
+      );
+
+      await d.process(makeMsg({ content: '查项目 x' }), channel);
+
+      const systemPrompt = mockChatCompletion.mock.calls.at(-1)?.[0] ?? '';
+      expect(systemPrompt).toContain('今天是 2026-05-12');
+      expect(systemPrompt).not.toContain('2026-05-11');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('Dispatcher — 字段清单注入 prompt', () => {
   it('把绑定的字段清单喂给 LLM（不再依赖管理员手抄）', async () => {
     const d = makeDispatcher();
@@ -1711,6 +1747,79 @@ describe('Dispatcher — UPDATE 必须带变更字段（P0：空 fields 会发�
     expect(adapter.updateRecord).not.toHaveBeenCalled();
     expect(channel.lastReply).toContain('负责人');
     expect(channel.lastReply).toContain('项目名称');
+  });
+});
+
+describe('Dispatcher — 确认提示按 label + displayType 渲染，且刻意不脱敏', () => {
+  const sensitiveBinding: ResourceBinding = {
+    ...baseBinding,
+    fieldMapping: {
+      项目名称: { name: '项目名称', type: 'plain', label: '项目' },
+      接口密钥: { name: '接口密钥', type: 'plain', sensitive: true },
+      上线日期: { name: '上线日期', type: 'plain', displayType: 'date' },
+    },
+  };
+
+  function setup() {
+    const d = new Dispatcher({ getBinding: () => sensitiveBinding });
+    d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    return { d, channel, adapter };
+  }
+
+  it('★ 待写入值原样显示，不脱敏 —— 脱敏只会让人盲确认', async () => {
+    const { d, channel, adapter } = setup();
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { recordId: 'r1', fields: { 项目名称: 'A' } },
+    ]);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"UPDATE","fields":{"接口密钥":"sk-live-123"},"filters":{"项目名称":"A"},"confidence":0.95,"summary":"改"}',
+    );
+
+    await d.process(makeMsg({ content: '改一下 A 的接口密钥' }), channel);
+
+    // 值是用户自己上一条消息里说的，脱敏保护不了任何东西，却让用户看不出
+    // LLM 有没有解析错 —— 而这正是二次确认的全部意义
+    expect(channel.lastReply).toContain('确认更新 1 条记录');
+    expect(channel.lastReply).toContain('sk-live-123');
+    expect(channel.lastReply).not.toContain('已脱敏');
+    // 也不该带 JSON.stringify 的引号
+    expect(channel.lastReply).not.toContain('"sk-live-123"');
+  });
+
+  it('用 label 而不是 logicalKey，且不带 JSON 引号', async () => {
+    const { d, channel, adapter } = setup();
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { recordId: 'r1', fields: { 项目名称: 'A' } },
+    ]);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"UPDATE","fields":{"项目名称":"B"},"filters":{"项目名称":"A"},"confidence":0.95,"summary":"改"}',
+    );
+
+    await d.process(makeMsg({ content: '把 A 改成 B' }), channel);
+
+    expect(channel.lastReply).toContain('项目: B');
+    // JSON.stringify 会给字符串加引号，renderFieldEntry 不会
+    expect(channel.lastReply).not.toContain('"B"');
+  });
+
+  it('★ 多条命中的「都改成 X」同样原样显示', async () => {
+    const { d, channel, adapter } = setup();
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { recordId: 'r1', fields: { 项目名称: 'A' } },
+      { recordId: 'r2', fields: { 项目名称: 'A2' } },
+    ]);
+    mockChatCompletion.mockResolvedValueOnce(
+      '{"intent":"UPDATE","fields":{"接口密钥":"sk-live-123"},"filters":{"项目名称":"A"},"confidence":0.95,"summary":"改"}',
+    );
+
+    await d.process(makeMsg({ content: '批量改密钥' }), channel);
+
+    expect(channel.lastReply).toContain('请回复序号');
+    expect(channel.lastReply).toContain('接口密钥=sk-live-123');
+    expect(channel.lastReply).not.toContain('"sk-live-123"');
   });
 });
 

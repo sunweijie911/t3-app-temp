@@ -1,5 +1,6 @@
-// cspell:ignore conds
+// cspell:ignore conds Zhang
 import { describe, expect, it } from 'vitest';
+import { fieldToStringRaw } from '@/modules/im-bot/core/field-render';
 import type {
   FieldMappingValue,
   SpreadsheetTableConfig,
@@ -212,6 +213,123 @@ describe('reverseMapFields', () => {
   it('mapping 中没有的平台字段保留为原名', () => {
     const out = reverseMapFields({ extra: 'v' }, { a: 'a' });
     expect(out).toEqual({ extra: 'v' });
+  });
+});
+
+describe('reverseMapFields — 平台原始形状归一化（根因修复）', () => {
+  it('文本字段的 [{text,type}] 段数组 → 字符串', () => {
+    const out = reverseMapFields(
+      { 名称: [{ text: '门户重构', type: 'text' }] },
+      { 名称: '名称' },
+    );
+    expect(out.名称).toBe('门户重构');
+  });
+
+  it('多段（正文 + @提及）拼成一句话', () => {
+    const out = reverseMapFields(
+      {
+        名称: [
+          { text: '门户', type: 'text' },
+          { text: '重构', type: 'mention' },
+        ],
+      },
+      { 名称: '名称' },
+    );
+    expect(out.名称).toBe('门户 重构');
+  });
+
+  it('多选返回的字符串数组保持数组（成员筛选依赖它）', () => {
+    const out = reverseMapFields({ 标签: ['门户', '督导'] }, { 标签: '标签' });
+    expect(out.标签).toEqual(['门户', '督导']);
+  });
+
+  it('人员字段 [{id,name,...}] → 姓名数组（单个也保持数组）', () => {
+    const out = reverseMapFields(
+      {
+        负责人: [
+          {
+            id: 'ou_1',
+            name: '张三',
+            en_name: 'San Zhang',
+            email: 'z@x.com',
+            avatar_url: 'https://x/a.png',
+          },
+        ],
+      },
+      { 负责人: '负责人' },
+    );
+    // 单个成员也不降标量：企微同一列读回 [{userId,userName}]，
+    // 两边都是数组，`{负责人:'张三'}` 才会在两个平台给出同一个答案
+    expect(out.负责人).toEqual(['张三']);
+  });
+
+  it('多人员 → 姓名数组', () => {
+    const out = reverseMapFields(
+      {
+        负责人: [
+          { id: 'ou_1', name: '张三' },
+          { id: 'ou_2', name: '李四' },
+        ],
+      },
+      { 负责人: '负责人' },
+    );
+    expect(out.负责人).toEqual(['张三', '李四']);
+  });
+
+  it('日期毫秒数、数字、布尔原样保留（displayType 还要靠类型判断）', () => {
+    const out = reverseMapFields(
+      { 日期: 1778472000000, 金额: 123.45, 完成: true },
+      { 日期: '日期', 金额: '金额', 完成: '完成' },
+    );
+    expect(out.日期).toBe(1778472000000);
+    expect(out.金额).toBe(123.45);
+    expect(out.完成).toBe(true);
+  });
+
+  it('公式 / lookup 的 {value:[...]} 递归展开', () => {
+    const out = reverseMapFields(
+      { 利润: { type: 1, value: [{ text: '108', type: 'text' }] } },
+      { 利润: '利润' },
+    );
+    expect(out.利润).toBe('108');
+  });
+});
+
+describe('reverseMapFields — 关联字段 {link_record_ids}', () => {
+  const linkMapping: Record<string, FieldMappingValue> = {
+    proj: {
+      name: '关联项目',
+      type: 'link',
+      linkTableId: 't2',
+      displayField: '名称',
+    },
+  };
+
+  it('归一化为 record_id 字符串数组（search 不返回显示值）', () => {
+    const out = reverseMapFields(
+      { 关联项目: { link_record_ids: ['rec111', 'rec222'] } },
+      linkMapping,
+    );
+    expect(out.proj).toEqual(['rec111', 'rec222']);
+  });
+
+  it('渲染出来不再是一坨原始 JSON', () => {
+    const out = reverseMapFields(
+      { 关联项目: { link_record_ids: ['rec111', 'rec222'] } },
+      linkMapping,
+    );
+    const display = fieldToStringRaw(out.proj);
+    expect(display).toBe('rec111 rec222');
+    expect(display).not.toContain('link_record_ids');
+    expect(display).not.toContain('{');
+  });
+
+  it('单个关联记录同样是数组（下游按成员命中比）', () => {
+    const out = reverseMapFields(
+      { 关联项目: { link_record_ids: ['rec111'] } },
+      linkMapping,
+    );
+    expect(out.proj).toEqual(['rec111']);
   });
 });
 

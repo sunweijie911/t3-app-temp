@@ -10,9 +10,12 @@ import type {
 } from '../core/types';
 import {
   dateStringToMs,
+  dayStartMs,
   displayTypeOf,
+  isDateString,
   treatsValueAsDate,
 } from './field-types';
+import { normalizeCell } from './normalize';
 import { filterRecords } from './record-filter';
 import type { SpreadsheetAdapter, SpreadsheetQueryResult } from './types';
 
@@ -270,11 +273,6 @@ function isAnyOfCondition(opKey: string, value: unknown): boolean {
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
-/** YYYY-MM-DD → 该日 CST 零点的毫秒值 */
-function dayStartMs(s: string): number {
-  return new Date(`${s}T00:00:00+08:00`).getTime();
-}
-
 /** YYYY-MM-DD → 次日 CST 零点的毫秒值 */
 function nextDayStartMs(s: string): number {
   return dayStartMs(s) + ONE_DAY_MS;
@@ -349,8 +347,9 @@ export function buildFilterConditions(
       obj.value.length === 2
     ) {
       const [start, end] = obj.value as [unknown, unknown];
-      const isDate = (v: unknown): v is string =>
-        asDate && typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
+      // 日期串的判定与 dayStartMs 都收在 field-types.ts 一处，
+      // 三个文件各写一份正则时容易改漏其中一份
+      const isDate = (v: unknown): v is string => asDate && isDateString(v);
 
       // 数值/文本列不能套 ExactDate —— 那是 datetime 字段专用的值格式。
       // 裸数字在 datetime 列上表示精确毫秒（见下方分支），两者从值本身分辨不出来，
@@ -615,7 +614,10 @@ export function reverseMapFields(
   const result: Record<string, unknown> = {};
   for (const [platformKey, value] of Object.entries(fields)) {
     const logicalKey = reverse[platformKey] ?? platformKey;
-    result[logicalKey] = value;
+    // 归一化在这里做，而不是留给每个下游各猜一次：飞书文本字段返回的是
+    // `[{text,type}]`，不归一化的话 record-filter 的残差过滤会 String() 成
+    // "[object Object]"，文本列上恒返回 0 条（见 normalize.ts）
+    result[logicalKey] = normalizeCell(value);
   }
   return result;
 }

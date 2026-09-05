@@ -19,18 +19,22 @@ const TIMESTAMP_TOLERANCE_MS = 5 * 60 * 1000;
 /**
  * 企微回复上下文。
  *
- * 企微智能机器人的回调体里带一个一次性的 `webhook_url`，回复要 POST 到它，
- * 而不是像飞书那样用 token 主动往会话发消息。所以 decode 必须把它塞进
- * `UnifiedMessage.raw` —— 这正是上一轮给 UnifiedMessage 加 raw 的原因。
+ * 企微智能机器人的回调体里带一个**一次性**的 `response_url`（官方文档
+ * path/101138「主动回复」），回复要 POST 到它，而不是像飞书那样用 token
+ * 主动往会话发消息。所以 decode 必须把它塞进 `UnifiedMessage.raw`
+ * —— 这正是上一轮给 UnifiedMessage 加 raw 的原因。
+ *
+ * 该 URL 有效期 1 小时且**只能调用一次**，第二次调用会被平台拒绝，
+ * 见 WecomChannelAdapter.reply 里的单次保护。
  */
 export interface WecomReplyContext {
-  webhookUrl: string;
+  responseUrl: string;
   chatId: string;
   chatType: ChatType;
 }
 
 /**
- * webhook_url 允许的域。
+ * response_url 允许的域。
  *
  * 企微这边的风险比钉钉小 —— 密文经 AES 加密、签名覆盖密文，伪造 body
  * 需要 encodingAesKey。但纵深防御的成本是零，而一旦这个 URL 被换掉，
@@ -48,7 +52,12 @@ export function isWecomWebhookHost(hostname: string): boolean {
 export function readWecomReplyContext(raw: unknown): WecomReplyContext | null {
   if (!raw || typeof raw !== 'object') return null;
   const o = raw as Record<string, unknown>;
-  const url = o.webhook_url;
+  // 官方回调字段是 response_url；webhook_url 是本模块早期按群机器人协议
+  // 猜的字段名。这个回落分支**只覆盖发版瞬间已经序列化在 PendingAction
+  // 里的存量 raw** —— 那些消息是用旧代码解出来的，等它们的确认超时
+  // （分钟级）之后就再也不会命中。新解码的回调一律只带 response_url。
+  const url =
+    typeof o.response_url === 'string' ? o.response_url : o.webhook_url;
   if (typeof url !== 'string' || !url.startsWith('https://')) return null;
   let host: string;
   try {
@@ -58,36 +67,76 @@ export function readWecomReplyContext(raw: unknown): WecomReplyContext | null {
   }
   if (!isWecomWebhookHost(host)) {
     console.error(
-      '[WecomChannel] 拒绝非企微域的 webhook_url，疑似伪造回调, host=',
+      '[WecomChannel] 拒绝非企微域的 response_url，疑似伪造回调, host=',
       host,
     );
     return null;
   }
   return {
-    webhookUrl: url,
+    responseUrl: url,
     chatId: typeof o.chatid === 'string' ? o.chatid : '',
     chatType: o.chattype === 'single' ? 'p2p' : 'group',
   };
 }
 
-/** 企微智能机器人回调的明文结构（解密后是 JSON，不是 XML） */
+/**
+ * 企微智能机器人回调的明文结构（解密后是 JSON，不是 XML）。
+ * 字段名对齐官方文档 path/100719「接收消息」。
+ */
 interface WecomBotPayload {
   msgid?: string;
+  /** 智能机器人 ID，官方回调必带；本模块不用，列出来是为了说明协议全貌 */
+  aibotid?: string;
   chatid?: string;
   chattype?: string;
   from?: { userid?: string; name?: string };
   msgtype?: string;
   text?: { content?: string };
+  response_url?: string;
+  /** @deprecated 早期按群机器人协议猜的字段名，仅兼容存量 raw */
   webhook_url?: string;
+}
+
+/**
+ * 已**成功回复过**的 messageId。
+ *
+ * response_url **只能调用一次**：第二次 POST 平台直接拒绝，而调用方
+ * （dispatcher 的兜底 catch）看到的只是又一次失败，用户什么都收不到。
+ * 与其让第二次调用去消耗一个已作废的 URL，不如在这里挡住并留日志 ——
+ * 一旦日志里出现这行，说明上游有一条消息回了两次，那是要修的真问题。
+ *
+ * 记录的时机是**发送成功之后**（HTTP ok 且 errcode 为 0），不是发送之前。
+ * 提前记的话，一次网络超时 / 5xx 就把这条消息永久标成"回过了"，之后任何
+ * 重试都被这道闸挡掉 —— 用户从"这次回复失败"变成"永远收不到回复"。
+ * 那次失败里 response_url 并没有被平台消费掉，本来就该允许再试一次。
+ *
+ * 用 Set + FIFO 淘汰，容量取够一个实例的短窗口即可（response_url
+ * 本身只活 1 小时，超出容量的条目早就没有重放价值了）。
+ */
+const REPLIED_MAX = 500;
+const repliedMessageIds = new Set<string>();
+
+function markReplied(messageId: string): void {
+  repliedMessageIds.add(messageId);
+  if (repliedMessageIds.size > REPLIED_MAX) {
+    const oldest = repliedMessageIds.values().next().value;
+    if (oldest !== undefined) repliedMessageIds.delete(oldest);
+  }
+}
+
+/** 仅供单测隔离用例之间的状态 */
+export function __resetWecomReplyGuard(): void {
+  repliedMessageIds.clear();
 }
 
 export class WecomChannelAdapter implements ChannelAdapter {
   readonly platform = 'wecom' as const;
   /**
-   * 企微机器人文本消息 content 上限 2048 字节 —— 比飞书小一个量级。
-   * 一条 10 条记录的查询结果就可能超，超了整条发不出去。
+   * 企微智能机器人 markdown.content 上限 **20480 字节**（官方文档
+   * path/101138）。以前按群机器人 text 的 2048 字节裁，等于把 90% 的
+   * 预算白扔了 —— 一条 10 行的查询结果会被截成半截。
    */
-  readonly maxReplyBytes = 2_048;
+  readonly maxReplyBytes = 20_480;
 
   /**
    * URL 有效性验证（GET）：query 带 msg_signature/timestamp/nonce/echostr，
@@ -207,7 +256,7 @@ export class WecomChannelAdapter implements ChannelAdapter {
       body = JSON.parse(payload) as WecomBotPayload;
     } catch {
       // 自建应用（非智能机器人）的回调明文是 XML。这类回调没有
-      // webhook_url，回复要走 message/send，本 adapter 暂不支持。
+      // response_url，回复要走 message/send，本 adapter 暂不支持。
       const msgType = readXmlField(payload, 'MsgType');
       return {
         kind: 'ignored',
@@ -261,22 +310,36 @@ export class WecomChannelAdapter implements ChannelAdapter {
     const content = clampReplyBytes(rawContent, this.maxReplyBytes);
     const ctx = readWecomReplyContext(msg.raw);
     if (!ctx) {
-      // 拿不到 webhook_url 说明这条消息不是智能机器人回调，或 raw 在
+      // 拿不到 response_url 说明这条消息不是智能机器人回调，或 raw 在
       // 跨实例传递中丢了字段。不静默失败，日志里说清原因。
       console.error(
-        '[WecomChannel] 回复失败：raw 中没有可用的 webhook_url，msgId=',
+        '[WecomChannel] 回复失败：raw 中没有可用的 response_url，msgId=',
+        msg.messageId,
+      );
+      return;
+    }
+
+    // response_url 单次有效：同一条消息的第二次回复必然失败，挡在这里
+    // 至少能留下"上游回了两次"的证据，而不是让用户以为回复丢了
+    if (repliedMessageIds.has(msg.messageId)) {
+      console.warn(
+        '[WecomChannel] 跳过重复回复：response_url 只能调用一次，msgId=',
         msg.messageId,
       );
       return;
     }
 
     try {
-      const res = await fetch(ctx.webhookUrl, {
+      const res = await fetch(ctx.responseUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          msgtype: 'text',
-          text: { content },
+          // 主动回复只接受 markdown / template_card，**不支持 msgtype text**。
+          // 普通文本原样塞进 markdown.content 即可：企微的 markdown 子集里
+          // 未成对的 * _ ` 等符号会按普通字符渲染，转义反而会把用户看到的
+          // 反斜杠加进正文。
+          msgtype: 'markdown',
+          markdown: { content },
         }),
         signal: AbortSignal.timeout(10_000),
       });
@@ -297,7 +360,10 @@ export class WecomChannelAdapter implements ChannelAdapter {
           '文本长度=',
           content.length,
         );
+        return;
       }
+      // 只有确认平台收下了，这个 response_url 才算被消费掉
+      markReplied(msg.messageId);
     } catch (err) {
       console.error('[WecomChannel] 回复失败:', err);
     }

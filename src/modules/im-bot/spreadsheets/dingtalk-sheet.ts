@@ -7,6 +7,7 @@ import type {
   SpreadsheetTableConfig,
 } from '../core/types';
 import { dateStringToMs, displayTypeOf } from './field-types';
+import { normalizeCell } from './normalize';
 import { filterRecords } from './record-filter';
 import type { SpreadsheetAdapter, SpreadsheetQueryResult } from './types';
 
@@ -98,7 +99,8 @@ export function mapFieldsFromRead(
   );
   const mapped: Record<string, unknown> = {};
   for (const [platformKey, value] of Object.entries(fields)) {
-    mapped[reverse[platformKey] ?? platformKey] = value;
+    // 三个平台的读路径统一在这里归一化，下游不再各猜一次形状
+    mapped[reverse[platformKey] ?? platformKey] = normalizeCell(value);
   }
   // 以 fieldMapping 为基准补齐空值，保证展示时表头完整
   const result: Record<string, unknown> = Object.fromEntries(
@@ -225,6 +227,10 @@ export class DingtalkSheetAdapter implements SpreadsheetAdapter {
     config: SpreadsheetTableConfig,
     recordId: string,
   ): Promise<void> {
+    // TODO(真机验证)：body 的参数名疑为 `recordIds` 而非 `ids`。
+    // 钉钉多维表的接口形状**无法离线核实**（官方文档未公开这一条），
+    // 现在这个形状是按早期实现沿用的。删除失败时优先查这里 ——
+    // 参数名不对时钉钉返回的是 200 + 0 条删除，不会报错。
     await dingtalkApi(
       `/${config.workspaceId}/sheets/${config.tableId}/records/delete`,
       'POST',

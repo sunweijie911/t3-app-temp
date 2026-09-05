@@ -18,7 +18,7 @@
 > | 能力范围 | 多维表格完整 CRUD；文档读取 / 末尾追加（仅飞书）；文件预留未实现 |
 > | 共享状态 | 幂等与待确认交互落库，支持多实例部署 |
 > | 字段清单 | 从资源绑定的 `fieldMapping` 自动派生并注入 prompt，不需要手写 |
-> | 权限 | 场景级会话白名单 + 写操作用户白名单，**空名单 = 不限制** |
+> | 权限 | 会话白名单（每个会话带 `canWrite`）+ 三态 `writeMode`（open / whitelist / readonly） |
 > | 安全策略 | 三平台回调均 fail-closed：验签/解密凭证缺失时直接拒绝 |
 
 ## 概述
@@ -201,7 +201,7 @@ src/app/
 
 | 表 | 作用 | 要点 |
 |----|------|------|
-| `bot_scene` | 场景配置 | `sceneId` 唯一；`keywords` 是 JSON 字符串；`allowedChatIds` / `writerIds` 为权限白名单；`fieldSchema` 已废弃 |
+| `bot_scene` | 场景配置 | `sceneId` 唯一；`keywords` 是 JSON 字符串；`allowedChats`（`[{chatId, canWrite}]`）+ `writeMode` + `writerIds` 构成权限；`fieldSchema` 已废弃 |
 | `bot_platform` | 平台凭证 | `platform` 唯一；`credentials` jsonb；secret 字段回传前掩码 |
 | `bot_resource_binding` | 场景 → 数据资源 | 唯一索引 `(sceneId, alias)`，一场景可绑多资源；`provider` 是**数据平台** |
 | `bot_event_log` | 审计日志 | `result` 四态 `success / error / ignored / pending`；`resultData` 只存摘要（`request` 子对象记 LLM 解析出的筛选键+操作符、投影列、置信度，**不记值**——原文已在 `content` 列） |
@@ -286,7 +286,7 @@ interface ExecuteResult {
 ```
 
 `raw` 必须保留：飞书用 tenant token 主动发消息，但钉钉群机器人回复要用回调体里
-一次性的 `sessionWebhook`，企微要用回调里的 `webhook_url`。早期 `parse()` 把原始
+一次性的 `sessionWebhook`，企微要用回调里的 `response_url`。早期 `parse()` 把原始
 body 丢掉，导致这两个平台的 `reply()` 根本写不出来。
 
 ### 字段映射
@@ -504,15 +504,28 @@ LLM 幻觉出表里没有的字段时，adapter 会用原名透传给平台（`f
 
 ## 权限模型
 
-场景级两张白名单，**空数组一律表示不限制**（历史场景升级后行为不变，也不会
-让管理员把自己锁在外面）：
+两个维度：**哪些会话能看到这个场景**，以及**谁能写**。
 
 | 列 | 语义 | 生效位置 |
 |----|------|---------|
-| `allowedChatIds` | 允许触发该场景的会话 | 匹配之前过滤，场景对其它会话完全不可见 |
-| `writerIds` | 允许 `CREATE/UPDATE/DELETE/APPEND` 的用户 | `execute` 之前；待确认交互再复查一次，覆盖 60s 窗口内被撤权 |
+| `allowedChats` | `[{chatId, canWrite}]`。允许触发该场景的会话，以及该会话能否写。**空数组 = 不限制会话** | 匹配之前过滤，场景对名单外的会话完全不可见（帮助文本里也不出现，不泄漏场景名） |
+| `writeMode` | 三态，见下表 | `execute` 之前 |
+| `writerIds` | `writeMode='whitelist'` 时生效的用户白名单 | 同上；待确认交互再复查一次，覆盖 60s 窗口内被撤权 |
 
-查询不受 `writerIds` 限制。会话 ID 与用户 ID 可在事件日志页复制。
+`writeMode` 三态：
+
+| 值 | 语义 |
+|----|------|
+| `open`（默认） | 任何人可写，忽略 `writerIds` |
+| `whitelist` | 仅 `writerIds` 内的用户可写 |
+| `readonly` | 谁都不能写，整个场景只读 |
+
+`allowedChats` 取代了原来的 `allowedChatIds: string[]`：后者只能表达「能不能
+用」，表达不了「A 群只读、B 群可读写」，那种需求只能建两个场景绑同一张表。
+三个维度是**与**的关系：`writeMode` 放行之后，该会话的 `canWrite: false`
+仍然会把写操作挡下来。
+
+查询不受写权限限制。会话 ID 与用户 ID 可在事件日志页复制。
 
 ## 回复渲染与脱敏
 
@@ -526,8 +539,9 @@ dispatcher 在候选列表、确认提示里也要把记录摆到群里，那条
   真实精度不变。按字段的显示格式（飞书 `property.formatter`）取小数位还没做
 - **单字段截断**：200 字
 - **整条截断**：`clampReply` 20000 字符（面向飞书的粗兜底），之后由各 channel
-  按自己的 `maxReplyBytes` 再截一次——平台按**字节**计，一个汉字 3 字节，
-  企微上限 2048 字节，比飞书小一个量级。按码点迭代，不会切断多字节字符或代理对。
+  按自己的 `maxReplyBytes` 再截一次——平台按**字节**计，一个汉字 3 字节
+  （飞书 30000 / 钉钉 20000 / 企微 markdown 20480）。按码点迭代，不会切断
+  多字节字符或代理对。
 - **回复模板**：`bot_scene.replyTemplate` 支持 `${fields.xxx}`、
   `${count}`、`<!--each-->...<!--/each-->` 循环块
 
@@ -552,6 +566,49 @@ UPDATE / DELETE 的确认提示里也要说明"命中集可能不全"。
 `queryHardLimit` 仍由 adapter 声明，用于没实现 `queryRecordsWithMeta` 的
 外部实现/测试替身的退化判据（早期这个数硬编码成飞书的 1000，对另外两个平台
 本来就是错的）。
+
+### 读路径的值归一化
+
+`SpreadsheetRecord.fields` 里的值收敛成三类：标量（`string | number |
+boolean`，**日期一律是毫秒数**）、多值单元格的 `string[]`，以及**认不出的
+复合值原样交回**（对象或对象数组，由 `field-render` 的 JSON 兜底渲染）。
+最后一类是刻意保留的：宁可让用户看到一坨 JSON 并来反馈，也不在归一化层
+编一个字符串把「没认出来」伪装成「认出来了」。
+
+三个 adapter 的读路径统一过 `spreadsheets/normalize.ts` 的 `normalizeCell`
+（飞书在 `reverseMapFields`、钉钉在 `mapFieldsFromRead`、企微在
+`mapValuesFromRead`）。
+
+早期是各平台原始值直接透传，于是下游三处各自猜形状（`core/field-render.ts`
+猜数组里的 `text`、`record-filter.ts` 直接 `String(member)`、dispatcher 的
+`toNumeric` 只认数字和字符串）。猜错的代价是**静默给错答案**：飞书文本字段
+返回的是 `[{"text":"门户","type":"text"}]`，`String()` 成 `"[object Object]"`，
+于是飞书残差过滤在任何文本列上恒返回 0 条；关联字段 `{"link_record_ids":[…]}`
+则被渲染成一坨原始 JSON 发到群里。
+
+归一化规则：
+
+| 平台原始形态 | 归一化后 |
+|--------------|---------|
+| `[{text,type}]` 文本段（可能混 mention） | 拼成一个字符串（段间空格） |
+| `[{text,link}]` url（多条） | 拼成一个字符串，条目间用 `、` |
+| `[{id,text}]` / `[{id,name}]` / `[{userId,userName}]` / `[{id,title,fileUrl}]` / `[{record_id}]` / `[{chat_id}]` | **一律字符串数组**，单个成员也不降标量（成员筛选依赖它，也保证与飞书 `['门户']` 同形） |
+| `{link_record_ids:[…]}` | 优先 `text_arr` / `text` 显示值，取不到才退回 record_id 字符串数组 |
+| `{value:[…]}`（公式 / lookup） | 递归展开；单元素**数字/布尔**数组降标量，`toNumeric` 才算得到 |
+| 字符串数组（多选） | 原样保留数组 |
+| `"YYYY-MM-DD HH:mm[:ss]"`（企微 date 读回形态） | **毫秒数**，与飞书/钉钉的裸毫秒对齐 |
+| 数字 / 布尔 / 其它字符串 | 原样 |
+
+纯 `"YYYY-MM-DD"` **不转**：归一化层拿不到 `displayType`，分不清它是日期列
+还是文本列里合法的期号（`field-types.ts` 的 `treatsValueAsDate` 靠 displayType
+判）。带 `HH:mm` 的串不会是人手填进文本列的内容，转换才是安全的；纯日期串由
+`record-filter` 的 `actualMs` 按列声明处理。
+
+取「复合值里的显示标量」只有一份实现：`normalize.ts` 导出的 `scalarOf`
+（`text / name / userName / title`，再退到 `number / date / checkbox`）。
+`record-filter.toText` 与 `field-render.fieldToStringRaw` 都调它，覆盖外部
+adapter / 测试替身绕过归一化的情形 —— 以前两处各抄一份键列表，于是同一个
+附件单元格「筛选时认出了、展示时渲染成 JSON」。
 
 ### 飞书 datetime 字段的筛选语义
 
@@ -591,10 +648,17 @@ UPDATE / DELETE 的确认提示里也要说明"命中集可能不全"。
 | URL 验证 | POST challenge | — | **GET + echostr**，回写解密后明文 |
 | 幂等键 | `event_id` | `msgId` | `msgid` |
 | 重放防护 | eventId 幂等 | 时间戳 ±1h | 时间戳 ±5min |
-| 回复方式 | tenant token 主动发 | 回调体里一次性 `sessionWebhook` | 回调体里 `webhook_url` |
-| 文本上限 | 30000 字节 | 20000 字节 | **2048 字节** |
+| 回复方式 | tenant token 主动发 | 回调体里一次性 `sessionWebhook` | 回调体里的 `response_url`（**单次有效、1 小时**） |
+| 回复 msgtype | `text` | `text` | **只能 `markdown` / `template_card`，不支持 `text`** |
+| 文本上限 | 30000 字节 | 20000 字节 | 20480 字节（`markdown.content`） |
 | 表格定位 | app_token + table_id | baseId + sheetId | docid + sheet_id |
-| 单元格值 | 裸值（日期为毫秒） | 裸值（日期为毫秒） | **类型化数组** |
+| 单元格写入值 | 裸值（日期为毫秒） | 裸值（日期为毫秒） | 按类型：文本裸串 / 数字裸 double / 复选框裸布尔 / 日期 `"YYYY-MM-DD HH:mm:ss"` / 选项 `[{text}]` |
+
+企微回复的三条协议约束（官方「接收消息」path/100719 与「主动回复」path/101138）：
+回调解密后的 JSON 里是 `response_url`（本模块早期按群机器人协议猜成
+`webhook_url`，读取时仍兼容存量 raw）；`response_url` **只能调用一次**，所以
+`WecomChannelAdapter.reply` 对同一 `messageId` 的第二次调用会打日志并跳过；
+body 只接受 markdown，普通文本原样放进 `markdown.content`，不做转义。
 
 三平台回调全部 fail-closed：验签/解密所需凭证缺失时直接拒绝，不允许 webhook 裸奔。
 企微还会校验密文尾部的 `receiveId` 与本企业 `corpId` 一致。
@@ -681,11 +745,13 @@ tRPC 过程一览（全部 `adminProcedure`）：`listScenes` `upsertScene`
 
 ## 测试
 
-`tests/modules/im-bot/` 下按目录镜像源码结构（446 个用例），覆盖加解密往返、
-验签、消息解码、字段渲染与脱敏、日期边界、客户端过滤、翻页续拉与去重与截断
-上报、回复截断、场景匹配与作用域、意图解析、`displayType` 的写入/筛选分流、
-文档结果与回复模板的优先级、以及 dispatcher 的全流程编排（含权限、未知字段
-守卫、二次确认四条路径、序号严格匹配、配置失效作废、审计事件）。
+`tests/modules/im-bot/` 下按目录镜像源码结构（25 个文件、684 个用例），覆盖
+加解密往返、验签、消息解码、字段渲染与脱敏、平台值归一化、日期边界与业务时区、
+客户端过滤、翻页续拉与去重与截断上报、回复截断与 msgtype、场景匹配与作用域、
+意图解析、`displayType` 的写入/筛选分流、文档结果与回复模板的优先级、配置
+加载失败时的降级，以及 dispatcher 的全流程编排（含权限、未知字段守卫、二次
+确认四条路径、序号严格匹配、配置失效作废、审计事件）。
 
-本地真机联调用仓库根目录的 `simulate-feishu.mts`：构造合法的飞书加密回调 POST
-给本地 webhook，走完整处理链，回复会真的发到群里。
+真机联调直接对本地 webhook 发一个签名正确的回调即可（三平台的验签/加密算法
+都在 `channels/*-crypto.ts`，单测里有构造合法请求的现成写法），走完整处理链，
+回复会真的发到群里。

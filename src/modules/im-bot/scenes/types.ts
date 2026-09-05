@@ -33,8 +33,9 @@ export interface BotScene {
    *                     替换默认 logicalKey 展示和日期启发式（可选，缺省退化为旧行为）
    * @param budgetBytes 目标平台单条消息的 UTF-8 字节上限
    *                    （`ChannelAdapter.maxReplyBytes`）。展示条数按它推导 ——
-   *                    企微只有 2048 字节，按飞书的 10 条渲染必然被从记录中间
-   *                    截断。缺省时退化为飞书量级，与加这个参数之前行为一致。
+   *                    三家上限不同（飞书 30000 / 钉钉 20000 / 企微 20480），
+   *                    按最宽松的那个定条数会被从记录中间截断。
+   *                    缺省时退化为飞书量级，与加这个参数之前行为一致。
    */
   formatReply(
     intent: ParsedIntent,
