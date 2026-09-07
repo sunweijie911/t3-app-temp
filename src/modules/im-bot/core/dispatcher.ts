@@ -612,6 +612,29 @@ type AttemptOutcome =
 const TRUNCATED_MATCH_HINT =
   '\n⚠️ 数据量已达单次拉取上限，可能还有未列出的匹配记录，建议缩窄条件后再操作';
 
+/**
+ * 合并「刚写进去的值」与「平台回显的值」，供写操作的回执渲染。
+ *
+ * 平台回显优先 —— 它才是真正落库的内容（自动编号、公式列、被平台改写过
+ * 的格式都只在这一份里）。但**空值不算回显**：钉钉/企微的读路径会以
+ * fieldMapping 为基准把所有列补齐成 `''`（查询时要靠它保证表头完整），
+ * 于是 `{...written, ...echoed}` 会把用户刚说的每一个值都覆盖成空 ——
+ * 回执渲染又会把空字段过滤掉，最后群里只剩一句光秃秃的「✅ 已录入」。
+ * 飞书那边不补齐，所以这个坑只在另外两家踩得到，属于典型的
+ * 「同一段代码换个 provider 就不对」。
+ */
+function mergeEchoedFields(
+  written: Record<string, unknown>,
+  echoed: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...echoed };
+  for (const [k, v] of Object.entries(written)) {
+    const e = out[k];
+    if (e === null || e === undefined || e === '') out[k] = v;
+  }
+  return out;
+}
+
 /** 带并发上限地跑完一批任务，返回与输入同序的 settled 结果 */
 async function runWithConcurrency<T>(
   tasks: Array<() => Promise<T>>,
@@ -1287,7 +1310,7 @@ export class Dispatcher {
           droppedFields,
           record: {
             ...record,
-            fields: { ...createFields, ...record.fields },
+            fields: mergeEchoedFields(createFields, record.fields),
           },
         };
       }
@@ -1522,7 +1545,7 @@ export class Dispatcher {
         // 而实际上一句"确认删除"会把没列出来的那些一并删掉。
         const unlisted =
           records.length > list.shownCount
-            ? `\n⚠️ 另有 ${records.length - list.shownCount} 条未列出，确认后将**一并删除**；要逐条核对请缩窄筛选条件`
+            ? `\n⚠️ 另有 ${records.length - list.shownCount} 条未列出，确认后将「一并删除」；要逐条核对请缩窄筛选条件`
             : '';
         return {
           success: false,
@@ -1621,6 +1644,11 @@ export class Dispatcher {
     channelAdapter: ChannelAdapter,
     intent: 'CREATE' | 'UPDATE',
     resultData: Record<string, unknown>,
+    /**
+     * 本次写进去的字段。回显为空时用它兜底 —— 钉钉/企微会把没回显的列
+     * 补成 `''`，不兜的话回执里什么都不剩（见 mergeEchoedFields）。
+     */
+    writtenFields: Record<string, unknown>,
     write: () => Promise<SpreadsheetRecord>,
     render: (record: SpreadsheetRecord) => string,
   ): Promise<PendingOutcome> {
@@ -1641,7 +1669,13 @@ export class Dispatcher {
         resultData: { ...resultData, failed: true },
       };
     }
-    await channelAdapter.reply(msg, render(record));
+    await channelAdapter.reply(
+      msg,
+      render({
+        ...record,
+        fields: mergeEchoedFields(writtenFields, record.fields),
+      }),
+    );
     // 写成功后补上落库的 recordId；调用方显式给了就以它为准
     // （UPDATE 侧记的是命中的目标记录，与返回值同一条）
     return {
@@ -1695,6 +1729,25 @@ export class Dispatcher {
       );
       return { handled: true, resultData: { aborted: '场景已停用或删除' } };
     }
+    // 会话可见性也要复查。
+    //
+    // 旁边三道（绑定还在吗、场景还在吗、写权限还在吗）都复查了，唯独漏了
+    // 这一道，而 writeDenial 恰好**盖不住**它：那里的会话级判定是
+    // 「名单里找得到这个群、且 canWrite=false」才拒，群被整个移出名单后
+    // find 返回 undefined，等于跳过判定 —— open 模式下直接放行。
+    // 于是管理员把某个群摘出场景白名单后，该群 60 秒内的"确认删除"照删。
+    if (!scene.allowsChat(msg.chatId)) {
+      await this.pending.delete(pendingKeyOf(msg));
+      await channelAdapter.reply(
+        msg,
+        '⚠️ 本群已不再允许使用该场景，刚才的操作已作废',
+      );
+      return {
+        handled: true,
+        resultData: { aborted: '会话已被移出场景白名单' },
+      };
+    }
+
     const denial = scene.writeDenial(msg.senderId, msg.chatId);
     if (denial) {
       await this.pending.delete(pendingKeyOf(msg));
@@ -1767,6 +1820,7 @@ export class Dispatcher {
             recordId: target.recordId,
             fieldKeys: Object.keys(action.updateFields ?? {}),
           },
+          action.updateFields ?? {},
           () =>
             adapter.updateRecord(
               tableConfig,
@@ -1810,6 +1864,7 @@ export class Dispatcher {
             recordId: target.recordId,
             fieldKeys: Object.keys(action.updateFields ?? {}),
           },
+          action.updateFields ?? {},
           () =>
             adapter.updateRecord(
               tableConfig,
@@ -1840,6 +1895,7 @@ export class Dispatcher {
             forced: true,
             fieldKeys: Object.keys(action.updateFields ?? {}),
           },
+          action.updateFields ?? {},
           () => adapter.createRecord(tableConfig, action.updateFields ?? {}),
           (record) =>
             scene.formatReply(
@@ -1900,6 +1956,7 @@ export class Dispatcher {
           recordId: target.recordId,
           fieldKeys: Object.keys(action.updateFields ?? {}),
         },
+        action.updateFields ?? {},
         () =>
           adapter.updateRecord(
             tableConfig,

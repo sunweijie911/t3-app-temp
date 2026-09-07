@@ -476,7 +476,7 @@ export class DatabaseDrivenScene implements BotScene {
     // 而它看上去和正确答案一模一样。所以这里的措辞比 QUERY 侧重得多，
     // 且放在最前面 —— 放末尾容易被当成免责声明忽略掉。
     const warning = result.hitQueryLimit
-      ? '⚠️ 数据量超过单次拉取上限，**下面的数字是不完整的**，请缩小范围（如按月/按分类）后重新统计\n\n'
+      ? '⚠️ 数据量超过单次拉取上限，「下面的数字是不完整的」，请缩小范围（如按月/按分类）后重新统计\n\n'
       : '';
     const skipped = agg.skipped
       ? `\n（有 ${agg.skipped} 条记录的「${agg.field}」为空或不是数字，未计入）`

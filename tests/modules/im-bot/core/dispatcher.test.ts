@@ -3770,3 +3770,209 @@ describe('Dispatcher — AGGREGATE 不能拿脱敏字段当分组维度', () => 
     expect(dumped).not.toContain('13900000002');
   });
 });
+
+describe('Dispatcher — 写回执不能被平台补的空值冲掉（钉钉/企微）', () => {
+  /** 钉钉/企微的读路径会以 fieldMapping 为基准把所有列补齐成 '' */
+  function paddedEcho(actual: Record<string, unknown>) {
+    return {
+      项目名称: '',
+      Node版本: '',
+      ...actual,
+    };
+  }
+
+  it('★ CREATE：平台只回显 recordId 时，回执仍要展示刚录入的内容', async () => {
+    // 回归：`{...createFields, ...record.fields}` 里 record.fields 的空串
+    // 会把用户刚说的每个值覆盖掉，渲染又会过滤掉空字段 ——
+    // 群里只剩一句光秃秃的「✅ 已录入」。飞书不补齐所以看不出来，
+    // 换到钉钉/企微就复现。
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"CREATE","fields":{"项目名称":"督导2.0","Node版本":"20"},"confidence":0.95,"summary":"新增"}',
+    );
+    (adapter.createRecord as ReturnType<typeof vi.fn>).mockResolvedValue({
+      recordId: 'r1',
+      fields: paddedEcho({}),
+    });
+
+    await d.process(makeMsg({ content: '新增项目 督导2.0' }), channel);
+
+    expect(channel.lastReply).toContain('督导2.0');
+    expect(channel.lastReply).toContain('20');
+  });
+
+  it('平台回显了真实值时以平台为准（自动编号 / 公式列 / 被改写的格式）', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"CREATE","fields":{"项目名称":"督导2.0"},"confidence":0.95,"summary":"新增"}',
+    );
+    (adapter.createRecord as ReturnType<typeof vi.fn>).mockResolvedValue({
+      recordId: 'r1',
+      fields: paddedEcho({ 项目名称: '督导2.0（平台改写）' }),
+    });
+
+    await d.process(makeMsg({ content: '新增项目 督导2.0' }), channel);
+    expect(channel.lastReply).toContain('督导2.0（平台改写）');
+  });
+
+  it('★ 确认后的 UPDATE 同样兜底 —— 四条确认路径共用一套合并', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"UPDATE","fields":{"Node版本":"22"},"filters":{"项目名称":"A"},"confidence":0.9,"summary":"改"}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { recordId: 'r1', fields: { 项目名称: 'A', Node版本: '18' } },
+    ]);
+    (adapter.updateRecord as ReturnType<typeof vi.fn>).mockResolvedValue({
+      recordId: 'r1',
+      fields: paddedEcho({}),
+    });
+
+    await d.process(makeMsg({ content: '把 A 的 Node 改成 22' }), channel);
+    await d.process(makeMsg({ content: '确认更新' }), channel);
+
+    expect(adapter.updateRecord).toHaveBeenCalled();
+    expect(channel.lastReply).toContain('22');
+  });
+});
+
+describe('Dispatcher — 回复文案不能带 markdown 语法', () => {
+  // 企微 reply 发 markdown、飞书/钉钉发纯文本。回复文案是三家共用的，
+  // 带 ** 的话在飞书/钉钉群里会露出裸星号 —— 偏偏这两句都是最需要
+  // 被看见的警告（"确认后将一并删除" / "这个数字是不完整的"）。
+  const rows: SpreadsheetRecord[] = Array.from({ length: 15 }, (_, i) => ({
+    recordId: `r${i}`,
+    fields: { 项目名称: `项目${i}`, Node版本: '18' },
+  }));
+
+  it('★ DELETE 未列出警告不带 **', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"DELETE","fields":{},"filters":{"Node版本":"18"},"confidence":0.9,"summary":"删"}',
+    );
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue(rows);
+
+    await d.process(makeMsg({ content: '删掉所有 18 的' }), channel);
+
+    expect(channel.lastReply).toContain('未列出');
+    expect(channel.lastReply).toContain('一并删除');
+    expect(channel.lastReply).not.toContain('**');
+  });
+
+  it('★ 聚合截断警告不带 **', async () => {
+    const d = makeDispatcher();
+    const channel = makeChannel();
+    const adapter = makeAdapterWithMeta();
+    mockGetAdapter.mockReturnValue(adapter);
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"AGGREGATE","fields":{},"filters":{},"aggregate":{"op":"count"},"confidence":0.9,"summary":"数"}',
+    );
+    (
+      adapter.queryRecordsWithMeta as ReturnType<typeof vi.fn>
+    ).mockResolvedValue({ records: rows, truncated: true });
+
+    await d.process(makeMsg({ content: '台账 一共几条' }), channel);
+
+    expect(channel.lastReply).toContain('不完整');
+    expect(channel.lastReply).not.toContain('**');
+  });
+});
+
+describe('Dispatcher — 待确认窗口内会话被移出白名单', () => {
+  it('★ 群被摘出场景白名单后，"确认删除"必须作废', async () => {
+    // 回归：旁边三道（绑定/场景/写权限）都复查了，唯独漏了会话可见性，
+    // 而 writeDenial 盖不住它 —— 那里的会话级判定是"名单里找得到这个群
+    // 且 canWrite=false"才拒，整个被移出名单后 find 返回 undefined，
+    // 等于跳过判定，open 模式下直接放行。
+    const pending = new MemoryPendingActionStore();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { recordId: 'r1', fields: { 项目名称: 'A' } },
+    ]);
+    (adapter.deleteRecord as ReturnType<typeof vi.fn>).mockResolvedValue(
+      undefined,
+    );
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"DELETE","fields":{},"filters":{"项目名称":"A"},"confidence":0.9,"summary":"删"}',
+    );
+
+    // 1) 群在白名单里，正常挂起确认
+    const open = new Dispatcher({
+      getBinding: () => baseBinding,
+      pendingStore: pending,
+    });
+    open.registry.register(
+      new DatabaseDrivenScene({
+        ...baseSceneConfig,
+        allowedChats: [{ chatId: 'chatA', canWrite: true }],
+      }),
+    );
+    await open.process(makeMsg({ content: '删掉项目 A' }), channel);
+    expect(channel.lastReply).toContain('确认删除');
+
+    // 2) 管理员把这个群摘出白名单，配置随即重载
+    const revoked = new Dispatcher({
+      getBinding: () => baseBinding,
+      pendingStore: pending,
+    });
+    revoked.registry.register(
+      new DatabaseDrivenScene({
+        ...baseSceneConfig,
+        allowedChats: [{ chatId: 'chatB', canWrite: true }],
+      }),
+    );
+    await revoked.process(makeMsg({ content: '确认删除' }), channel);
+
+    expect(adapter.deleteRecord).not.toHaveBeenCalled();
+    expect(channel.lastReply).toContain('已作废');
+  });
+
+  it('群仍在白名单里时确认照常执行', async () => {
+    const pending = new MemoryPendingActionStore();
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { recordId: 'r1', fields: { 项目名称: 'A' } },
+    ]);
+    (adapter.deleteRecord as ReturnType<typeof vi.fn>).mockResolvedValue(
+      undefined,
+    );
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"DELETE","fields":{},"filters":{"项目名称":"A"},"confidence":0.9,"summary":"删"}',
+    );
+
+    const make = () => {
+      const d = new Dispatcher({
+        getBinding: () => baseBinding,
+        pendingStore: pending,
+      });
+      d.registry.register(
+        new DatabaseDrivenScene({
+          ...baseSceneConfig,
+          allowedChats: [{ chatId: 'chatA', canWrite: true }],
+        }),
+      );
+      return d;
+    };
+    await make().process(makeMsg({ content: '删掉项目 A' }), channel);
+    await make().process(makeMsg({ content: '确认删除' }), channel);
+
+    expect(adapter.deleteRecord).toHaveBeenCalled();
+    expect(channel.lastReply).toContain('已删除');
+  });
+});
