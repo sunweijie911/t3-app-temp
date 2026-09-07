@@ -228,6 +228,24 @@ export function fieldMeta(
 }
 
 /**
+ * 该逻辑字段是否需要脱敏 —— 与 maskSensitive 完全同一判据
+ * （fieldMapping 里显式 `sensitive: true`，或字段名命中敏感词启发式）。
+ *
+ * 单独导出，是因为有些地方必须在**渲染之前**就据此改变行为，而不是渲染
+ * 完再把值盖掉：聚合的 groupBy 就是这种情况 —— 分组键本身就是该字段的
+ * 取值，盖掉之后每一组都长成「***（已脱敏）」，既暴露了分组数量又给不出
+ * 任何有用信息，正确的做法是根本不让它成为分组维度。
+ */
+export function isSensitiveField(
+  key: string,
+  fieldMapping?: Record<string, FieldMappingValue>,
+): boolean {
+  return (
+    fieldMeta(key, fieldMapping).sensitive || SENSITIVE_KEY_PATTERN.test(key)
+  );
+}
+
+/**
  * 单字段渲染入口：综合 fieldMapping 中的 label（用户友好名）、sensitive（脱敏）
  * 和 displayType（数字/日期渲染策略），返回展示用的 label 和 value。
  */

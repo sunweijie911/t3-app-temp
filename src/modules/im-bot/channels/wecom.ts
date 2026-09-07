@@ -2,6 +2,7 @@ import { clampReplyBytes } from '../core/field-render';
 import type { ChatType, UnifiedMessage } from '../core/types';
 import { getWecomCredentials } from '../services/credentials';
 import { stripLeadingMention } from './mention';
+import { isTimestampFresh } from './replay-window';
 import type { ChannelAdapter, DecodeResult } from './types';
 import {
   callbackSignature,
@@ -9,12 +10,6 @@ import {
   readXmlField,
   verifySignature,
 } from './wecom-crypto';
-
-/**
- * 回调时间戳容忍窗口。超出即拒绝，避免抓到的旧回调被无限重放。
- * 企微不像飞书带 eventId 幂等，这一层是重放防护的第一道。
- */
-const TIMESTAMP_TOLERANCE_MS = 5 * 60 * 1000;
 
 /**
  * 企微回复上下文。
@@ -221,12 +216,14 @@ export class WecomChannelAdapter implements ChannelAdapter {
       return { kind: 'reject', status: 403, reason: '验签失败' };
     }
 
-    // 时间戳窗口：企微回调无 eventId 幂等，先挡掉明显的重放
-    const tsMs = Number(timestamp) * 1000;
-    if (
-      !Number.isFinite(tsMs) ||
-      Math.abs(Date.now() - tsMs) > TIMESTAMP_TOLERANCE_MS
-    ) {
+    // 时间戳窗口：企微回调无 eventId 幂等，先挡掉明显的重放。
+    //
+    // 窗口常量与钉钉/飞书共用 replay-window（必须始终等于幂等 TTL，
+    // 理由见那个文件）。这里以前是本地的一个 `5 * 60 * 1000` 字面量 ——
+    // 值虽然碰巧相同，但 DEDUP_TTL_MS 一被调整，三家里就只有企微会
+    // 悄悄失配，重新开出那段「验签通过、幂等已过期」的重放区间。
+    // 单位换算也交给 timestampToMs：企微这个 query 参数是**秒**。
+    if (!isTimestampFresh(timestamp)) {
       return { kind: 'reject', status: 403, reason: '时间戳超出容忍窗口' };
     }
 

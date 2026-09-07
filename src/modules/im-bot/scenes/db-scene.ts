@@ -311,7 +311,9 @@ export class DatabaseDrivenScene implements BotScene {
     // 同样排在 replyTemplate 之前：模板的变量是明细取向的
     // （${fields.xxx} / each 块），聚合结果里没有 records，套模板会全渲染成空
     if (result.aggregate) {
-      return clampReply(this.formatAggregate(result, budgetBytes));
+      return clampReply(
+        this.formatAggregate(result, budgetBytes, fieldMapping),
+      );
     }
 
     // 有自定义回复模板时使用模板（表格结果专用）
@@ -456,6 +458,7 @@ export class DatabaseDrivenScene implements BotScene {
   private formatAggregate(
     result: ExecuteResult,
     budgetBytes: number = DEFAULT_REPLY_BUDGET_BYTES,
+    fieldMapping?: Record<string, FieldMappingValue>,
   ): string {
     const agg = result.aggregate;
     if (!agg) return '✅ 操作完成';
@@ -486,11 +489,25 @@ export class DatabaseDrivenScene implements BotScene {
       // 与 QUERY 同理：硬上限管可读性，字节预算管平台协议。
       // 分组结果按值降序，砍掉的是最小的那些 —— 这正是该砍的顺序。
       const HARD_LIMIT = 20;
+      // 分组键就是分组字段的**取值** —— 不过脱敏的话，
+      // 「按手机号统计」会把整列手机号逐行打进群里。
+      // dispatcher 已经在执行前拒绝了对脱敏字段分组（那条路径给的提示
+      // 更有用），这里是第二道闸：非常规入口（存量 pending、外部调用方）
+      // 不该绕过 sensitive 标记的承诺。
+      const groupBy = agg.groupBy;
+      const renderGroupKey = (key: string) =>
+        groupBy
+          ? maskSensitive(
+              groupBy,
+              key,
+              fieldMeta(groupBy, fieldMapping).sensitive,
+            )
+          : key;
       const allLines = agg.groups
         .slice(0, HARD_LIMIT)
         .map(
           (g, i) =>
-            `${i + 1}. ${g.key}：${formatNumber(g.value)}（${g.count} 条）`,
+            `${i + 1}. ${renderGroupKey(g.key)}：${formatNumber(g.value)}（${g.count} 条）`,
         );
       // 抬头 / 总计 / skipped 说明都还没拼出来，按上界给聚合留一段固定开销
       const AGG_OVERHEAD_BYTES = 240;

@@ -19,6 +19,7 @@ import {
   fieldToString,
   fieldToStringRaw,
   fitCountByBytes,
+  isSensitiveField,
   renderRecordSummary,
   utf8ByteLength,
 } from './field-render';
@@ -1331,6 +1332,22 @@ export class Dispatcher {
           return {
             success: false,
             error: `${spec.op} 需要指定统计哪个字段。可用字段：${Object.keys(mapping).join('、')}`,
+          };
+        }
+        // 脱敏字段不能当分组维度。
+        //
+        // 分组键**就是该字段的取值**，会被逐行打进群里：「按手机号统计
+        // 条数」等于把整列手机号念一遍，而 sensitive 标记承诺的恰恰是
+        // 「这一列不会出现在回复里」。
+        //
+        // 这里必须**拒绝**而不是渲染时盖掉：盖掉之后每组都是
+        // 「***（已脱敏）：3 条」，泄漏了分组数量却给不出任何信息，
+        // 用户还会以为机器人坏了。渲染层仍留了一道兜底（见
+        // db-scene.formatAggregate），但那是给非常规入口用的。
+        if (spec.groupBy && isSensitiveField(spec.groupBy, mapping)) {
+          return {
+            success: false,
+            error: `「${spec.groupBy}」是脱敏字段，不能按它分组统计（分组结果会把该字段的值逐条显示出来）。请改用其它字段分组，或去掉分组只看总计`,
           };
         }
 

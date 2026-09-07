@@ -122,6 +122,86 @@ function readRecordId(r: DingtalkRecord): string {
   return r.id ?? r.recordId ?? '';
 }
 
+/**
+ * 删除响应里可能承载「删掉了哪些」的键，按常见程度排。
+ * 钉钉多维表这条接口的响应形状**没有公开文档**，只能宽容探测。
+ */
+const DELETE_ID_LIST_KEYS = [
+  'ids',
+  'recordIds',
+  'record_ids',
+  'deletedIds',
+  'successIds',
+  'records',
+  'result',
+  'value',
+] as const;
+/** 同上，承载「删掉了几条」的键 */
+const DELETE_COUNT_KEYS = [
+  'count',
+  'deletedCount',
+  'deleted_count',
+  'successCount',
+  'deleted',
+  'successNum',
+] as const;
+
+/**
+ * 从删除响应里判断到底删掉了没有。
+ *
+ * - `'deleted'` 有肯定信号（非空 id 列表，或计数 > 0）
+ * - `'none'`    有否定信号（空列表，或计数为 0）
+ * - `'unknown'` 认不出这个响应的形状
+ *
+ * 为什么要分出 `'none'`：删除接口的请求参数名无法离线核实（见
+ * deleteRecord 的 TODO），而**参数名不对时钉钉返回的是 200 + 0 条删除，
+ * 不会报错** —— 于是 dispatcher 收到一片 fulfilled，回一句「✅ 已删除 3
+ * 条」，审计日志记 success，而表里一条没少。破坏性操作里「谎报成功」
+ * 比「报错让人重试」危险得多，所以只要能**确定**是 0 条就必须抛错。
+ *
+ * 为什么保留 `'unknown'` 而不是一并抛错：那会让一个响应体为 `{}` 的
+ * 正常成功也变成失败，把「可能没删掉」升级成「一定删不掉」。
+ * 认不出时放行 + 打一条日志，与改动前行为一致。
+ */
+export function readDingtalkDeleteOutcome(
+  data: Record<string, unknown>,
+): 'deleted' | 'none' | 'unknown' {
+  for (const key of DELETE_ID_LIST_KEYS) {
+    const v = data[key];
+    if (Array.isArray(v)) return v.length > 0 ? 'deleted' : 'none';
+    // 布尔要在这里就认掉，不能只在函数末尾单查 data.result：
+    // `{"deleted": false}` 是一个**明确的否定信号**，而它既不是数组、
+    // 也过不了下面的 typeof number，会一路掉到 'unknown' 被当成成功放行
+    // —— 正好是这个函数要防的那件事。
+    if (typeof v === 'boolean') return v ? 'deleted' : 'none';
+  }
+  for (const key of DELETE_COUNT_KEYS) {
+    const v = data[key];
+    if (typeof v === 'number' && Number.isFinite(v)) {
+      return v > 0 ? 'deleted' : 'none';
+    }
+    if (typeof v === 'boolean') return v ? 'deleted' : 'none';
+  }
+  return 'unknown';
+}
+
+/**
+ * 已经报过的「认不出的响应形状」。
+ *
+ * 删除是并发跑的（DESTRUCTIVE_CONCURRENCY），每条都打会把日志刷满，
+ * 所以要去重；但去重的粒度是**响应的键集合**而不是一个全局布尔 ——
+ * 用布尔的话，第一种没认出的形状会把之后**所有**其它形状一起吞掉，
+ * 而这行日志唯一的用途就是让人照着补 DELETE_*_KEYS。
+ */
+const warnedDeleteShapes = new Set<string>();
+/** 键集合再多也不该无限涨（真实形状就那么几种，涨说明响应里带了随机键） */
+const WARNED_SHAPES_MAX = 20;
+
+/** 仅供单测隔离用例之间的状态 */
+export function __resetDingtalkDeleteWarning(): void {
+  warnedDeleteShapes.clear();
+}
+
 export class DingtalkSheetAdapter implements SpreadsheetAdapter {
   readonly platform = 'dingtalk' as const;
   readonly queryHardLimit = PAGE_SIZE * MAX_PAGES;
@@ -229,12 +309,38 @@ export class DingtalkSheetAdapter implements SpreadsheetAdapter {
   ): Promise<void> {
     // TODO(真机验证)：body 的参数名疑为 `recordIds` 而非 `ids`。
     // 钉钉多维表的接口形状**无法离线核实**（官方文档未公开这一条），
-    // 现在这个形状是按早期实现沿用的。删除失败时优先查这里 ——
-    // 参数名不对时钉钉返回的是 200 + 0 条删除，不会报错。
-    await dingtalkApi(
+    // 现在这个形状是按早期实现沿用的。删除失败时优先查这里。
+    //
+    // 参数名不对时钉钉返回的是 200 + 0 条删除、**不报错**，所以不能只看
+    // HTTP 状态码就当成功 —— 那样 dispatcher 会回「✅ 已删除 N 条」，
+    // 而表里一条没少。下面据响应判定，能确定是 0 条时抛错。
+    const data = await dingtalkApi(
       `/${config.workspaceId}/sheets/${config.tableId}/records/delete`,
       'POST',
       { ids: [recordId] },
     );
+
+    const outcome = readDingtalkDeleteOutcome(data);
+    if (outcome === 'none') {
+      throw new Error(
+        `钉钉多维表未删除任何记录（recordId=${recordId}）。` +
+          '常见原因是删除接口的请求参数名不是 `ids`（疑为 `recordIds`），' +
+          '请核对钉钉多维表的接口契约后修正 dingtalk-sheet.ts',
+      );
+    }
+    if (outcome === 'unknown') {
+      const shape = Object.keys(data).sort().join(',') || '(空响应)';
+      if (
+        !warnedDeleteShapes.has(shape) &&
+        warnedDeleteShapes.size < WARNED_SHAPES_MAX
+      ) {
+        warnedDeleteShapes.add(shape);
+        console.warn(
+          '[DingtalkSheet] 删除响应里没有可识别的成功信号（键：',
+          shape,
+          '），无法确认记录是否真的被删除。请对照真机响应补充 DELETE_ID_LIST_KEYS / DELETE_COUNT_KEYS',
+        );
+      }
+    }
   }
 }

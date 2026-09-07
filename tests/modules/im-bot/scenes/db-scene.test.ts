@@ -991,3 +991,83 @@ describe('formatReply — 行模板的字节开销不该被重复计算', () => 
     expect(count(withPreamble)).toBeLessThan(count(bare));
   });
 });
+
+describe('formatReply — 聚合分组键的脱敏兜底', () => {
+  const mapping: Record<string, FieldMappingValue> = {
+    手机号: { name: '手机号', type: 'plain', sensitive: true },
+    渠道: '渠道',
+    金额: { name: '金额', type: 'plain', displayType: 'number' },
+  };
+  const aggIntent: ParsedIntent = {
+    intent: 'AGGREGATE',
+    fields: {},
+    ...intentBase,
+  };
+
+  it('★ 分组字段被标为 sensitive 时，分组键不能明文出现', () => {
+    // dispatcher 已经在执行前拒绝了这种请求（那条路径的提示更有用），
+    // 这里是第二道闸：存量 pending、外部调用方不该绕过 sensitive 的承诺。
+    const reply = makeScene().formatReply(
+      aggIntent,
+      {
+        success: true,
+        aggregate: {
+          op: 'count',
+          groupBy: '手机号',
+          recordCount: 3,
+          groups: [
+            { key: '13800000001', value: 2, count: 2 },
+            { key: '13900000002', value: 1, count: 1 },
+          ],
+        },
+      },
+      mapping,
+    );
+    expect(reply).not.toContain('13800000001');
+    expect(reply).not.toContain('13900000002');
+    expect(reply).toContain('***（已脱敏）');
+    // 统计值本身仍要给出来
+    expect(reply).toContain('（2 条）');
+  });
+
+  it('字段名命中敏感词启发式时同样脱敏', () => {
+    const reply = makeScene().formatReply(
+      aggIntent,
+      {
+        success: true,
+        aggregate: {
+          op: 'count',
+          groupBy: 'apiKey',
+          recordCount: 1,
+          groups: [{ key: 'sk-live-abc', value: 1, count: 1 }],
+        },
+      },
+      { apiKey: 'apiKey' },
+    );
+    expect(reply).not.toContain('sk-live-abc');
+    expect(reply).toContain('***（已脱敏）');
+  });
+
+  it('普通分组字段照常明文展示', () => {
+    const reply = makeScene().formatReply(
+      aggIntent,
+      {
+        success: true,
+        aggregate: {
+          op: 'sum',
+          field: '金额',
+          groupBy: '渠道',
+          recordCount: 2,
+          groups: [
+            { key: '闲鱼', value: 300, count: 2 },
+            { key: '微信', value: 100, count: 1 },
+          ],
+        },
+      },
+      mapping,
+    );
+    expect(reply).toContain('1. 闲鱼：300（2 条）');
+    expect(reply).toContain('2. 微信：100（1 条）');
+    expect(reply).toContain('总合计：400');
+  });
+});

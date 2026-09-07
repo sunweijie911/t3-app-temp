@@ -3651,3 +3651,122 @@ describe('Dispatcher — 确认指令不能被字节预算挤掉', () => {
     expect(reply).not.toContain('消息过长已截断');
   });
 });
+
+describe('Dispatcher — AGGREGATE 不能拿脱敏字段当分组维度', () => {
+  /** 手机号列显式标了 sensitive，业务域是普通列 */
+  const sensitiveBinding: ResourceBinding = {
+    ...baseBinding,
+    fieldMapping: {
+      项目名称: '项目名称',
+      手机号: { name: '手机号', type: 'plain', sensitive: true },
+      接口密钥: '接口密钥',
+      金额: { name: '金额', type: 'plain', displayType: 'number' },
+    },
+  };
+
+  const rows: SpreadsheetRecord[] = [
+    {
+      recordId: 'r1',
+      fields: {
+        项目名称: 'A',
+        手机号: '13800000001',
+        接口密钥: 'sk-aaa',
+        金额: 100,
+      },
+    },
+    {
+      recordId: 'r2',
+      fields: {
+        项目名称: 'B',
+        手机号: '13900000002',
+        接口密钥: 'sk-bbb',
+        金额: 200,
+      },
+    },
+  ];
+
+  function setup() {
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue(rows);
+    return { d: makeDispatcher(sensitiveBinding), channel, adapter };
+  }
+
+  it('★ 按显式 sensitive 的字段分组被拒，且回复里不出现任何取值', async () => {
+    // 回归：分组键**就是该字段的取值**，直接拼进回复。
+    // 「按手机号统计条数」等于把整列手机号在群里念一遍，
+    // 而 sensitive 标记承诺的恰恰是"这一列不会出现在回复里"。
+    const { d, channel } = setup();
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"AGGREGATE","fields":{},"filters":{},"aggregate":{"op":"count","groupBy":"手机号"},"confidence":0.9,"summary":"按手机号统计"}',
+    );
+    await d.process(makeMsg({ content: '台账 按手机号统计条数' }), channel);
+
+    expect(channel.lastReply).toContain('脱敏字段');
+    expect(channel.lastReply).not.toContain('13800000001');
+    expect(channel.lastReply).not.toContain('13900000002');
+  });
+
+  it('★ 字段名命中敏感词启发式的列同样被拒（admin 忘了勾 sensitive 也拦得住）', async () => {
+    const { d, channel } = setup();
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"AGGREGATE","fields":{},"filters":{},"aggregate":{"op":"count","groupBy":"接口密钥"},"confidence":0.9,"summary":"按密钥统计"}',
+    );
+    await d.process(makeMsg({ content: '台账 按接口密钥统计' }), channel);
+
+    expect(channel.lastReply).toContain('脱敏字段');
+    expect(channel.lastReply).not.toContain('sk-aaa');
+  });
+
+  it('拒绝的是分组维度，不是整个聚合 —— 不分组的统计照常可用', async () => {
+    const { d, channel } = setup();
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"AGGREGATE","fields":{},"filters":{},"aggregate":{"op":"sum","field":"金额"},"confidence":0.9,"summary":"合计"}',
+    );
+    await d.process(makeMsg({ content: '台账 金额合计' }), channel);
+    expect(channel.lastReply).toContain('300');
+  });
+
+  it('普通字段分组不受影响', async () => {
+    const { d, channel } = setup();
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"AGGREGATE","fields":{},"filters":{},"aggregate":{"op":"sum","field":"金额","groupBy":"项目名称"},"confidence":0.9,"summary":"按项目"}',
+    );
+    await d.process(makeMsg({ content: '台账 按项目统计金额' }), channel);
+    expect(channel.lastReply).toContain('B：200');
+    expect(channel.lastReply).toContain('A：100');
+  });
+
+  it('★ 被拒时不重试 —— 换个 JSON 写法也不会让脱敏字段变得可以分组', async () => {
+    const { d, channel } = setup();
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"AGGREGATE","fields":{},"filters":{},"aggregate":{"op":"count","groupBy":"手机号"},"confidence":0.9,"summary":"按手机号"}',
+    );
+    await d.process(makeMsg({ content: '台账 按手机号统计' }), channel);
+    expect(mockChatCompletion).toHaveBeenCalledTimes(1);
+  });
+
+  it('★ 审计日志里也不能出现该字段的取值', async () => {
+    const events: BotEvent[] = [];
+    const d = new Dispatcher({
+      getBinding: () => sensitiveBinding,
+      onEvent: (e) => {
+        events.push(e);
+      },
+    });
+    d.registry.register(new DatabaseDrivenScene(baseSceneConfig));
+    const channel = makeChannel();
+    const adapter = makeAdapter();
+    mockGetAdapter.mockReturnValue(adapter);
+    (adapter.queryRecords as ReturnType<typeof vi.fn>).mockResolvedValue(rows);
+    mockChatCompletion.mockResolvedValue(
+      '{"intent":"AGGREGATE","fields":{},"filters":{},"aggregate":{"op":"count","groupBy":"手机号"},"confidence":0.9,"summary":"按手机号"}',
+    );
+
+    await d.process(makeMsg({ content: '台账 按手机号统计' }), channel);
+    const dumped = JSON.stringify(events.at(-1));
+    expect(dumped).not.toContain('13800000001');
+    expect(dumped).not.toContain('13900000002');
+  });
+});

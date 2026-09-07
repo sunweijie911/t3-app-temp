@@ -8,7 +8,11 @@ vi.mock('@/modules/im-bot/auth/wecom-token', () => ({
 }));
 
 import type { SpreadsheetTableConfig } from '@/modules/im-bot/core/types';
-import { DingtalkSheetAdapter } from '@/modules/im-bot/spreadsheets/dingtalk-sheet';
+import {
+  __resetDingtalkDeleteWarning,
+  DingtalkSheetAdapter,
+  readDingtalkDeleteOutcome,
+} from '@/modules/im-bot/spreadsheets/dingtalk-sheet';
 import { WecomSheetAdapter } from '@/modules/im-bot/spreadsheets/wecom-sheet';
 
 const dingtalkConfig: SpreadsheetTableConfig = {
@@ -214,5 +218,136 @@ describe('queryRecordsWithMeta — 截断由 adapter 上报（P0：过滤后条�
     const meta = await adapter.queryRecordsWithMeta(dingtalkConfig, {});
 
     expect(plain).toEqual(meta.records);
+  });
+});
+
+describe('readDingtalkDeleteOutcome — 删除响应判定', () => {
+  it('非空 id 列表 = 删掉了', () => {
+    expect(readDingtalkDeleteOutcome({ ids: ['r1'] })).toBe('deleted');
+    expect(readDingtalkDeleteOutcome({ recordIds: ['r1'] })).toBe('deleted');
+    expect(readDingtalkDeleteOutcome({ result: ['r1'] })).toBe('deleted');
+  });
+
+  it('★ 空列表 / 计数为 0 = 一条都没删', () => {
+    expect(readDingtalkDeleteOutcome({ ids: [] })).toBe('none');
+    expect(readDingtalkDeleteOutcome({ successCount: 0 })).toBe('none');
+    expect(readDingtalkDeleteOutcome({ result: false })).toBe('none');
+  });
+
+  it('★ 布尔 false 是明确的否定信号，不能掉进 unknown 被当成功', () => {
+    // 回归：`deleted` 曾只在"计数键"里按 number 判，`{"deleted": false}`
+    // 既不是数组也过不了 typeof number，会一路落到 unknown 被放行 ——
+    // 而它恰恰是最不该被放行的那种响应。
+    expect(readDingtalkDeleteOutcome({ deleted: false })).toBe('none');
+    expect(readDingtalkDeleteOutcome({ deleted: true })).toBe('deleted');
+    expect(readDingtalkDeleteOutcome({ successCount: false })).toBe('none');
+    expect(readDingtalkDeleteOutcome({ ids: false })).toBe('none');
+  });
+
+  it('计数 > 0 = 删掉了', () => {
+    expect(readDingtalkDeleteOutcome({ deletedCount: 2 })).toBe('deleted');
+    expect(readDingtalkDeleteOutcome({ result: true })).toBe('deleted');
+  });
+
+  it('认不出的形状 → unknown（不能升级成"一定删不掉"）', () => {
+    expect(readDingtalkDeleteOutcome({})).toBe('unknown');
+    expect(readDingtalkDeleteOutcome({ requestId: 'x' })).toBe('unknown');
+    expect(readDingtalkDeleteOutcome({ result: { ok: 1 } })).toBe('unknown');
+  });
+});
+
+describe('DingtalkSheetAdapter.deleteRecord — 不能谎报成功', () => {
+  const adapter = new DingtalkSheetAdapter();
+
+  beforeEach(() => {
+    __resetDingtalkDeleteWarning();
+  });
+
+  it('★ 200 + 0 条删除必须抛错 —— 否则会回一句"✅ 已删除"而表里一条没少', async () => {
+    // 删除接口的请求参数名无法离线核实（疑为 recordIds 而非 ids），
+    // 而参数名不对时钉钉返回的正是 200 + 空结果、**不报错**。
+    // 不在这里抛的话：dispatcher 收到一片 fulfilled → 回「✅ 已删除 3 条」
+    // → 审计日志记 success，而记录全都还在。破坏性操作里"谎报成功"
+    // 比"报错让人重试"危险得多。
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse({ ids: [] })),
+    );
+    await expect(adapter.deleteRecord(dingtalkConfig, 'r1')).rejects.toThrow(
+      /未删除任何记录/,
+    );
+  });
+
+  it('抛错文案要指向真正的排查方向（参数名）', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse({ successCount: 0 })),
+    );
+    await expect(adapter.deleteRecord(dingtalkConfig, 'r1')).rejects.toThrow(
+      /recordIds/,
+    );
+  });
+
+  it('有肯定信号时正常返回', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse({ ids: ['r1'] })),
+    );
+    await expect(
+      adapter.deleteRecord(dingtalkConfig, 'r1'),
+    ).resolves.toBeUndefined();
+  });
+
+  it('★ 响应形状认不出时放行 + 同一形状只警告一次，不把"可能没删"升级成"一定删不掉"', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse({})),
+    );
+    await expect(
+      adapter.deleteRecord(dingtalkConfig, 'r1'),
+    ).resolves.toBeUndefined();
+    await expect(
+      adapter.deleteRecord(dingtalkConfig, 'r2'),
+    ).resolves.toBeUndefined();
+    // 删除是并发跑的，每条都打会把日志刷满
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('★ 去重按响应键集合，不同形状各报一次 —— 这行日志的用途就是照着补键名', () => {
+    // 用一个全局布尔去重的话，第一种没认出的形状会把之后**所有**
+    // 其它形状一起吞掉，等于永远只知道一半。
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const shapes = [{}, { requestId: 'x' }, { traceId: 'y', extra: 1 }];
+    return (async () => {
+      for (const [i, shape] of shapes.entries()) {
+        vi.stubGlobal(
+          'fetch',
+          vi.fn(async () => jsonResponse(shape)),
+        );
+        await adapter.deleteRecord(dingtalkConfig, `r${i}`);
+      }
+      expect(warn).toHaveBeenCalledTimes(shapes.length);
+      // 同一形状再来一次不重复报
+      await adapter.deleteRecord(dingtalkConfig, 'again');
+      expect(warn).toHaveBeenCalledTimes(shapes.length);
+      warn.mockRestore();
+    })();
+  });
+
+  it('HTTP 层失败仍按原样抛错', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ message: 'no permission' }), {
+            status: 403,
+          }),
+      ),
+    );
+    await expect(adapter.deleteRecord(dingtalkConfig, 'r1')).rejects.toThrow(
+      /no permission/,
+    );
   });
 });

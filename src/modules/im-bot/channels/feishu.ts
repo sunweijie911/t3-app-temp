@@ -1,4 +1,3 @@
-import crypto from 'node:crypto';
 import { getFeishuBotOpenId } from '../auth/feishu-bot';
 import { getFeishuChatName } from '../auth/feishu-chat';
 import { feishuTokenManager } from '../auth/feishu-token';
@@ -6,16 +5,32 @@ import { getFeishuUserName } from '../auth/feishu-user';
 import { clampReplyBytes } from '../core/field-render';
 import type { ChatType, UnifiedMessage } from '../core/types';
 import { getFeishuCredentials } from '../services/credentials';
+import {
+  decryptFeishuEvent,
+  eventSignature,
+  verifyEventSignature,
+} from './feishu-crypto';
+import { isTimestampFresh, timestampFreshness } from './replay-window';
 import type { ChannelAdapter, DecodeResult } from './types';
 
-function decryptFeishuEvent(encrypt: string, key: string): string {
-  const keyHash = crypto.createHash('sha256').update(key).digest();
-  const buf = Buffer.from(encrypt, 'base64');
-  const iv = buf.subarray(0, 16);
-  const decipher = crypto.createDecipheriv('aes-256-cbc', keyHash, iv);
-  let decrypted = decipher.update(buf.subarray(16));
-  decrypted = Buffer.concat([decrypted, decipher.final()]);
-  return decrypted.toString('utf-8');
+/**
+ * 陈旧回调按 `ignored`（→ HTTP 200）处理，而**不是** 403。
+ *
+ * 安全性完全一样：这条事件不会被处理。区别只在给平台的答复 ——
+ * 飞书把非 2xx 当投递失败会不断重试，**连续失败还会自动摘掉事件订阅**
+ * （bot-engine 里"停用平台也回 200"就是为了这个）。而"太旧了"恰恰是
+ * 重试永远修不好的一类失败：服务器时钟一旦漂移超过窗口，每一条事件都会
+ * 403，正好凑成"连续失败"，代价从"丢几条消息"升级成"订阅没了、要人工
+ * 去开放平台重配"。
+ *
+ * 但必须留日志：`ignored` 在 bot-engine 里只回 200、不落审计日志，
+ * 不打这行的话现象就是"机器人不吭声，哪儿都查不出原因"。
+ */
+function staleIgnored(reason: string): DecodeResult {
+  console.warn(
+    `[FeishuChannel] 丢弃陈旧回调（疑似重放，或服务器时钟漂移）: ${reason}`,
+  );
+  return { kind: 'ignored', reason };
 }
 
 export class FeishuChannelAdapter implements ChannelAdapter {
@@ -24,14 +39,78 @@ export class FeishuChannelAdapter implements ChannelAdapter {
   readonly maxReplyBytes = 30_000;
 
   async decode(req: Request): Promise<DecodeResult> {
+    // 必须拿**请求体原文**：X-Lark-Signature 覆盖的是原始字节，
+    // 先 req.json() 再 stringify 回去得到的串与原文不一定一致
+    // （键序、空白、Unicode 转义都可能变），签名会恒不通过。
+    let rawBody: string;
+    try {
+      rawBody = await req.text();
+    } catch {
+      return { kind: 'reject', status: 400, reason: '读取请求体失败' };
+    }
     let body: Record<string, unknown>;
     try {
-      body = (await req.json()) as Record<string, unknown>;
+      body = JSON.parse(rawBody) as Record<string, unknown>;
     } catch {
       return { kind: 'reject', status: 400, reason: '请求体不是合法 JSON' };
     }
 
     const creds = await getFeishuCredentials();
+
+    // 0. 验签 + 时间戳窗口。
+    //
+    // 开启事件加密后飞书会带 X-Lark-Signature / -Request-Timestamp /
+    // -Request-Nonce 三个头。以前这里**一个头都不读**：飞书是三家里唯一
+    // 既没有验签、也没有时间戳窗口的 —— 抓到的回调只要过了 5 分钟幂等
+    // TTL 就能原样重放，一条 CREATE 重放一次多写一条记录
+    // （钉钉/企微都用 replay-window 挡住了这段区间）。
+    //
+    // 做在解密**之前**：签名覆盖的是密文原文，先验签能让伪造的请求连
+    // 解密都不用跑。
+    const signature = req.headers.get('x-lark-signature');
+    const sigTimestamp = req.headers.get('x-lark-request-timestamp');
+    const nonce = req.headers.get('x-lark-request-nonce');
+    /**
+     * 是否**必须**验签。
+     *
+     * 判据只能是「本地配了 encryptKey」，绝不能是「请求带了签名头」——
+     * 后者由**攻击者**说了算：少发一个 X-Lark-Request-Nonce 就整个绕过
+     * 这一段，落回只查静态 verification_token 的老路，验签等于白加。
+     *
+     * 用配置当判据是安全的：飞书「配了 Encrypt Key 就必带这三个头」，
+     * 所以没开加密的存量部署 mustVerify 为 false，行为与升级前一致。
+     */
+    const mustVerify = Boolean(creds.encryptKey);
+    let signatureVerified = false;
+
+    if (signature && sigTimestamp && nonce) {
+      if (!creds.encryptKey) {
+        console.warn(
+          '[FeishuChannel] 收到带签名的请求但未配置 encryptKey，无法验签',
+        );
+        return {
+          kind: 'reject',
+          status: 403,
+          reason: '未配置 encryptKey，无法验签',
+        };
+      }
+      const expected = eventSignature(
+        sigTimestamp,
+        nonce,
+        creds.encryptKey,
+        rawBody,
+      );
+      if (!verifyEventSignature(expected, signature)) {
+        return { kind: 'reject', status: 403, reason: '验签失败' };
+      }
+      // 这个头是**秒**，而 header.create_time 是毫秒；单位由 timestampToMs
+      // 按数量级判别，不在调用方各乘一次 1000（猜错单位的表现是
+      // 「整个平台永久拒收」，不是报错）
+      if (!isTimestampFresh(sigTimestamp)) {
+        return staleIgnored('签名时间戳超出容忍窗口');
+      }
+      signatureVerified = true;
+    }
 
     // 1. 解密（开启了事件加密时）
     if (typeof body.encrypt === 'string') {
@@ -59,6 +138,19 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       };
     }
 
+    // 2.5 配了 encryptKey 却没能验签 —— 缺头、或头不齐。
+    //
+    // 放在 challenge **之后**：URL 有效性验证只是把 challenge 原样回写，
+    // 没有任何数据访问和副作用，不该被这道闸挡住配置流程（万一某类
+    // 验证请求不带签名头，管理员会卡在"回调地址配不上"且毫无头绪）。
+    // 到这里还没验成签的，就是一条要真正执行业务的事件了。
+    if (mustVerify && !signatureVerified) {
+      console.warn(
+        '[FeishuChannel] 已配置 encryptKey，但请求缺少完整的签名头，拒绝',
+      );
+      return { kind: 'reject', status: 403, reason: '缺少签名头，无法验签' };
+    }
+
     // 3. verification_token 必须配置（DB 或 env），否则拒绝以避免 webhook 裸奔
     if (!creds.verificationToken) {
       console.warn(
@@ -76,7 +168,25 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       return { kind: 'reject', status: 403, reason: 'token 校验失败' };
     }
 
-    // 4. 解析为统一消息
+    // 4. 事件新鲜度。
+    //
+    // 只在**没验过签**时做：验过签的请求已经用签名头的时间戳查过窗口了，
+    // 再拿另一个时钟的字段查一遍只会平白多一种拒收原因。
+    //
+    // 没有签名头时这是唯一的重放防护 —— verification_token 是个静态
+    // 密钥，body 原样重放照样通过。header.create_time 是**毫秒**字符串。
+    //
+    // 用三态判定而不是布尔：`unknown`（字段缺失或形状变了）必须**放行**。
+    // 这个字段不是协议要求我们校验的东西，因为它变形就把整个飞书通道
+    // 关掉，代价远大于收益。
+    if (
+      !signatureVerified &&
+      timestampFreshness(header?.create_time) === 'stale'
+    ) {
+      return staleIgnored('事件时间戳超出容忍窗口');
+    }
+
+    // 5. 解析为统一消息
     return this.parseEvent(body);
   }
 
