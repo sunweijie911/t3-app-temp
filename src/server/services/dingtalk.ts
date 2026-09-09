@@ -28,6 +28,17 @@ export interface DingtalkUserDetail {
 /** 组合后的完整用户信息 */
 export type DingtalkUserInfo = DingtalkAuthUser & DingtalkUserDetail;
 
+// ---------- 工具函数 ----------
+
+/**
+ * 手机号脱敏：13800138000 → 138****8000。
+ * 长度不足 7 位时无法安全脱敏，原样返回。
+ */
+export function maskPhone(phone: string): string {
+  if (phone.length < 7) return phone;
+  return `${phone.slice(0, 3)}****${phone.slice(-4)}`;
+}
+
 // ---------- 通用网关调用 ----------
 
 /**
@@ -41,7 +52,8 @@ async function callLinkGateway<T>(
   params: Record<string, unknown>,
 ): Promise<T> {
   const gateway = `${env.DINGTALK_LINK_GATEWAY}?apiName=${encodeURIComponent(apiName)}`;
-  console.log(`[钉钉] callLinkGateway: ${apiName}`, JSON.stringify(params));
+  // 请求参数含 authCode / userId 等敏感信息，日志只记 apiName
+  console.log(`[钉钉] callLinkGateway: ${apiName}`);
 
   const res = await fetch(gateway, {
     method: 'POST',
@@ -61,7 +73,10 @@ async function callLinkGateway<T>(
   }
 
   const result = (await res.json()) as LinkGatewayResponse<T>;
-  console.log(`[钉钉] ${apiName} 响应:`, JSON.stringify(result));
+  // data 中含手机号等个人信息，日志只记调用结果元信息
+  console.log(
+    `[钉钉] ${apiName} 响应: success=${result.success} errorCode=${result.errorCode} errorMsg=${result.errorMsg ?? ''}`,
+  );
 
   if (result.success !== 'true' || !result.data) {
     throw new Error(

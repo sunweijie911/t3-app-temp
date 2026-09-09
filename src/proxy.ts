@@ -67,7 +67,8 @@ export async function proxy(request: NextRequest) {
   // 不含发送端点；验证另有 better-auth allowedAttempts 兜底，故阈值可宽松。
   if (
     pathname.startsWith('/api/auth/sign-in') ||
-    pathname === '/api/auth/phone-number/verify'
+    pathname === '/api/auth/phone-number/verify' ||
+    pathname === '/api/auth/dingtalk/sign-in'
   ) {
     const authCheck = authIpLimiter.check(ip);
     if (!authCheck.allowed) {

@@ -18,6 +18,7 @@
 #   需配在 Settings -> Secrets and variables -> Actions -> Variables（非 Secrets，非敏感）:
 #     - NEXT_PUBLIC_SITE_NAME / NEXT_PUBLIC_AUTH_METHOD /
 #       NEXT_PUBLIC_DEFAULT_MODULE / NEXT_PUBLIC_ENABLED_MODULES / NEXT_PUBLIC_MODULE_NAMES
+#     - NEXT_PUBLIC_DINGTALK_CORP_ID（登录方式为 dingtalk 时的兜底 corpId）
 #   未配置时由各消费点的下游兜底回退到合理默认（如登录方式回退 email-otp）。
 
 name: Build and Deploy
@@ -116,6 +117,7 @@ jobs:
             NEXT_PUBLIC_DEFAULT_MODULE=${{ vars.NEXT_PUBLIC_DEFAULT_MODULE }}
             NEXT_PUBLIC_ENABLED_MODULES=${{ vars.NEXT_PUBLIC_ENABLED_MODULES }}
             NEXT_PUBLIC_AUTH_METHOD=${{ vars.NEXT_PUBLIC_AUTH_METHOD }}
+            NEXT_PUBLIC_DINGTALK_CORP_ID=${{ vars.NEXT_PUBLIC_DINGTALK_CORP_ID }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
@@ -142,6 +144,7 @@ jobs:
             NEXT_PUBLIC_DEFAULT_MODULE=${{ vars.NEXT_PUBLIC_DEFAULT_MODULE }}
             NEXT_PUBLIC_ENABLED_MODULES=${{ vars.NEXT_PUBLIC_ENABLED_MODULES }}
             NEXT_PUBLIC_AUTH_METHOD=${{ vars.NEXT_PUBLIC_AUTH_METHOD }}
+            NEXT_PUBLIC_DINGTALK_CORP_ID=${{ vars.NEXT_PUBLIC_DINGTALK_CORP_ID }}
           tags: ${{ steps.nginx-meta.outputs.tags }}
           labels: ${{ steps.nginx-meta.outputs.labels }}
 

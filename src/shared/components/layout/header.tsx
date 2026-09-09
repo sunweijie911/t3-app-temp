@@ -6,7 +6,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { authClient } from '@/lib/auth-client';
-import { authMethod } from '@/lib/auth-methods';
+import { identifierKind } from '@/lib/auth-methods';
 import { getModuleByPathname } from '@/modules/registry';
 import { useDefaultModuleId } from '@/shared/components/default-module-provider';
 import { api } from '@/trpc/react';
@@ -83,7 +83,7 @@ export function Header() {
           {mounted && session?.user ? (
             <div className="flex items-center gap-3">
               <span className="hidden max-w-48 truncate text-gray-600 text-sm sm:inline">
-                {authMethod === 'phone-otp'
+                {identifierKind === 'phone'
                   ? session.user.name
                   : (session.user.email ?? session.user.name)}
               </span>

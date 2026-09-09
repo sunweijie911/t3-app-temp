@@ -5,6 +5,7 @@ import { emailOTP, phoneNumber } from 'better-auth/plugins';
 
 import { env } from '@/env';
 import { parseAuthMethod } from '@/lib/auth-methods';
+import { dingtalkAuth } from '@/server/better-auth/plugins/dingtalk';
 import { db } from '@/server/db';
 import { account, session, user, verification } from '@/server/db/auth-schema';
 import { sendEmailOtp } from '@/server/services/email';
@@ -40,22 +41,38 @@ if (method === 'email-otp') {
   );
 }
 
+// 手机验证码插件：phone-otp 模式的主通道，同时也是 dingtalk 模式下
+// 「不在钉钉内 / 免登失败」时的回退登录通道，两处配置必须完全一致。
+function buildPhoneNumberPlugin() {
+  return phoneNumber({
+    sendOTP: async ({ phoneNumber: phone, code }) => {
+      await sendSmsOtp(phone, code);
+    },
+    otpLength: 6,
+    expiresIn: 600, // 10 分钟，留足短信投递延迟余量
+    // 同 emailOTP：默认 3 太低，达到上限后验证码会被删除，由 env 统一放宽。
+    allowedAttempts: env.OTP_ALLOWED_ATTEMPTS,
+    signUpOnVerification: {
+      getTempEmail: (phone) => `${phone}@phone.local`,
+      getTempName: (phone) => phone,
+    },
+  });
+}
+
 if (method === 'phone-otp') {
-  plugins.push(
-    phoneNumber({
-      sendOTP: async ({ phoneNumber: phone, code }) => {
-        await sendSmsOtp(phone, code);
-      },
-      otpLength: 6,
-      expiresIn: 600, // 10 分钟，留足短信投递延迟余量
-      // 同 emailOTP：默认 3 太低，达到上限后验证码会被删除，由 env 统一放宽。
-      allowedAttempts: env.OTP_ALLOWED_ATTEMPTS,
-      signUpOnVerification: {
-        getTempEmail: (phone) => `${phone}@phone.local`,
-        getTempName: (phone) => phone,
-      },
-    }),
-  );
+  plugins.push(buildPhoneNumberPlugin());
+}
+
+if (method === 'dingtalk') {
+  // 钉钉免登缺少网关就完全无法登录，启动即失败，避免线上静默不可用。
+  // SMS_* 缺失不在此校验：回退通道真正发送时由 sms.ts 抛错，沿用现状。
+  if (process.env.NODE_ENV === 'production' && !env.DINGTALK_LINK_GATEWAY) {
+    throw new Error(
+      '[钉钉免登] 生产环境必须配置钉钉 LINK 网关变量: DINGTALK_LINK_GATEWAY',
+    );
+  }
+  // 钉钉外打开时回退到手机验证码登录，故两个插件同时启用
+  plugins.push(buildPhoneNumberPlugin(), dingtalkAuth());
 }
 
 export const auth = betterAuth({
@@ -85,6 +102,11 @@ export const auth = betterAuth({
       // 手机验证码发送：同样覆盖插件的 16.7 小时规则；发送语义沿用 OTP_SEND 配置，
       // 真正的成本管控由 proxy otpSendLimiter 负责。
       '/phone-number/send-otp': otpRule(env.RATE_LIMIT_OTP_SEND, 10, 60_000),
+      // 钉钉免登：一次免登要走两跳 LINK 网关调用，authCode 单次有效且由钉钉客户端下发，
+      // 不存在爆破空间；沿用登录端点的 AUTH_IP 阈值，仅防异常刷量。
+      // 此处是该端点唯一的限流来源——customRules 优先级高于插件自带规则，
+      // 故 dingtalk 插件里不再重复声明 rateLimit（会是死代码）。
+      '/dingtalk/sign-in': otpRule(env.RATE_LIMIT_AUTH_IP, 20, 60_000),
     },
   },
   database: drizzleAdapter(db, {

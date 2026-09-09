@@ -88,8 +88,10 @@ export const env = createEnv({
     NEXT_PUBLIC_DEFAULT_MODULE: z.string().default('lucky-wheel'),
     // 启用的模块列表，逗号分隔，留空展示全部
     NEXT_PUBLIC_ENABLED_MODULES: z.string().default(''),
-    // 登录方式（单选）: email-password | phone-otp | email-otp
+    // 登录方式（单选）: email-password | phone-otp | email-otp | dingtalk
     NEXT_PUBLIC_AUTH_METHOD: z.string().default('email-otp'),
+    // 钉钉免登兜底 corpId：钉钉内打开子页面时 URL 上的 corpId 会丢失
+    NEXT_PUBLIC_DINGTALK_CORP_ID: z.string().optional(),
   },
 
   runtimeEnv: {
@@ -148,6 +150,9 @@ export const env = createEnv({
       process.env.NEXT_PUBLIC_ENABLED_MODULES,
     ),
     NEXT_PUBLIC_AUTH_METHOD: stripQuotes(process.env.NEXT_PUBLIC_AUTH_METHOD),
+    NEXT_PUBLIC_DINGTALK_CORP_ID: stripQuotes(
+      process.env.NEXT_PUBLIC_DINGTALK_CORP_ID,
+    ),
   },
 
   skipValidation: !!process.env.SKIP_ENV_VALIDATION,

@@ -31,6 +31,13 @@ describe('IDENTIFIER_CONFIG', () => {
     expect(cfg.regex.test('13800138000')).toBe(false);
   });
 
+  it('dingtalk 模式与 phone-otp 同构，同样使用手机号', async () => {
+    const cfg = await loadConfig('dingtalk');
+    expect(cfg.kind).toBe('phone');
+    expect(cfg.userField).toBe('phoneNumber');
+    expect(cfg.label).toBe('手机号');
+  });
+
   it('email-password 模式使用邮箱', async () => {
     const cfg = await loadConfig('email-password');
     expect(cfg.userField).toBe('email');

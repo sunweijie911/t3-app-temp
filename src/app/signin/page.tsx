@@ -7,6 +7,7 @@ import { env } from '@/env';
 import { authClient } from '@/lib/auth-client';
 import { isOtpInvalidated, resolveAuthError } from '@/lib/auth-error';
 import { authMethod } from '@/lib/auth-methods';
+import { useDingtalkAutoLogin } from '@/lib/use-dingtalk-auto-login';
 import { getModuleByPathname } from '@/modules/registry';
 import { useDefaultModuleId } from '@/shared/components/default-module-provider';
 
@@ -605,12 +606,60 @@ function PhoneOtpForm({
   );
 }
 
+// ─── 钉钉免登 ──────────────────────────────────────
+
+/**
+ * 钉钉免登：在钉钉客户端内自动换取 session；
+ * 非钉钉环境（not-in-dingtalk / missing-corp-id）或免登失败（failed）时
+ * 回退到手机验证码表单，保证浏览器打开也能登录。
+ */
+function DingtalkAutoLogin({
+  btnClass,
+  onSuccess,
+  onAutoSuccess,
+}: {
+  btnClass: string;
+  /** 手机验证码回退登录成功 */
+  onSuccess: () => void;
+  /** 钉钉免登成功（用 replace 跳转，避免回退又落回登录页） */
+  onAutoSuccess: () => void;
+}) {
+  const { status, error } = useDingtalkAutoLogin({ enabled: true });
+  const navigatedRef = useRef(false);
+
+  useEffect(() => {
+    if (status !== 'done' || navigatedRef.current) return;
+    navigatedRef.current = true;
+    onAutoSuccess();
+  }, [status, onAutoSuccess]);
+
+  if (status === 'idle' || status === 'pending' || status === 'done') {
+    return (
+      <p className="text-center text-gray-500 text-sm">钉钉免登中&hellip;</p>
+    );
+  }
+
+  return (
+    <>
+      {status === 'failed' && (
+        <p className="mb-4 text-center text-gray-400 text-xs">
+          {error
+            ? `${error}，请使用手机验证码登录`
+            : '钉钉免登失败，请使用手机验证码登录'}
+        </p>
+      )}
+      <PhoneOtpForm btnClass={btnClass} onSuccess={onSuccess} />
+    </>
+  );
+}
+
 // ─── 登录页容器 ────────────────────────────────────
 
 const subtitle: Record<string, string> = {
   'email-password': '请输入邮箱和密码登录',
   'email-otp': '请输入邮箱获取验证码',
   'phone-otp': '请输入手机号获取验证码',
+  dingtalk: '钉钉内自动登录，或使用手机验证码登录',
 };
 
 function SignInForm() {
@@ -627,6 +676,12 @@ function SignInForm() {
     router.push(callbackUrl);
     router.refresh();
   };
+
+  // 钉钉免登是自动发生的，用 replace 避免用户回退又落回登录页再次触发免登
+  const handleAutoSuccess = useCallback(() => {
+    router.replace(callbackUrl);
+    router.refresh();
+  }, [router, callbackUrl]);
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-orange-50 to-pink-50 px-4">
@@ -656,6 +711,13 @@ function SignInForm() {
           )}
           {authMethod === 'phone-otp' && (
             <PhoneOtpForm btnClass={mod.theme.btn} onSuccess={handleSuccess} />
+          )}
+          {authMethod === 'dingtalk' && (
+            <DingtalkAutoLogin
+              btnClass={mod.theme.btn}
+              onAutoSuccess={handleAutoSuccess}
+              onSuccess={handleSuccess}
+            />
           )}
         </div>
       </div>

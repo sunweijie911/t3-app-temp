@@ -1,6 +1,6 @@
 // lucky-wheel module constants
 import { z } from 'zod';
-import { isPhoneOtpEnabled } from '@/lib/auth-methods';
+import { identifierKind } from '@/lib/auth-methods';
 
 /** 模块显示名称，修改此处即可全局生效 */
 export const MODULE_NAME = '幸运大转盘';
@@ -41,25 +41,26 @@ export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
  * 当前登录方式（NEXT_PUBLIC_AUTH_METHOD）对应的"用户标识"配置。
- * phone-otp → 手机号；email-otp / email-password → 邮箱。
+ * phone-otp / dingtalk → 手机号；email-otp / email-password → 邮箱。
  * 额外次数匹配、抽奖快照、中奖记录视图统一从此取值。
  */
-export const IDENTIFIER_CONFIG = isPhoneOtpEnabled
-  ? {
-      kind: 'phone' as const,
-      label: '手机号',
-      regex: PHONE_RE,
-      placeholder: '1xxxxxxxxxx',
-      inputMode: 'numeric' as 'numeric' | undefined,
-      maxLength: 11 as number | undefined,
-      userField: 'phoneNumber' as 'phoneNumber' | 'email',
-    }
-  : {
-      kind: 'email' as const,
-      label: '邮箱',
-      regex: EMAIL_RE,
-      placeholder: 'name@example.com',
-      inputMode: undefined as 'numeric' | undefined,
-      maxLength: undefined as number | undefined,
-      userField: 'email' as 'phoneNumber' | 'email',
-    };
+export const IDENTIFIER_CONFIG =
+  identifierKind === 'phone'
+    ? {
+        kind: 'phone' as const,
+        label: '手机号',
+        regex: PHONE_RE,
+        placeholder: '1xxxxxxxxxx',
+        inputMode: 'numeric' as 'numeric' | undefined,
+        maxLength: 11 as number | undefined,
+        userField: 'phoneNumber' as 'phoneNumber' | 'email',
+      }
+    : {
+        kind: 'email' as const,
+        label: '邮箱',
+        regex: EMAIL_RE,
+        placeholder: 'name@example.com',
+        inputMode: undefined as 'numeric' | undefined,
+        maxLength: undefined as number | undefined,
+        userField: 'email' as 'phoneNumber' | 'email',
+      };

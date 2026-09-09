@@ -6,28 +6,49 @@ import { isOtpInvalidated, resolveAuthError } from '@/lib/auth-error';
 import { authMethod } from '@/lib/auth-methods';
 import { EMAIL_RE, PHONE_RE } from '@/modules/lucky-wheel/constants';
 
-/** 当前使用的 OTP 方式：email-otp 或 phone-otp，email-password 不适用于此场景 */
+/**
+ * 当前使用的 OTP 方式：email-otp 或 phone-otp，email-password 不适用于此场景。
+ * dingtalk 模式复用 phone-otp 表单：钉钉外打开或免登失败时回退到手机验证码登录。
+ */
 const otpMode =
   authMethod === 'email-otp'
     ? 'email-otp'
-    : authMethod === 'phone-otp'
+    : authMethod === 'phone-otp' || authMethod === 'dingtalk'
       ? 'phone-otp'
       : null;
+
+/** 姓名默认值是否可用：`${phone}@phone.local` / 纯手机号这类系统生成值不预填 */
+function isUsableDefaultName(value: string | undefined): value is string {
+  if (!value) return false;
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (PHONE_RE.test(trimmed)) return false;
+  if (trimmed.includes('@phone.local')) return false;
+  return true;
+}
 
 interface UserInfoModalProps {
   open: boolean;
   onSuccess: (info: { name: string; address: string }) => void;
   /** 已登录时只收集收货地址，跳过 OTP 步骤 */
   loggedIn?: boolean;
+  /** 姓名预填值（如钉钉免登拿到的用户姓名） */
+  defaultName?: string;
+  /** 回退提示（如「钉钉免登失败，请使用手机验证码登录」），非空时显示在副标题下方 */
+  fallbackHint?: string;
 }
 
 export function UserInfoModal({
   open,
   onSuccess,
   loggedIn = false,
+  defaultName,
+  fallbackHint,
 }: UserInfoModalProps) {
   const [step, setStep] = useState<'info' | 'code'>('info');
-  const [name, setName] = useState('');
+  const [name, setName] = useState(() =>
+    isUsableDefaultName(defaultName) ? defaultName.trim() : '',
+  );
   const [identifier, setIdentifier] = useState(''); // 邮箱或手机号
   const [address, setAddress] = useState('');
   const [code, setCode] = useState('');
@@ -54,6 +75,12 @@ export function UserInfoModal({
       }
     };
   }, [open]);
+
+  // defaultName 异步到达（如 session 加载完成）时补填，已手动输入过则不覆盖
+  useEffect(() => {
+    if (!isUsableDefaultName(defaultName)) return;
+    setName((prev) => (prev.trim() ? prev : defaultName.trim()));
+  }, [defaultName]);
 
   // 弹窗打开时禁止页面滚动
   useEffect(() => {
@@ -253,6 +280,12 @@ export function UserInfoModal({
                 ? '请填写以下信息后获取验证码'
                 : `验证码已发送至 ${identifier}`}
           </p>
+
+          {fallbackHint && (
+            <p className="-mt-4 mb-4 text-center text-gray-400 text-xs">
+              {fallbackHint}
+            </p>
+          )}
 
           {error && (
             <div className="mb-4 rounded-lg bg-red-50 p-3 text-center text-red-600 text-sm">

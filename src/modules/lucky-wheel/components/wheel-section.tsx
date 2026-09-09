@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { authClient } from '@/lib/auth-client';
+import { isDingtalkEnabled } from '@/lib/auth-methods';
+import { useDingtalkAutoLogin } from '@/lib/use-dingtalk-auto-login';
 import { MyPrizesSheet } from '@/modules/lucky-wheel/components/wheel/my-prizes-sheet';
 import { UserInfoModal } from '@/modules/lucky-wheel/components/wheel/user-info-modal';
 import type { Prize } from '@/modules/lucky-wheel/components/wheel/wheel-container';
@@ -56,6 +58,16 @@ export function WheelSection({
     authClient.useSession();
   const isLoggedIn = isSessionLoading ? initialLoggedIn : !!session?.user;
 
+  // 钉钉免登：仅在 dingtalk 模式且未登录时触发。
+  // 钉钉外打开（not-in-dingtalk / missing-corp-id）或免登失败（failed）时不阻塞，
+  // 直接放行到 UserInfoModal 的手机验证码表单作为回退登录通道。
+  const dtEnabled = isDingtalkEnabled && !isSessionLoading && !isLoggedIn;
+  const dt = useDingtalkAutoLogin({ enabled: dtEnabled });
+  // hook 启用后到 effect 把状态置为 pending 之间有一帧仍是 idle，一并视为进行中，
+  // 否则 Modal 会在免登开始前闪现一下
+  const dtInProgress =
+    dt.status === 'pending' || (dtEnabled && dt.status === 'idle');
+
   // mounted 标志：SSR/hydration 阶段不渲染 Modal，待客户端 localStorage 读取完毕后再判断
   const [mounted, setMounted] = useState(false);
   const [localUserInfo, setLocalUserInfo] = useState<UserInfo | null>(null);
@@ -86,9 +98,11 @@ export function WheelSection({
   // mounted 前不显示 Modal（避免 SSR hydration 闪现）
   // session 加载中不显示（避免 isPending 期间 isLoggedIn 短暂翻转导致弹窗闪现）
   // 登录用户：DB 查询期间也不显示（isLoadingUserInfo 为 true 时阻断）
+  // 钉钉免登进行中（pending）也不显示：免登成功后即为已登录，弹窗会白闪一下
   const showModal =
     mounted &&
     !isSessionLoading &&
+    !dtInProgress &&
     (!isLoggedIn || (!isLoadingUserInfo && !userInfo));
 
   // 用 ref 暴露打开"我的奖品"的方法给 WheelContainer 的回调
@@ -97,6 +111,17 @@ export function WheelSection({
   return (
     <>
       <UserInfoModal
+        defaultName={session?.user?.name}
+        fallbackHint={
+          // 钉钉内免登失败才提示；浏览器打开走验证码是正常路径，不需要解释。
+          // dt.error 已由 hook 经 resolveAuthError 翻成中文（如「钉钉账号未绑定有效手机号」），
+          // 优先展示具体原因，取不到时退回通用文案。
+          dt.status === 'failed'
+            ? dt.error
+              ? `${dt.error}，请使用手机验证码登录`
+              : '钉钉免登失败，请使用手机验证码登录'
+            : undefined
+        }
         loggedIn={isLoggedIn}
         onSuccess={handleModalSuccess}
         open={showModal}
