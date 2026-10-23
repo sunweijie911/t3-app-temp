@@ -68,9 +68,10 @@ export const simCardRouter = createTRPCRouter({
       // 获取钉钉用户信息
       const userInfo = await getDingtalkUserInfo(input.authCode).catch(
         (err: Error) => {
+          console.error('[sim-card] 钉钉免登失败:', err.message);
           throw new TRPCError({
             code: 'BAD_REQUEST',
-            message: `钉钉免登失败: ${err.message}`,
+            message: '钉钉免登失败',
           });
         },
       );

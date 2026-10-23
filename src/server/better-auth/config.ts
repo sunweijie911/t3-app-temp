@@ -1,6 +1,7 @@
 import type { BetterAuthPlugin } from 'better-auth';
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
+import { APIError, createAuthMiddleware } from 'better-auth/api';
 import { emailOTP, phoneNumber } from 'better-auth/plugins';
 
 import { env } from '@/env';
@@ -9,7 +10,10 @@ import { dingtalkAuth } from '@/server/better-auth/plugins/dingtalk';
 import { db } from '@/server/db';
 import { account, session, user, verification } from '@/server/db/auth-schema';
 import { sendEmailOtp } from '@/server/services/email';
-import { parseRateLimit } from '@/server/services/rate-limiter';
+import {
+  otpTargetLimiter,
+  parseRateLimit,
+} from '@/server/services/rate-limiter';
 import { sendSmsOtp } from '@/server/services/sms';
 
 const useSecureCookies = env.BETTER_AUTH_URL?.startsWith('https://') ?? false;
@@ -20,6 +24,33 @@ function otpRule(value: string, defaultMax: number, defaultWindowMs: number) {
   const [max, windowMs] = parseRateLimit(value, defaultMax, defaultWindowMs);
   return { window: Math.ceil(windowMs / 1000), max };
 }
+
+// 会下发验证码的端点 → 请求体中的接收方字段
+const OTP_SEND_TARGET_FIELDS: Record<string, 'phoneNumber' | 'email'> = {
+  '/phone-number/send-otp': 'phoneNumber',
+  '/phone-number/request-password-reset': 'phoneNumber',
+  '/email-otp/send-verification-otp': 'email',
+  '/email-otp/request-password-reset': 'email',
+  '/forget-password/email-otp': 'email',
+};
+
+// 按接收方（手机号 / 邮箱）限制验证码发送频率，在端点生成验证码之前拦截
+const otpTargetRateLimit = createAuthMiddleware(async (ctx) => {
+  const field = OTP_SEND_TARGET_FIELDS[ctx.path];
+  if (!field) return;
+  const raw: unknown = ctx.body?.[field];
+  if (typeof raw !== 'string' || !raw.trim()) return;
+  const target = field === 'email' ? raw.trim().toLowerCase() : raw.trim();
+  const { allowed } = otpTargetLimiter.check(`${field}:${target}`);
+  if (!allowed) {
+    throw new APIError('TOO_MANY_REQUESTS', {
+      message:
+        field === 'email'
+          ? '该邮箱验证码发送过于频繁，请稍后再试'
+          : '该手机号验证码发送过于频繁，请稍后再试',
+    });
+  }
+});
 
 const method = parseAuthMethod(env.NEXT_PUBLIC_AUTH_METHOD);
 
@@ -88,6 +119,12 @@ export const auth = betterAuth({
   },
   advanced: {
     useSecureCookies,
+    // 与 getClientIp 一致：取 nginx 以 $remote_addr 覆盖的 X-Real-IP，
+    // X-Forwarded-For 首段可由客户端伪造
+    ipAddress: { ipAddressHeaders: ['x-real-ip'] },
+  },
+  hooks: {
+    before: otpTargetRateLimit,
   },
   // 覆盖 better-auth 内置（生产默认开启）的 OTP 限流规则，阈值统一由 env 配置。
   // customRules 的 window 单位为「秒」，会覆盖插件自带规则，避免误伤正常用户。

@@ -94,6 +94,7 @@ let _cache: {
   globalIp: RateLimiter;
   authIp: RateLimiter;
   otpSend: RateLimiter;
+  otpTarget: RateLimiter;
 } | null = null;
 
 function limiters() {
@@ -108,6 +109,7 @@ function limiters() {
     globalIp: rl(env.RATE_LIMIT_GLOBAL_IP, 120, 60_000),
     authIp: rl(env.RATE_LIMIT_AUTH_IP, 20, 60_000),
     otpSend: rl(env.RATE_LIMIT_OTP_SEND, 10, 60_000),
+    otpTarget: rl(env.RATE_LIMIT_OTP_PER_TARGET, 1, 60_000),
   };
   return _cache;
 }
@@ -152,4 +154,9 @@ export const authIpLimiter = {
 // 与验证端点分离，防止「发送 1 次 + 验证 1 次」就占满登录额度。
 export const otpSendLimiter = {
   check: (key: string) => limiters().otpSend.check(key),
+};
+
+// 同一手机号 / 邮箱的验证码发送限流（默认 1次/分钟），不随 IP 变化
+export const otpTargetLimiter = {
+  check: (key: string) => limiters().otpTarget.check(key),
 };

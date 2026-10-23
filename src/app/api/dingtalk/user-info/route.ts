@@ -116,10 +116,10 @@ export async function POST(request: Request) {
 
     return Response.json({ success: true, data });
   } catch (error) {
-    const message = error instanceof Error ? error.message : '服务器内部错误';
+    const message = error instanceof Error ? error.message : String(error);
     console.error('[dingtalk/user-info]', message);
     return Response.json(
-      { success: false, errorMsg: message },
+      { success: false, errorMsg: '获取用户信息失败' },
       { status: 500 },
     );
   }
