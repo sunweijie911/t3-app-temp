@@ -18,6 +18,8 @@ import { createTable } from '@/server/db/table-creator';
 export type WheelUserInfo = {
   name: string | null;
   contact: string | null;
+  /** 收件人手机号，部分快照无此字段 */
+  recipientPhone?: string | null;
   address: string | null;
 };
 

@@ -94,12 +94,13 @@ function toExcel(records: ExportRecord[]): Blob {
     '奖品',
     '状态',
     '收件人',
+    '收件手机号',
     IDENTIFIER_CONFIG.label,
     '收货地址',
     '活动',
     '抽奖时间',
   ];
-  const colWidths = [16, 14, 10, 10, 14, 30, 14, 20];
+  const colWidths = [16, 14, 10, 10, 14, 14, 30, 14, 20];
   const rows = records.map((r) => {
     const info = r.userInfo;
     return [
@@ -107,6 +108,7 @@ function toExcel(records: ExportRecord[]): Blob {
       r.isWin ? (r.prize?.name ?? '') : '未中奖',
       RECORD_STATUS_LABELS[r.status] ?? r.status,
       info?.name ?? '',
+      info?.recipientPhone ?? '',
       readUserInfoContact(info) ?? '',
       info?.address ?? '',
       r.activity?.name ?? '',
@@ -361,7 +363,7 @@ export default function AdminRecordsPage() {
         return (
           <div>
             <Typography.Text strong style={{ fontSize: 13 }}>
-              {info.name} / {readUserInfoContact(info)}
+              {info.name} / {info.recipientPhone ?? readUserInfoContact(info)}
             </Typography.Text>
             <br />
             <Typography.Text

@@ -1,7 +1,7 @@
 import { TRPCError } from '@trpc/server';
 import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { IDENTIFIER_CONFIG } from '@/modules/lucky-wheel/constants';
+import { IDENTIFIER_CONFIG, PHONE_RE } from '@/modules/lucky-wheel/constants';
 import {
   type WheelUserInfo,
   wheelActivities,
@@ -23,6 +23,10 @@ export const drawRouter = createTRPCRouter({
         // 姓名和地址由客户端收集，做 trim 和长度限制防止脏数据写入 DB
         name: z.string().trim().max(100).optional(),
         address: z.string().trim().max(500).optional(),
+        recipientPhone: z
+          .string({ error: '请填写收件人手机号' })
+          .trim()
+          .regex(PHONE_RE, '请输入有效的收件人手机号'),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -42,6 +46,7 @@ export const drawRouter = createTRPCRouter({
           IDENTIFIER_CONFIG.kind === 'phone'
             ? getUserPhone(ctx.session.user)
             : (ctx.session.user.email ?? null),
+        recipientPhone: input.recipientPhone,
         address: input.address ?? null,
       };
 

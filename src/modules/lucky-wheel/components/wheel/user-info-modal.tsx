@@ -29,11 +29,19 @@ function isUsableDefaultName(value: string | undefined): value is string {
 
 interface UserInfoModalProps {
   open: boolean;
-  onSuccess: (info: { name: string; address: string }) => void;
+  onSuccess: (info: {
+    name: string;
+    recipientPhone: string;
+    address: string;
+  }) => void;
   /** 已登录时只收集收货地址，跳过 OTP 步骤 */
   loggedIn?: boolean;
   /** 姓名预填值（如钉钉免登拿到的用户姓名） */
   defaultName?: string;
+  /** 收件人手机号预填值（如登录手机号） */
+  defaultRecipientPhone?: string;
+  /** 收货地址预填值（如该活动最近一次抽奖填写的地址） */
+  defaultAddress?: string;
   /** 回退提示（如「钉钉免登失败，请使用手机验证码登录」），非空时显示在副标题下方 */
   fallbackHint?: string;
 }
@@ -43,6 +51,8 @@ export function UserInfoModal({
   onSuccess,
   loggedIn = false,
   defaultName,
+  defaultRecipientPhone,
+  defaultAddress,
   fallbackHint,
 }: UserInfoModalProps) {
   const [step, setStep] = useState<'info' | 'code'>('info');
@@ -50,7 +60,12 @@ export function UserInfoModal({
     isUsableDefaultName(defaultName) ? defaultName.trim() : '',
   );
   const [identifier, setIdentifier] = useState(''); // 邮箱或手机号
-  const [address, setAddress] = useState('');
+  const [recipientPhone, setRecipientPhone] = useState(
+    () => defaultRecipientPhone ?? '',
+  );
+  // 用户手动改过收件人手机号后，不再随登录手机号同步
+  const recipientTouchedRef = useRef(false);
+  const [address, setAddress] = useState(() => defaultAddress?.trim() ?? '');
   const [code, setCode] = useState('');
   const [countdown, setCountdown] = useState(0);
   const [error, setError] = useState('');
@@ -81,6 +96,17 @@ export function UserInfoModal({
     if (!isUsableDefaultName(defaultName)) return;
     setName((prev) => (prev.trim() ? prev : defaultName.trim()));
   }, [defaultName]);
+
+  useEffect(() => {
+    if (!defaultRecipientPhone) return;
+    setRecipientPhone((prev) => (prev.trim() ? prev : defaultRecipientPhone));
+  }, [defaultRecipientPhone]);
+
+  useEffect(() => {
+    const value = defaultAddress?.trim();
+    if (!value) return;
+    setAddress((prev) => (prev.trim() ? prev : value));
+  }, [defaultAddress]);
 
   // 弹窗打开时禁止页面滚动
   useEffect(() => {
@@ -118,11 +144,19 @@ export function UserInfoModal({
       setError('请填写姓名');
       return;
     }
+    if (!PHONE_RE.test(recipientPhone.trim())) {
+      setError('请输入有效的收件人手机号');
+      return;
+    }
     if (!address.trim()) {
       setError('请填写收货地址');
       return;
     }
-    onSuccess({ name: name.trim(), address: address.trim() });
+    onSuccess({
+      name: name.trim(),
+      recipientPhone: recipientPhone.trim(),
+      address: address.trim(),
+    });
   };
 
   const handleSendOtp = async (e: React.FormEvent) => {
@@ -137,6 +171,10 @@ export function UserInfoModal({
     }
     if (otpMode === 'phone-otp' && !PHONE_RE.test(identifier)) {
       setError('请输入有效的手机号');
+      return;
+    }
+    if (!PHONE_RE.test(recipientPhone.trim())) {
+      setError('请输入有效的收件人手机号');
       return;
     }
     if (!address.trim()) {
@@ -226,7 +264,11 @@ export function UserInfoModal({
           return;
         }
       }
-      onSuccess({ name: name.trim(), address: address.trim() });
+      onSuccess({
+        name: name.trim(),
+        recipientPhone: recipientPhone.trim(),
+        address: address.trim(),
+      });
     } catch {
       setError('验证失败，请重试');
     } finally {
@@ -275,7 +317,7 @@ export function UserInfoModal({
           </h2>
           <p className="mb-6 text-center text-gray-500 text-sm">
             {showSimpleForm
-              ? '请填写收货地址以便寄送奖品'
+              ? '请填写收货信息以便寄送奖品'
               : step === 'info'
                 ? '请填写以下信息后获取验证码'
                 : `验证码已发送至 ${identifier}`}
@@ -302,6 +344,20 @@ export function UserInfoModal({
                 required
                 type="text"
                 value={name}
+              />
+              <input
+                autoComplete="tel"
+                className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm focus:border-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-400/20"
+                inputMode="numeric"
+                maxLength={11}
+                onChange={(e) => {
+                  recipientTouchedRef.current = true;
+                  setRecipientPhone(e.target.value);
+                }}
+                placeholder="收件人手机号"
+                required
+                type="tel"
+                value={recipientPhone}
               />
               <textarea
                 className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm focus:border-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-400/20"
@@ -334,11 +390,30 @@ export function UserInfoModal({
                 className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm focus:border-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-400/20"
                 inputMode={identifierInputProps.inputMode}
                 maxLength={identifierInputProps.maxLength}
-                onChange={(e) => setIdentifier(e.target.value)}
+                onChange={(e) => {
+                  setIdentifier(e.target.value);
+                  if (otpMode === 'phone-otp' && !recipientTouchedRef.current) {
+                    setRecipientPhone(e.target.value);
+                  }
+                }}
                 placeholder={identifierInputProps.placeholder}
                 required
                 type={identifierInputProps.type}
                 value={identifier}
+              />
+              <input
+                autoComplete="tel"
+                className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm focus:border-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-400/20"
+                inputMode="numeric"
+                maxLength={11}
+                onChange={(e) => {
+                  recipientTouchedRef.current = true;
+                  setRecipientPhone(e.target.value);
+                }}
+                placeholder="收件人手机号"
+                required
+                type="tel"
+                value={recipientPhone}
               />
               <textarea
                 className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm focus:border-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-400/20"

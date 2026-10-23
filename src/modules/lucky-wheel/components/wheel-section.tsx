@@ -16,7 +16,7 @@ interface WheelSectionProps {
   initialLoggedIn: boolean;
 }
 
-type UserInfo = { name: string; address: string };
+type UserInfo = { name: string; recipientPhone: string; address: string };
 
 const localKey = (id: string) => `lucky-wheel-userinfo-${id}`;
 
@@ -28,9 +28,8 @@ function readLocalUserInfo(activityId: string): UserInfo | null {
     if (
       parsed &&
       typeof parsed === 'object' &&
-      'name' in parsed &&
-      'address' in parsed &&
       typeof (parsed as UserInfo).name === 'string' &&
+      typeof (parsed as UserInfo).recipientPhone === 'string' &&
       typeof (parsed as UserInfo).address === 'string'
     ) {
       return parsed as UserInfo;
@@ -86,8 +85,14 @@ export function WheelSection({
 
   // 优先级：DB 历史 > localStorage > null（触发弹窗）
   const userInfo =
-    (savedUserInfo?.name && savedUserInfo?.address
-      ? { name: savedUserInfo.name, address: savedUserInfo.address }
+    (savedUserInfo?.name &&
+    savedUserInfo?.recipientPhone &&
+    savedUserInfo?.address
+      ? {
+          name: savedUserInfo.name,
+          recipientPhone: savedUserInfo.recipientPhone,
+          address: savedUserInfo.address,
+        }
       : null) ?? localUserInfo;
 
   function handleModalSuccess(info: UserInfo) {
@@ -111,7 +116,9 @@ export function WheelSection({
   return (
     <>
       <UserInfoModal
-        defaultName={session?.user?.name}
+        defaultAddress={savedUserInfo?.address ?? undefined}
+        defaultName={savedUserInfo?.name || session?.user?.name}
+        defaultRecipientPhone={session?.user?.phoneNumber ?? undefined}
         fallbackHint={
           // 钉钉内免登失败才提示；浏览器打开走验证码是正常路径，不需要解释。
           // dt.error 已由 hook 经 resolveAuthError 翻成中文（如「钉钉账号未绑定有效手机号」），
@@ -133,6 +140,7 @@ export function WheelSection({
         name={userInfo?.name}
         onViewPrizes={() => prizesSheetRef.current?.open()}
         prizes={prizes}
+        recipientPhone={userInfo?.recipientPhone}
       />
       <MyPrizesSheet isLoggedIn={isLoggedIn} ref={prizesSheetRef} />
     </>

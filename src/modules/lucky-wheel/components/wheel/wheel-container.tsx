@@ -18,6 +18,7 @@ interface WheelContainerProps {
   prizes: Prize[];
   isLoggedIn: boolean;
   name?: string;
+  recipientPhone?: string;
   address?: string;
   onViewPrizes?: () => void;
 }
@@ -27,6 +28,7 @@ export function WheelContainer({
   prizes,
   isLoggedIn,
   name,
+  recipientPhone,
   address,
   onViewPrizes,
 }: WheelContainerProps) {
@@ -150,6 +152,7 @@ export function WheelContainer({
         activityId,
         address,
         name,
+        recipientPhone: recipientPhone ?? '',
       });
 
       // Find the target index
@@ -184,7 +187,16 @@ export function WheelContainer({
       );
       setResult(null);
     }
-  }, [isLoggedIn, spinning, prizes, activityId, name, address, drawMutation]);
+  }, [
+    isLoggedIn,
+    spinning,
+    prizes,
+    activityId,
+    name,
+    recipientPhone,
+    address,
+    drawMutation,
+  ]);
 
   const handleEnd = useCallback(() => {
     setSpinning(false);
