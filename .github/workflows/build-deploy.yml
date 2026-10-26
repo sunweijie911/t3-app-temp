@@ -1,10 +1,7 @@
 # 构建与部署工作流
 # 构建 Docker 镜像推送到 GHCR，通过 SSH 部署到服务器
 #
-# 触发条件:
-#   1. Check Quality 成功后自动触发 (workflow_run)
-#   2. 推送 v* tag 时触发 (发版)
-#   3. 手动触发 (workflow_dispatch)
+# 触发条件: 仅手动触发 (workflow_dispatch)，可选择是否部署
 #
 # 配置步骤:
 #   在 GitHub 仓库 Settings -> Secrets and variables -> Actions 中添加:
@@ -24,12 +21,6 @@
 name: Build and Deploy
 
 on:
-  workflow_run:
-    workflows: ["Check Quality"]
-    branches: [main, master, 'release/**']
-    types: [completed]
-  push:
-    tags: ['v*']
   workflow_dispatch:
     inputs:
       deploy:
@@ -39,8 +30,8 @@ on:
         type: boolean
 
 concurrency:
-  group: build-${{ github.event.workflow_run.head_branch || github.ref }}
-  cancel-in-progress: true
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   REGISTRY: ghcr.io
@@ -54,10 +45,7 @@ jobs:
   build:
     name: Build & Push
     runs-on: ubuntu-latest
-    if: |
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'push' ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
@@ -69,8 +57,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Normalize image name
         id: repo
@@ -153,10 +139,8 @@ jobs:
     name: Deploy
     needs: build
     runs-on: ubuntu-latest
-    if: |
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy == 'true') ||
-      github.event_name == 'workflow_run' ||
-      github.event_name == 'push'
+    timeout-minutes: 40
+    if: inputs.deploy
     concurrency:
       group: deploy-production
       cancel-in-progress: false
@@ -205,6 +189,13 @@ jobs:
 
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.0
+        env:
+          DEPLOY_PATH: ${{ secrets.DEPLOY_SERVER_PATH }}
+          GHCR_REGISTRY: ${{ env.REGISTRY }}
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_APP: ${{ env.REGISTRY }}/${{ steps.repo.outputs.image_name }}:${{ needs.build.outputs.git_hash }}
+          IMAGE_NGINX: ${{ env.REGISTRY }}/${{ steps.repo.outputs.image_name }}-nginx:${{ needs.build.outputs.git_hash }}
         with:
           host: ${{ secrets.DEPLOY_SERVER_HOST }}
           username: ${{ secrets.DEPLOY_SERVER_USER }}
@@ -212,18 +203,15 @@ jobs:
           # 远程 docker compose pull 从 GHCR 拉镜像可能较慢，
           # 默认 command_timeout 仅 10m，会在拉取中途被掐断（Run Command Timeout）。
           command_timeout: 30m
+          envs: DEPLOY_PATH,GHCR_REGISTRY,GHCR_USERNAME,GHCR_TOKEN,IMAGE_APP,IMAGE_NGINX
           script: |
             set -e
-
-            DEPLOY_PATH="${{ secrets.DEPLOY_SERVER_PATH }}"
-            IMAGE_APP="${{ env.REGISTRY }}/${{ steps.repo.outputs.image_name }}:${{ needs.build.outputs.git_hash }}"
-            IMAGE_NGINX="${{ env.REGISTRY }}/${{ steps.repo.outputs.image_name }}-nginx:${{ needs.build.outputs.git_hash }}"
 
             cd "${DEPLOY_PATH}"
             chmod +x ./manage.sh
 
             # 登录 GHCR
-            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u "${{ github.actor }}" --password-stdin
+            echo "${GHCR_TOKEN}" | docker login "${GHCR_REGISTRY}" -u "${GHCR_USERNAME}" --password-stdin
 
             # 通过 manage.sh 完成拉取、部署、健康检查
             ./manage.sh pull-deploy "${IMAGE_APP}" "${IMAGE_NGINX}"
