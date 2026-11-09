@@ -1,5 +1,5 @@
 ##### BASE
-FROM node:22-alpine AS base
+FROM node:24-alpine AS base
 ENV COREPACK_NPM_REGISTRY=https://registry.npmmirror.com
 RUN corepack enable && corepack prepare pnpm@9.15.5 --activate
 
@@ -82,7 +82,7 @@ RUN rm -rf /usr/share/nginx/public/uploads
 RUN mkdir -p /usr/share/nginx/uploads
 
 ##### RUNNER（默认构建目标）
-FROM node:22-alpine AS runner
+FROM node:24-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
