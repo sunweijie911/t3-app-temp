@@ -17,6 +17,8 @@
 #     - TENCENT_TCR_USERNAME: 腾讯云账号 UIN
 #   TCR 中的镜像仓库为 <命名空间>/<仓库名> 与 <命名空间>/<仓库名>-nginx，首次推送时自动创建
 #
+#   构建与部署成功后调用 cleanup-registry.yml 清理 GHCR / TCR 旧镜像（配置见该文件）
+#
 #   部署 job 使用的 Environments（aliyun-production / tencent-production）首次运行时自动创建，
 #   可在 Settings -> Environments 中为其配置审批人或分支限制
 #
@@ -229,10 +231,24 @@ jobs:
       SSH_KEY: ${{ secrets.TENCENT_SSH_KEY }}
       REGISTRY_TOKEN: ${{ secrets.TENCENT_TCR_PASSWORD }}
 
+  # ==================== 清理镜像仓库 ====================
+  cleanup:
+    name: Cleanup Registry
+    needs: [build, deploy-aliyun, deploy-tencent]
+    if: >-
+      always() && needs.build.result == 'success'
+      && !contains(needs.*.result, 'failure')
+      && !contains(needs.*.result, 'cancelled')
+    uses: ./.github/workflows/cleanup-registry.yml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+
   # ==================== 通知 ====================
   notify:
     name: Notify
-    needs: [build, deploy-aliyun, deploy-tencent]
+    needs: [build, deploy-aliyun, deploy-tencent, cleanup]
     runs-on: ubuntu-latest
     if: always()
 
@@ -247,6 +263,7 @@ jobs:
             echo "| 构建 & 推送 | ${{ needs.build.result }} |"
             echo "| 阿里云 ECS | ${{ needs.deploy-aliyun.result }} |"
             echo "| 腾讯云 CVM | ${{ needs.deploy-tencent.result }} |"
+            echo "| 镜像清理 | ${{ needs.cleanup.result }} |"
             echo ""
             IMAGE_NAME_LOWER="${IMAGE_NAME,,}"
             if [[ "${{ needs.build.result }}" == "success" ]]; then
