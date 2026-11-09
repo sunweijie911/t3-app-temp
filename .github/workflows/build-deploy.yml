@@ -42,7 +42,7 @@ on:
         required: true
         default: aliyun
         type: choice
-        options: [aliyun, tencent]
+        options: [aliyun, tencent, all]
 
 concurrency:
   group: build-${{ github.ref }}
@@ -93,7 +93,7 @@ jobs:
           echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -118,7 +118,7 @@ jobs:
 
       - name: Log in to TCR
         if: inputs.deploy
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ vars.TENCENT_TCR_REGISTRY }}
           username: ${{ vars.TENCENT_TCR_USERNAME }}
@@ -126,7 +126,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: |
             ${{ env.REGISTRY }}/${{ steps.repo.outputs.image_name }}
@@ -139,7 +139,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push (app)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: true
@@ -159,7 +159,7 @@ jobs:
 
       - name: Extract nginx metadata
         id: nginx-meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: |
             ${{ env.REGISTRY }}/${{ steps.repo.outputs.image_name }}-nginx
@@ -170,7 +170,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push (nginx)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: true
@@ -191,7 +191,7 @@ jobs:
   deploy-aliyun:
     name: Deploy → 阿里云 ECS
     needs: build
-    if: inputs.deploy && inputs.target == 'aliyun'
+    if: inputs.deploy && (inputs.target == 'aliyun' || inputs.target == 'all')
     uses: ./.github/workflows/_deploy-server.yml
     permissions:
       contents: read
@@ -212,7 +212,7 @@ jobs:
   deploy-tencent:
     name: Deploy → 腾讯云 CVM
     needs: build
-    if: inputs.deploy && inputs.target == 'tencent'
+    if: inputs.deploy && (inputs.target == 'tencent' || inputs.target == 'all')
     uses: ./.github/workflows/_deploy-server.yml
     permissions:
       contents: read
