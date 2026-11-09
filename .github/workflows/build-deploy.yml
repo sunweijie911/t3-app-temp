@@ -1,15 +1,24 @@
 # 构建与部署工作流
-# 构建 Docker 镜像推送到 GHCR，通过 SSH 部署到服务器
+# 构建 Docker 镜像推送到 GHCR（部署时额外推送到腾讯云 TCR 个人版），通过 SSH 部署到阿里云 ECS 或腾讯云 CVM
+# 两个目标都从 TCR 拉取镜像
 #
-# 触发条件: 仅手动触发 (workflow_dispatch)，可选择是否部署
+# 触发条件: 仅手动触发 (workflow_dispatch)，可选择是否部署及部署目标
 #
 # 配置步骤:
-#   在 GitHub 仓库 Settings -> Secrets and variables -> Actions 中添加:
-#     - DEPLOY_SERVER_HOST: 服务器 IP 或域名
-#     - DEPLOY_SERVER_USER: SSH 用户名
-#     - DEPLOY_SERVER_PATH: 部署目标路径
-#     - DEPLOY_SSH_PRIVATE_KEY: SSH 私钥 (完整内容，包括 BEGIN/END)
-#     - DEPLOY_HOST_PORT: (可选) 服务端口，默认 80
+#   在 GitHub 仓库 Settings -> Secrets and variables -> Actions -> Secrets 中添加:
+#     - ALIYUN_HOST  / ALIYUN_USER  / ALIYUN_PATH  / ALIYUN_SSH_KEY   （部署阿里云时需要）
+#     - TENCENT_HOST / TENCENT_USER / TENCENT_PATH / TENCENT_SSH_KEY  （部署腾讯云时需要）
+#       HOST: 服务器 IP 或域名；USER: SSH 用户名；PATH: 部署目标路径；SSH_KEY: SSH 私钥（完整内容，包括 BEGIN/END）
+#     - TENCENT_TCR_PASSWORD: TCR 个人版登录密码（两个目标共用）
+#
+#   在 Settings -> Secrets and variables -> Actions -> Variables 中添加:
+#     - TENCENT_TCR_REGISTRY: TCR 地址（如 ccr.ccs.tencentyun.com）
+#     - TENCENT_TCR_NAMESPACE: TCR 命名空间（需先在 TCR 个人版控制台创建）
+#     - TENCENT_TCR_USERNAME: 腾讯云账号 UIN
+#   TCR 中的镜像仓库为 <命名空间>/<仓库名> 与 <命名空间>/<仓库名>-nginx，首次推送时自动创建
+#
+#   部署 job 使用的 Environments（aliyun-production / tencent-production）首次运行时自动创建，
+#   可在 Settings -> Environments 中为其配置审批人或分支限制
 #
 #   NEXT_PUBLIC_* 是【构建期】变量（会被内联进客户端 bundle，运行时 .env 改不动），
 #   需配在 Settings -> Secrets and variables -> Actions -> Variables（非 Secrets，非敏感）:
@@ -28,6 +37,12 @@ on:
         required: true
         default: true
         type: boolean
+      target:
+        description: '部署目标'
+        required: true
+        default: aliyun
+        type: choice
+        options: [aliyun, tencent]
 
 concurrency:
   group: build-${{ github.ref }}
@@ -41,18 +56,20 @@ env:
 # but Docker requires lowercase image names, so we normalize it in the prepare step.
 
 jobs:
-  # ==================== 构建并推送到 GHCR ====================
+  # ==================== 构建并推送镜像 ====================
   build:
     name: Build & Push
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 首次向 TCR 跨境推送全部镜像层耗时较长
+    timeout-minutes: 60
     permissions:
       contents: read
       packages: write
     outputs:
-      image_tag: ${{ steps.meta.outputs.tags }}
       git_hash: ${{ steps.info.outputs.git_hash }}
       build_time: ${{ steps.info.outputs.build_time }}
+      image_app_tcr: ${{ vars.TENCENT_TCR_REGISTRY }}/${{ steps.repo.outputs.tcr_image_name }}:${{ steps.info.outputs.git_hash }}
+      image_nginx_tcr: ${{ vars.TENCENT_TCR_REGISTRY }}/${{ steps.repo.outputs.tcr_image_name }}-nginx:${{ steps.info.outputs.git_hash }}
 
     steps:
       - name: Checkout
@@ -60,9 +77,14 @@ jobs:
 
       - name: Normalize image name
         id: repo
-        run: echo "image_name=${IMAGE_NAME,,}" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "image_name=${IMAGE_NAME,,}" >> "$GITHUB_OUTPUT"
+          tcr_image_name="${TCR_NAMESPACE}/${REPO_NAME}"
+          echo "tcr_image_name=${tcr_image_name,,}" >> "$GITHUB_OUTPUT"
         env:
           IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          TCR_NAMESPACE: ${{ vars.TENCENT_TCR_NAMESPACE }}
+          REPO_NAME: ${{ github.event.repository.name }}
 
       - name: Generate build info
         id: info
@@ -77,12 +99,40 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Verify TCR config
+        if: inputs.deploy
+        run: |
+          has_error=0
+          for var in TENCENT_TCR_REGISTRY TENCENT_TCR_NAMESPACE TENCENT_TCR_USERNAME TENCENT_TCR_PASSWORD; do
+            if [[ -z "${!var}" ]]; then
+              echo "::error::缺少 ${var}（在仓库 Actions Variables / Secrets 中配置）"
+              has_error=1
+            fi
+          done
+          [[ $has_error -eq 1 ]] && exit 1 || true
+        env:
+          TENCENT_TCR_REGISTRY: ${{ vars.TENCENT_TCR_REGISTRY }}
+          TENCENT_TCR_NAMESPACE: ${{ vars.TENCENT_TCR_NAMESPACE }}
+          TENCENT_TCR_USERNAME: ${{ vars.TENCENT_TCR_USERNAME }}
+          TENCENT_TCR_PASSWORD: ${{ secrets.TENCENT_TCR_PASSWORD }}
+
+      - name: Log in to TCR
+        if: inputs.deploy
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ vars.TENCENT_TCR_REGISTRY }}
+          username: ${{ vars.TENCENT_TCR_USERNAME }}
+          password: ${{ secrets.TENCENT_TCR_PASSWORD }}
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.image_name }}
+          images: |
+            ${{ env.REGISTRY }}/${{ steps.repo.outputs.image_name }}
+            name=${{ vars.TENCENT_TCR_REGISTRY }}/${{ steps.repo.outputs.tcr_image_name }},enable=${{ inputs.deploy }}
           tags: |
+            type=raw,value=${{ steps.info.outputs.git_hash }}
             type=sha,prefix=
             type=ref,event=branch
             type=semver,pattern={{version}}
@@ -111,8 +161,11 @@ jobs:
         id: nginx-meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.image_name }}-nginx
+          images: |
+            ${{ env.REGISTRY }}/${{ steps.repo.outputs.image_name }}-nginx
+            name=${{ vars.TENCENT_TCR_REGISTRY }}/${{ steps.repo.outputs.tcr_image_name }}-nginx,enable=${{ inputs.deploy }}
           tags: |
+            type=raw,value=${{ steps.info.outputs.git_hash }}
             type=sha,prefix=
             type=raw,value=latest,enable={{is_default_branch}}
 
@@ -134,92 +187,52 @@ jobs:
           tags: ${{ steps.nginx-meta.outputs.tags }}
           labels: ${{ steps.nginx-meta.outputs.labels }}
 
-  # ==================== 部署到服务器 ====================
-  deploy:
-    name: Deploy
+  # ==================== 部署到阿里云 ECS ====================
+  deploy-aliyun:
+    name: Deploy → 阿里云 ECS
     needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    if: inputs.deploy
-    concurrency:
-      group: deploy-production
-      cancel-in-progress: false
-    environment:
-      name: production
+    if: inputs.deploy && inputs.target == 'aliyun'
+    uses: ./.github/workflows/_deploy-server.yml
+    permissions:
+      contents: read
+    with:
+      environment: aliyun-production
+      registry: ${{ vars.TENCENT_TCR_REGISTRY }}
+      registry_username: ${{ vars.TENCENT_TCR_USERNAME }}
+      image_app: ${{ needs.build.outputs.image_app_tcr }}
+      image_nginx: ${{ needs.build.outputs.image_nginx_tcr }}
+    secrets:
+      HOST: ${{ secrets.ALIYUN_HOST }}
+      USER: ${{ secrets.ALIYUN_USER }}
+      DEPLOY_PATH: ${{ secrets.ALIYUN_PATH }}
+      SSH_KEY: ${{ secrets.ALIYUN_SSH_KEY }}
+      REGISTRY_TOKEN: ${{ secrets.TENCENT_TCR_PASSWORD }}
 
-    steps:
-      - name: Checkout (for deploy scripts)
-        uses: actions/checkout@v6
-
-      - name: Normalize image name
-        id: repo
-        run: echo "image_name=${IMAGE_NAME,,}" >> "$GITHUB_OUTPUT"
-        env:
-          IMAGE_NAME: ${{ env.IMAGE_NAME }}
-
-      - name: Check secrets
-        run: |
-          has_error=0
-          for secret_name in DEPLOY_SERVER_HOST DEPLOY_SERVER_USER DEPLOY_SERVER_PATH DEPLOY_SSH_PRIVATE_KEY; do
-            eval "val=\${$secret_name:-}"
-            if [[ -z "$val" ]]; then
-              echo "::error::缺少 ${secret_name} secret"
-              has_error=1
-            fi
-          done
-          if [[ $has_error -eq 1 ]]; then
-            echo "请在 Settings -> Secrets and variables -> Actions 中配置以上 secrets"
-            exit 1
-          fi
-        env:
-          DEPLOY_SERVER_HOST: ${{ secrets.DEPLOY_SERVER_HOST }}
-          DEPLOY_SERVER_USER: ${{ secrets.DEPLOY_SERVER_USER }}
-          DEPLOY_SERVER_PATH: ${{ secrets.DEPLOY_SERVER_PATH }}
-          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
-
-      - name: Sync deploy files
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.DEPLOY_SERVER_HOST }}
-          username: ${{ secrets.DEPLOY_SERVER_USER }}
-          key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
-          source: "manage.sh,docker-compose.yml,nginx.conf,.env.example"
-          target: ${{ secrets.DEPLOY_SERVER_PATH }}
-          overwrite: true
-
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.2.0
-        env:
-          DEPLOY_PATH: ${{ secrets.DEPLOY_SERVER_PATH }}
-          GHCR_REGISTRY: ${{ env.REGISTRY }}
-          GHCR_USERNAME: ${{ github.actor }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          IMAGE_APP: ${{ env.REGISTRY }}/${{ steps.repo.outputs.image_name }}:${{ needs.build.outputs.git_hash }}
-          IMAGE_NGINX: ${{ env.REGISTRY }}/${{ steps.repo.outputs.image_name }}-nginx:${{ needs.build.outputs.git_hash }}
-        with:
-          host: ${{ secrets.DEPLOY_SERVER_HOST }}
-          username: ${{ secrets.DEPLOY_SERVER_USER }}
-          key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
-          # 远程 docker compose pull 从 GHCR 拉镜像可能较慢，
-          # 默认 command_timeout 仅 10m，会在拉取中途被掐断（Run Command Timeout）。
-          command_timeout: 30m
-          envs: DEPLOY_PATH,GHCR_REGISTRY,GHCR_USERNAME,GHCR_TOKEN,IMAGE_APP,IMAGE_NGINX
-          script: |
-            set -e
-
-            cd "${DEPLOY_PATH}"
-            chmod +x ./manage.sh
-
-            # 登录 GHCR
-            echo "${GHCR_TOKEN}" | docker login "${GHCR_REGISTRY}" -u "${GHCR_USERNAME}" --password-stdin
-
-            # 通过 manage.sh 完成拉取、部署、健康检查
-            ./manage.sh pull-deploy "${IMAGE_APP}" "${IMAGE_NGINX}"
+  # ==================== 部署到腾讯云 CVM ====================
+  deploy-tencent:
+    name: Deploy → 腾讯云 CVM
+    needs: build
+    if: inputs.deploy && inputs.target == 'tencent'
+    uses: ./.github/workflows/_deploy-server.yml
+    permissions:
+      contents: read
+    with:
+      environment: tencent-production
+      registry: ${{ vars.TENCENT_TCR_REGISTRY }}
+      registry_username: ${{ vars.TENCENT_TCR_USERNAME }}
+      image_app: ${{ needs.build.outputs.image_app_tcr }}
+      image_nginx: ${{ needs.build.outputs.image_nginx_tcr }}
+    secrets:
+      HOST: ${{ secrets.TENCENT_HOST }}
+      USER: ${{ secrets.TENCENT_USER }}
+      DEPLOY_PATH: ${{ secrets.TENCENT_PATH }}
+      SSH_KEY: ${{ secrets.TENCENT_SSH_KEY }}
+      REGISTRY_TOKEN: ${{ secrets.TENCENT_TCR_PASSWORD }}
 
   # ==================== 通知 ====================
   notify:
     name: Notify
-    needs: [build, deploy]
+    needs: [build, deploy-aliyun, deploy-tencent]
     runs-on: ubuntu-latest
     if: always()
 
@@ -232,18 +245,20 @@ jobs:
             echo "| 项目 | 状态 |"
             echo "|------|------|"
             echo "| 构建 & 推送 | ${{ needs.build.result }} |"
-            echo "| 部署 | ${{ needs.deploy.result || 'skipped' }} |"
+            echo "| 阿里云 ECS | ${{ needs.deploy-aliyun.result }} |"
+            echo "| 腾讯云 CVM | ${{ needs.deploy-tencent.result }} |"
             echo ""
             IMAGE_NAME_LOWER="${IMAGE_NAME,,}"
             if [[ "${{ needs.build.result }}" == "success" ]]; then
               echo "**镜像**: \`${{ env.REGISTRY }}/${IMAGE_NAME_LOWER}:${{ needs.build.outputs.git_hash }}\`"
+              if [[ "${{ inputs.deploy }}" == "true" ]]; then
+                echo ""
+                echo "**TCR 镜像**: \`${{ needs.build.outputs.image_app_tcr }}\`"
+              fi
+              echo ""
               echo "**构建时间**: ${{ needs.build.outputs.build_time }}"
             fi
-            if [[ "${{ needs.deploy.result }}" == "success" ]]; then
-              echo "**服务器**: \`${{ secrets.DEPLOY_SERVER_HOST }}\`"
-              echo "**健康检查**: 通过"
-            fi
-            if [[ "${{ needs.deploy.result }}" == "failure" ]]; then
+            if [[ "${{ needs.deploy-aliyun.result }}" == "failure" || "${{ needs.deploy-tencent.result }}" == "failure" ]]; then
               echo ""
               echo "> **部署失败** — 请检查 Deploy job 日志获取详细错误信息"
             fi

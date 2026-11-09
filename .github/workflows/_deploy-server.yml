@@ -1,0 +1,103 @@
+# 可复用的单台服务器部署工作流，被 build-deploy.yml 中的 deploy-aliyun / deploy-tencent 调用
+name: Deploy to Server
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "GitHub Environment 名称（如 aliyun-production）"
+        required: true
+        type: string
+      registry:
+        description: "镜像仓库地址（如 ccr.ccs.tencentyun.com）"
+        required: true
+        type: string
+      registry_username:
+        description: "镜像仓库登录用户名"
+        required: true
+        type: string
+      image_app:
+        description: "App 镜像完整地址（含 tag）"
+        required: true
+        type: string
+      image_nginx:
+        description: "Nginx 镜像完整地址（含 tag）"
+        required: true
+        type: string
+    secrets:
+      HOST:
+        required: true
+      USER:
+        required: true
+      DEPLOY_PATH:
+        required: true
+      SSH_KEY:
+        required: true
+      REGISTRY_TOKEN:
+        required: true
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    concurrency:
+      group: deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    environment:
+      name: ${{ inputs.environment }}
+
+    steps:
+      - name: Checkout (for deploy scripts)
+        uses: actions/checkout@v6
+
+      - name: Check secrets
+        run: |
+          has_error=0
+          for var in HOST USER DEPLOY_PATH SSH_KEY REGISTRY_TOKEN; do
+            if [[ -z "${!var}" ]]; then
+              echo "::error::缺少 ${var} 对应的 secret（${{ inputs.environment }}）"
+              has_error=1
+            fi
+          done
+          [[ $has_error -eq 1 ]] && exit 1 || true
+        env:
+          HOST: ${{ secrets.HOST }}
+          USER: ${{ secrets.USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+
+      - name: Sync deploy files
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USER }}
+          key: ${{ secrets.SSH_KEY }}
+          source: "manage.sh,docker-compose.yml,nginx.conf,.env.example"
+          target: ${{ secrets.DEPLOY_PATH }}
+          overwrite: true
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          REGISTRY: ${{ inputs.registry }}
+          REGISTRY_USERNAME: ${{ inputs.registry_username }}
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+          IMAGE_APP: ${{ inputs.image_app }}
+          IMAGE_NGINX: ${{ inputs.image_nginx }}
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USER }}
+          key: ${{ secrets.SSH_KEY }}
+          # 默认 command_timeout 为 10m，拉取镜像可能超时
+          command_timeout: 30m
+          envs: DEPLOY_PATH,REGISTRY,REGISTRY_USERNAME,REGISTRY_TOKEN,IMAGE_APP,IMAGE_NGINX
+          script: |
+            set -e
+            cd "${DEPLOY_PATH}"
+            chmod +x ./manage.sh
+            trap 'docker logout "${REGISTRY}" >/dev/null 2>&1 || true' EXIT
+            echo "${REGISTRY_TOKEN}" | docker login "${REGISTRY}" -u "${REGISTRY_USERNAME}" --password-stdin
+            ./manage.sh pull-deploy "${IMAGE_APP}" "${IMAGE_NGINX}"
