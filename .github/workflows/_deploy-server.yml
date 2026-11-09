@@ -9,7 +9,7 @@ on:
         required: true
         type: string
       registry:
-        description: "镜像仓库地址（如 ccr.ccs.tencentyun.com）"
+        description: "镜像仓库地址（如 TCR 个人版 ccr.ccs.tencentyun.com）"
         required: true
         type: string
       registry_username:
