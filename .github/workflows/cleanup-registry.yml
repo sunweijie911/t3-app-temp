@@ -2,7 +2,7 @@
 # 清理 GHCR 与 TCR 个人版中的旧镜像，app / nginx 各保留最近 2 个版本
 #
 # 触发条件:
-#   1. build-deploy.yml 构建与部署成功后自动调用
+#   1. deploy.yml 构建与部署成功后自动调用
 #   2. 每周一 03:00（北京时间）定时执行
 #   3. 手动触发（可选 dry_run 只打印不删除）
 #
@@ -12,7 +12,7 @@
 # TCR 清理需要额外配置仓库级 Secrets（未配置时跳过 TCR 清理）:
 #   TENCENTCLOUD_SECRET_ID / TENCENTCLOUD_SECRET_KEY（建议使用仅授权 TCR 的 CAM 子账号）
 # 以及仓库级 Variables:
-#   TENCENT_TCR_NAMESPACE（与 build-deploy.yml 共用）
+#   TENCENT_TCR_NAMESPACE（与 deploy.yml 共用）
 #   TENCENT_TCR_REGION（可选，TCR 个人版所在地域，默认 ap-guangzhou）
 
 name: Cleanup Registry
